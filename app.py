@@ -1,84 +1,94 @@
-# =========================================================
-# DT79_V16_REINFORCED - BẢN GIA CỐ THỰC CHIẾN
-# =========================================================
+import os
+import json
+import time
+import hashlib
+from flask import Flask, request, abort
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import MessageEvent, TextMessage, TextSendMessage
+import gspread
+from google.oauth2.service_account import Credentials
 
-# (Giữ nguyên các phần import và CONFIG của anh)
+# --- CẤU HÌNH HỆ THỐNG DT79 ---
+# Khóa Admin định danh từ image_074ba6.png
+ADMIN_ID = "U83c6ce008a35ef17edaff25ac003370"
 
-def append_pending_event(ws_event, event_id: str, target: str, admin_uid: str, ts: str, payload_json: str) -> tuple[bool, str, int]:
+app = Flask(__name__)
+
+# Kết nối LINE API
+line_bot_api = LineBotApi(os.getenv('LINE_CHANNEL_ACCESS_TOKEN'))
+handler = WebhookHandler(os.getenv('LINE_CHANNEL_SECRET'))
+
+# Kết nối Google Sheets
+def get_sheet():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds_json = json.loads(os.getenv('GOOGLE_SERVICE_ACCOUNT_JSON'))
+    creds = Credentials.from_service_account_info(creds_json, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open_by_key(os.getenv('GOOGLE_SHEET_ID'))
+
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers.get('X-Line-Signature')
+    body = request.get_data(as_text=True)
     try:
-        # Lấy số dòng hiện tại trước khi ghi để xác định vị trí chính xác
-        # Tránh việc tìm kiếm ID sau khi ghi (chậm và dễ sai lệch khi trùng ID)
-        current_rows = len(ws_event.col_values(1))
-        target_row = current_rows + 1
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    msg_text = event.message.text.strip()
+    user_id = event.source.user_id
+
+    # Lệnh kiểm tra ID cá nhân
+    if msg_text == "/me":
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"ID của bạn:\n{user_id}"))
+        return
+
+    # Lệnh cấp quyền Admin (Chỉ dành cho ADMIN_ID)
+    if msg_text.startswith("/grant"):
+        if user_id != ADMIN_ID:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"❌ Từ chối! ID không khớp Admin.\nID thực tế:\n{user_id}"))
+            return
         
-        row = [
-            event_id, target, "grant_premium", admin_uid, ts,
-            "SYSTEM_START", payload_json, "PENDING", "PENDING", "Processing..."
-        ]
-        ws_event.append_row(row)
-        
-        # Hậu kiểm: Xác nhận dòng vừa ghi đúng là EVENT_ID đó
-        confirm_id = ws_event.cell(target_row, 1).value
-        if confirm_id != event_id:
-            # Nếu lệch dòng (do có người ghi cùng lúc), tìm lại trong 5 dòng cuối
-            last_ids = ws_event.col_values(1)[-5:]
-            for i, _id in enumerate(reversed(last_ids)):
-                if _id == event_id:
-                    return True, "OK", (current_rows + 1 - i)
-            return False, "SYNC_ERROR: Event ID lost in stream", -1
+        parts = msg_text.split()
+        if len(parts) < 2:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="❌ Sai cú pháp. Dùng: /grant [ID]"))
+            return
+
+        target_uid = parts[1]
+        try:
+            sh = get_sheet()
+            # Bước 1: Ghi log vào ACCESS_EVENTS (Cơ chế Hộp đen)
+            event_sheet = sh.worksheet("ACCESS_EVENTS")
+            event_id = hashlib.md5(f"{target_uid}{time.time()}".encode()).hexdigest()[:8]
             
-        return True, "OK", target_row
-    except Exception as e:
-        return False, f"CRITICAL_EVENT_FAIL: {str(e)}", -1
+            event_sheet.append_row([
+                event_id, target_uid, "GRANT_PREMIUM", ADMIN_ID, 
+                time.strftime("%Y-%m-%d %H:%M:%S"), "Manual Grant", 
+                "{}", "LOCKED", "PENDING", "Processing..."
+            ])
 
-def apply_user_grant(ws_user, target: str, ts: str) -> tuple[bool, str]:
-    # Gia cố tìm kiếm: Loại bỏ hoàn toàn khoảng trắng khi so khớp cột A
-    try:
-        col_uids = [normalize_id(x) for x in ws_user.col_values(1)]
-        indices = [i + 1 for i, val in enumerate(col_uids) if val == target]
-        
-        # Loại bỏ header (1) và sentinel (2)
-        indices = [i for i in indices if i > 2]
+            # Bước 2: Cập nhật quyền tại USER_LANG_MAP
+            user_sheet = sh.worksheet("USER_LANG_MAP")
+            cell = user_sheet.find(target_uid)
+            
+            if cell:
+                user_sheet.update_cell(cell.row, 4, "TRUE") # Cột Premium
+                user_sheet.update_cell(cell.row, 3, time.strftime("%Y-%m-%d %H:%M:%S")) # Cột Timestamp
+                res_msg = f"✅ Đã nâng cấp Premium cho ID: {target_uid}\nLog ID: {event_id}"
+            else:
+                # Nếu chưa có thì thêm mới
+                user_sheet.append_row([target_uid, "vi", time.strftime("%Y-%m-%d %H:%M:%S"), "TRUE", "0", "WORKER", "Added via Admin"])
+                res_msg = f"✅ Đã tạo mới & cấp Premium cho ID: {target_uid}\nLog ID: {event_id}"
 
-        if len(indices) > 1:
-            return False, f"INTEGRITY_ERR: Duplicate UID at rows {indices}"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=res_msg))
 
-        if len(indices) == 1:
-            row_num = indices[0]
-            # Batch update để giảm thiểu rủi ro đứt kết nối giữa chừng
-            ws_user.update_cell(row_num, 3, ts)      # Timestamp
-            ws_user.update_cell(row_num, 4, "TRUE")  # Premium
-            return True, f"STATE_UPDATED_ROW_{row_num}"
+        except Exception as e:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"❌ Lỗi hệ thống: {str(e)}"))
 
-        # Nếu không thấy, append mới
-        ws_user.append_row([target, "en", ts, "TRUE", "0", "USER", "DT79_AUTO_GRANT"])
-        return True, "STATE_CREATED_NEW_USER"
-    except Exception as e:
-        return False, f"STATE_WRITE_FAIL: {str(e)}"
-
-# =========================================================
-# MAIN HANDLER (Gia cố logic chốt chặn)
-# =========================================================
-# (Trong handler, phần logic chính của anh)
-
-    # Bước: Finalize Event
-    # Dù apply_user_grant thành công hay thất bại, bắt buộc phải ghi lại kết quả
-    finalize_ok = finalize_event(
-        ws_event=ws_event,
-        event_row=event_row,
-        event_id=event_id,
-        target=target,
-        admin_uid=uid,
-        ts=ts,
-        result_status=final_status,
-        result_message=result_message,
-        payload_json=payload_json,
-    )
-
-    if success:
-        status_icon = "✅" if finalize_ok else "⚠️ (Log Fail)"
-        reply_msg(token, f"{status_icon} TRUY CỐT THÀNH CÔNG\nTarget: {target}\nStatus: {result_message}\nID: {event_id}")
-    else:
-        reply_msg(token, f"❌ TRUY CỐT THẤT BẠI\nLý do: {result_message}\nID: {event_id}")
-
-# (Giữ nguyên các phần còn lại của V16)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
