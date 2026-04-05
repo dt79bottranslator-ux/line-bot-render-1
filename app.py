@@ -4,9 +4,8 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
-LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 PORT = int(os.getenv("PORT", "10000"))
 
 
@@ -19,16 +18,38 @@ def root():
 
 
 # ========================
-# HEALTH CHECK
+# HEALTH
 # ========================
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
         "line_token_exists": bool(LINE_CHANNEL_ACCESS_TOKEN),
-        "line_secret_exists": bool(LINE_CHANNEL_SECRET),
         "google_api_key_exists": bool(GOOGLE_API_KEY)
-    }), 200
+    })
+
+
+# ========================
+# TRANSLATE FUNCTION
+# ========================
+def translate(text, target):
+    url = "https://translation.googleapis.com/language/translate/v2"
+
+    params = {
+        "q": text,
+        "target": target,
+        "key": GOOGLE_API_KEY
+    }
+
+    res = requests.post(url, data=params)
+
+    if res.status_code != 200:
+        return f"[ERROR TRANSLATE] {res.text}"
+
+    try:
+        return res.json()["data"]["translations"][0]["translatedText"]
+    except:
+        return "[TRANSLATE ERROR]"
 
 
 # ========================
@@ -39,44 +60,49 @@ def webhook():
     data = request.get_json(silent=True)
 
     if not data:
-        return jsonify({
-            "ok": False,
-            "error": "missing_or_invalid_json"
-        }), 400
+        return "NO DATA", 400
 
-    events = data.get("events", [])
-
-    for event in events:
+    for event in data.get("events", []):
         if event.get("type") != "message":
             continue
 
-        message = event.get("message", {})
-        if message.get("type") != "text":
+        msg = event.get("message", {})
+        if msg.get("type") != "text":
             continue
 
         reply_token = event.get("replyToken")
-        user_text = message.get("text", "").strip()
+        text = msg.get("text", "")
 
         if not reply_token:
             continue
 
-        if not user_text:
-            reply_text(reply_token, "Tin nhắn trống.")
-            continue
+        # ========================
+        # LOGIC DỊCH
+        # ========================
+        if text.startswith("/zh "):
+            result = translate(text[4:], "zh-TW")
 
-        reply_text(reply_token, f"Bạn gửi: {user_text}")
+        elif text.startswith("/vi "):
+            result = translate(text[4:], "vi")
 
-    return "OK", 200
+        elif text.startswith("/id "):
+            result = translate(text[4:], "id")
+
+        elif text.startswith("/en "):
+            result = translate(text[4:], "en")
+
+        else:
+            result = "Dùng:\n/zh nội dung\n/vi nội dung\n/id nội dung\n/en nội dung"
+
+        reply_text(reply_token, result)
+
+    return "OK"
 
 
 # ========================
-# REPLY FUNCTION
+# REPLY
 # ========================
 def reply_text(reply_token, text):
-    if not LINE_CHANNEL_ACCESS_TOKEN:
-        print("[ERROR] Missing LINE_CHANNEL_ACCESS_TOKEN")
-        return
-
     url = "https://api.line.me/v2/bot/message/reply"
 
     headers = {
@@ -84,31 +110,18 @@ def reply_text(reply_token, text):
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
     }
 
-    payload = {
+    body = {
         "replyToken": reply_token,
         "messages": [
-            {
-                "type": "text",
-                "text": str(text)[:5000]
-            }
+            {"type": "text", "text": str(text)[:5000]}
         ]
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=15)
-        print(f"[LINE REPLY] status={response.status_code} body={response.text}")
-    except Exception as e:
-        print(f"[LINE REPLY ERROR] {e}")
+    requests.post(url, headers=headers, json=body)
 
 
 # ========================
 # RUN
 # ========================
 if __name__ == "__main__":
-    print("[BOOT] Flask app starting...")
-    print(f"[BOOT] PORT={PORT}")
-    print(f"[BOOT] line_token_exists={bool(LINE_CHANNEL_ACCESS_TOKEN)}")
-    print(f"[BOOT] line_secret_exists={bool(LINE_CHANNEL_SECRET)}")
-    print(f"[BOOT] google_api_key_exists={bool(GOOGLE_API_KEY)}")
-
     app.run(host="0.0.0.0", port=PORT)
