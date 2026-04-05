@@ -1,11 +1,22 @@
 import os
-from flask import Flask, request, jsonify
 import requests
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
+LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+PORT = int(os.getenv("PORT", "10000"))
+
+
+# ========================
+# ROOT
+# ========================
+@app.route("/", methods=["GET"])
+def root():
+    return "BOT RUNNING", 200
+
 
 # ========================
 # HEALTH CHECK
@@ -15,8 +26,9 @@ def health():
     return jsonify({
         "status": "ok",
         "line_token_exists": bool(LINE_CHANNEL_ACCESS_TOKEN),
+        "line_secret_exists": bool(LINE_CHANNEL_SECRET),
         "google_api_key_exists": bool(GOOGLE_API_KEY)
-    })
+    }), 200
 
 
 # ========================
@@ -24,22 +36,47 @@ def health():
 # ========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
-    for event in data.get("events", []):
-        if event["type"] == "message":
-            reply_token = event["replyToken"]
-            text = event["message"]["text"]
+    if not data:
+        return jsonify({
+            "ok": False,
+            "error": "missing_or_invalid_json"
+        }), 400
 
-            reply(reply_token, f"Bạn gửi: {text}")
+    events = data.get("events", [])
 
-    return "OK"
+    for event in events:
+        if event.get("type") != "message":
+            continue
+
+        message = event.get("message", {})
+        if message.get("type") != "text":
+            continue
+
+        reply_token = event.get("replyToken")
+        user_text = message.get("text", "").strip()
+
+        if not reply_token:
+            continue
+
+        if not user_text:
+            reply_text(reply_token, "Tin nhắn trống.")
+            continue
+
+        reply_text(reply_token, f"Bạn gửi: {user_text}")
+
+    return "OK", 200
 
 
 # ========================
 # REPLY FUNCTION
 # ========================
-def reply(reply_token, text):
+def reply_text(reply_token, text):
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        print("[ERROR] Missing LINE_CHANNEL_ACCESS_TOKEN")
+        return
+
     url = "https://api.line.me/v2/bot/message/reply"
 
     headers = {
@@ -47,18 +84,31 @@ def reply(reply_token, text):
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"
     }
 
-    body = {
+    payload = {
         "replyToken": reply_token,
         "messages": [
-            {"type": "text", "text": text}
+            {
+                "type": "text",
+                "text": str(text)[:5000]
+            }
         ]
     }
 
-    requests.post(url, headers=headers, json=body)
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        print(f"[LINE REPLY] status={response.status_code} body={response.text}")
+    except Exception as e:
+        print(f"[LINE REPLY ERROR] {e}")
 
 
 # ========================
 # RUN
 # ========================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    print("[BOOT] Flask app starting...")
+    print(f"[BOOT] PORT={PORT}")
+    print(f"[BOOT] line_token_exists={bool(LINE_CHANNEL_ACCESS_TOKEN)}")
+    print(f"[BOOT] line_secret_exists={bool(LINE_CHANNEL_SECRET)}")
+    print(f"[BOOT] google_api_key_exists={bool(GOOGLE_API_KEY)}")
+
+    app.run(host="0.0.0.0", port=PORT)
