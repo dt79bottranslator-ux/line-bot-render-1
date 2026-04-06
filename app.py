@@ -10,6 +10,8 @@ from typing import Dict, Optional, Tuple
 
 import gspread
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from flask import Flask, request, jsonify
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -38,7 +40,24 @@ EVENT_CACHE_TTL_SECONDS = 180
 # ========================
 # HTTP SESSION
 # ========================
-HTTP = requests.Session()
+def build_http_session() -> requests.Session:
+    session = requests.Session()
+
+    retry = Retry(
+        total=2,
+        connect=2,
+        read=2,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=frozenset(["GET", "POST"])
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+HTTP = build_http_session()
 
 # ========================
 # BOT CONFIG CACHE
@@ -54,6 +73,13 @@ BOT_CONFIG_CACHE = {
 # ========================
 EVENT_STATE_CACHE: Dict[str, Dict[str, datetime | str]] = {}
 EVENT_STATE_LOCK = threading.Lock()
+
+
+# ========================
+# LOG UTILS
+# ========================
+def log_line(message: str):
+    print(message, flush=True)
 
 
 # ========================
@@ -84,8 +110,7 @@ def line_timestamp_to_iso(timestamp_ms) -> str:
 
 
 def truncate_text(value: str, max_len: int = 300) -> str:
-    value = safe_text(value, max_len=max_len)
-    return value
+    return safe_text(value, max_len=max_len)
 
 
 # ========================
@@ -184,9 +209,9 @@ def load_bot_config(force_reload: bool = False) -> dict:
 
         BOT_CONFIG_CACHE["data"] = config
         BOT_CONFIG_CACHE["loaded_at"] = now
-        print(f"[BOT-CONFIG-OK] loaded_keys={len(config)}")
+        log_line(f"[BOT-CONFIG-OK] loaded_keys={len(config)}")
     except Exception as e:
-        print(f"[BOT-CONFIG-ERROR] {safe_text(e, 1000)}")
+        log_line(f"[BOT-CONFIG-ERROR] {safe_text(e, 1000)}")
 
     return BOT_CONFIG_CACHE["data"]
 
@@ -239,31 +264,25 @@ def event_exists_in_sheet(event_id: str) -> bool:
     except gspread.exceptions.CellNotFound:
         return False
     except Exception as e:
-        print(f"[IDEMPOTENCY-SHEET-CHECK-ERROR] event_id={event_id} error={safe_text(e, 1000)}")
+        log_line(f"[IDEMPOTENCY-SHEET-CHECK-ERROR] event_id={event_id} error={safe_text(e, 1000)}")
         return False
 
 
 def is_duplicate_event(event_id: str) -> bool:
-    """
-    Quy tắc:
-    1) Nếu RAM đang processing/done => duplicate
-    2) Nếu sheet đã có event_id => duplicate và đánh dấu done trong RAM
-    3) Nếu chưa có gì => không duplicate
-    """
     if not event_id:
         return False
 
     state = get_event_state(event_id)
     if state in ("processing", "done"):
-        print(f"[DEDUPE] event_id={event_id} duplicate=true source=memory state={state}")
+        log_line(f"[DEDUPE] event_id={event_id} duplicate=true source=memory state={state}")
         return True
 
     if event_exists_in_sheet(event_id):
         set_event_state(event_id, "done")
-        print(f"[DEDUPE] event_id={event_id} duplicate=true source=sheet state=done")
+        log_line(f"[DEDUPE] event_id={event_id} duplicate=true source=sheet state=done")
         return True
 
-    print(f"[DEDUPE] event_id={event_id} duplicate=false")
+    log_line(f"[DEDUPE] event_id={event_id} duplicate=false")
     return False
 
 
@@ -272,7 +291,7 @@ def is_duplicate_event(event_id: str) -> bool:
 # ========================
 def verify_signature(req) -> bool:
     if not LINE_CHANNEL_SECRET:
-        print("[SECURITY-ERROR] Missing LINE_CHANNEL_SECRET")
+        log_line("[SECURITY-ERROR] Missing LINE_CHANNEL_SECRET")
         return False
 
     signature = req.headers.get("X-Line-Signature", "").strip()
@@ -288,7 +307,7 @@ def verify_signature(req) -> bool:
     ok = hmac.compare_digest(signature, expected_signature)
 
     if not ok:
-        print("[SECURITY-ERROR] Invalid LINE signature")
+        log_line("[SECURITY-ERROR] Invalid LINE signature")
 
     return ok
 
@@ -318,7 +337,7 @@ def health():
 # ========================
 def detect_language(text: str, event_id: str = "") -> str:
     if not GOOGLE_API_KEY:
-        print(f"[API-REQ-DETECT-SKIP] event_id={event_id} reason=missing_google_api_key")
+        log_line(f"[API-REQ-DETECT-SKIP] event_id={event_id} reason=missing_google_api_key")
         return "unknown"
 
     url = "https://translation.googleapis.com/language/translate/v2/detect"
@@ -327,11 +346,11 @@ def detect_language(text: str, event_id: str = "") -> str:
         "key": GOOGLE_API_KEY
     }
 
-    print(f"[API-REQ-DETECT] event_id={event_id} text_len={len(text)}")
+    log_line(f"[API-REQ-DETECT] event_id={event_id} text_len={len(text)}")
 
     res = HTTP.post(url, data=payload, timeout=HTTP_TIMEOUT_SECONDS)
 
-    print(
+    log_line(
         f"[API-RES-DETECT] event_id={event_id} "
         f"status={res.status_code} body={truncate_text(res.text, 300)}"
     )
@@ -342,7 +361,7 @@ def detect_language(text: str, event_id: str = "") -> str:
     try:
         return res.json()["data"]["detections"][0][0]["language"]
     except Exception as e:
-        print(f"[API-PARSE-DETECT-ERROR] event_id={event_id} error={safe_text(e, 1000)}")
+        log_line(f"[API-PARSE-DETECT-ERROR] event_id={event_id} error={safe_text(e, 1000)}")
         return "unknown"
 
 
@@ -357,14 +376,14 @@ def translate_text(text: str, target_lang: str, event_id: str = "") -> str:
         "key": GOOGLE_API_KEY
     }
 
-    print(
+    log_line(
         f"[API-REQ-TRANSLATE] event_id={event_id} "
         f"target_lang={target_lang} text_len={len(text)}"
     )
 
     res = HTTP.post(url, data=payload, timeout=HTTP_TIMEOUT_SECONDS)
 
-    print(
+    log_line(
         f"[API-RES-TRANSLATE] event_id={event_id} "
         f"status={res.status_code} body={truncate_text(res.text, 300)}"
     )
@@ -384,7 +403,7 @@ def translate_text(text: str, target_lang: str, event_id: str = "") -> str:
 # ========================
 def reply_text(reply_token: str, text: str, event_id: str = "") -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN:
-        print(f"[LINE-REPLY-ERROR] event_id={event_id} reason=missing_access_token")
+        log_line(f"[LINE-REPLY-ERROR] event_id={event_id} reason=missing_access_token")
         return False
 
     url = "https://api.line.me/v2/bot/message/reply"
@@ -399,20 +418,20 @@ def reply_text(reply_token: str, text: str, event_id: str = "") -> bool:
         ]
     }
 
-    print(
+    log_line(
         f"[LINE-REPLY-REQ] event_id={event_id} "
         f"reply_token_exists={bool(reply_token)} text_len={len(safe_text(text, 5000))}"
     )
 
     try:
         res = HTTP.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SECONDS)
-        print(
+        log_line(
             f"[LINE-REPLY-RES] event_id={event_id} "
             f"status={res.status_code} body={truncate_text(res.text, 300)}"
         )
         return 200 <= res.status_code < 300
     except Exception as e:
-        print(f"[LINE-REPLY-ERROR] event_id={event_id} error={safe_text(e, 1000)}")
+        log_line(f"[LINE-REPLY-ERROR] event_id={event_id} error={safe_text(e, 1000)}")
         return False
 
 
@@ -448,27 +467,29 @@ def resolve_target_and_content(input_text: str) -> Tuple[str, str, bool]:
 # ========================
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    log_line("[WEBHOOK-ENTER] route=/webhook method=POST")
+
     if not verify_signature(request):
         return "INVALID SIGNATURE", 403
 
     data = request.get_json(silent=True)
     if not data:
-        print("[WEBHOOK-ERROR] no_json_body")
+        log_line("[WEBHOOK-ERROR] no_json_body")
         return "NO DATA", 400
 
     events = data.get("events", [])
-    print(f"[WEBHOOK-IN] events_count={len(events)}")
+    log_line(f"[WEBHOOK-IN] events_count={len(events)}")
 
     for event in events:
         event_type = safe_text(event.get("type", ""), 50)
         if event_type != "message":
-            print(f"[WEBHOOK-SKIP] reason=non_message_event event_type={event_type}")
+            log_line(f"[WEBHOOK-SKIP] reason=non_message_event event_type={event_type}")
             continue
 
         message = event.get("message", {})
         message_type = safe_text(message.get("type", ""), 50)
         if message_type != "text":
-            print(f"[WEBHOOK-SKIP] reason=non_text_message message_type={message_type}")
+            log_line(f"[WEBHOOK-SKIP] reason=non_text_message message_type={message_type}")
             continue
 
         reply_token = safe_text(event.get("replyToken", ""), 200)
@@ -485,23 +506,22 @@ def webhook():
         timestamp = line_timestamp_to_iso(event.get("timestamp"))
 
         if not event_id:
-            print("[WEBHOOK-SKIP] reason=missing_message_id")
+            log_line("[WEBHOOK-SKIP] reason=missing_message_id")
             continue
 
-        print(
+        log_line(
             f"[EVT-IN] event_id={event_id} user_id={user_id} source_type={source_type} "
             f"group_id={group_id} room_id={room_id} text={truncate_text(input_text, 200)}"
         )
 
         if not reply_token or not input_text:
-            print(f"[WEBHOOK-SKIP] event_id={event_id} reason=missing_reply_token_or_text")
+            log_line(f"[WEBHOOK-SKIP] event_id={event_id} reason=missing_reply_token_or_text")
             continue
 
         if is_duplicate_event(event_id):
-            print(f"[WEBHOOK-SKIP-DUPLICATE] event_id={event_id}")
+            log_line(f"[WEBHOOK-SKIP-DUPLICATE] event_id={event_id}")
             continue
 
-        # Đánh dấu processing ngay để chặn retry sát nhau / xử lý song song
         set_event_state(event_id, "processing")
 
         detected_lang = "unknown"
@@ -515,7 +535,7 @@ def webhook():
 
         try:
             target_lang, content_to_translate, is_command = resolve_target_and_content(input_text)
-            print(
+            log_line(
                 f"[PATH] event_id={event_id} is_command={is_command} "
                 f"target_lang={target_lang} content_len={len(content_to_translate)}"
             )
@@ -523,7 +543,7 @@ def webhook():
             if is_command:
                 if not content_to_translate:
                     translated_text = HELP_TEXT
-                    print(f"[PATH] event_id={event_id} action=help_text")
+                    log_line(f"[PATH] event_id={event_id} action=help_text")
                 else:
                     detected_lang = detect_language(content_to_translate, event_id=event_id)
                     translated_text = translate_text(
@@ -531,24 +551,22 @@ def webhook():
                         target_lang,
                         event_id=event_id
                     )
-                    print(
+                    log_line(
                         f"[PATH] event_id={event_id} action=translated "
                         f"detected_lang={detected_lang}"
                     )
             else:
                 translated_text = HELP_TEXT
-                print(f"[PATH] event_id={event_id} action=non_command_help")
+                log_line(f"[PATH] event_id={event_id} action=non_command_help")
 
         except Exception as e:
             status = "error"
             error_message = safe_text(str(e), 5000)
             translated_text = get_fallback_message()
-            print(f"[PROCESS-ERROR] event_id={event_id} error={error_message}")
+            log_line(f"[PROCESS-ERROR] event_id={event_id} error={error_message}")
 
-        # Ghi log trước, rồi mới chốt trạng thái done.
-        # Nếu log fail, clear processing để event retry vẫn có cơ hội chạy lại.
         try:
-            print(f"[SHEET-WRITE-REQ] event_id={event_id} tab={TRANSLATION_LOG_TAB}")
+            log_line(f"[SHEET-WRITE-REQ] event_id={event_id} tab={TRANSLATION_LOG_TAB}")
             append_translation_log(
                 event_id=event_id,
                 timestamp=timestamp,
@@ -564,18 +582,18 @@ def webhook():
                 error_message=error_message
             )
             log_ok = True
-            print(f"[SHEET-WRITE-OK] event_id={event_id}")
+            log_line(f"[SHEET-WRITE-OK] event_id={event_id}")
         except Exception as log_err:
-            print(f"[SHEET-WRITE-ERROR] event_id={event_id} error={safe_text(log_err, 1000)}")
+            log_line(f"[SHEET-WRITE-ERROR] event_id={event_id} error={safe_text(log_err, 1000)}")
             log_ok = False
 
         try:
             reply_ok = reply_text(reply_token, translated_text, event_id=event_id)
         except Exception as reply_err:
-            print(f"[LINE-REPLY-FATAL] event_id={event_id} error={safe_text(reply_err, 1000)}")
+            log_line(f"[LINE-REPLY-FATAL] event_id={event_id} error={safe_text(reply_err, 1000)}")
             reply_ok = False
 
-        print(
+        log_line(
             f"[EVT-OUT] event_id={event_id} status={status} "
             f"log_ok={log_ok} reply_ok={reply_ok}"
         )
@@ -592,13 +610,14 @@ def webhook():
 # RUN
 # ========================
 if __name__ == "__main__":
-    print("[BOOT] Flask app starting...")
-    print(f"[BOOT] PORT={PORT}")
-    print(f"[BOOT] line_token_exists={bool(LINE_CHANNEL_ACCESS_TOKEN)}")
-    print(f"[BOOT] line_secret_exists={bool(LINE_CHANNEL_SECRET)}")
-    print(f"[BOOT] google_api_key_exists={bool(GOOGLE_API_KEY)}")
-    print(f"[BOOT] google_service_account_exists={bool(GOOGLE_SERVICE_ACCOUNT_JSON)}")
-    print(f"[BOOT] spreadsheet_id_exists={bool(SPREADSHEET_ID)}")
+    log_line("[BOOT-MARKER] RUNTIME_VERSION=2026-04-06-WEBHOOK-TRACE-V2")
+    log_line("[BOOT] Flask app starting...")
+    log_line(f"[BOOT] PORT={PORT}")
+    log_line(f"[BOOT] line_token_exists={bool(LINE_CHANNEL_ACCESS_TOKEN)}")
+    log_line(f"[BOOT] line_secret_exists={bool(LINE_CHANNEL_SECRET)}")
+    log_line(f"[BOOT] google_api_key_exists={bool(GOOGLE_API_KEY)}")
+    log_line(f"[BOOT] google_service_account_exists={bool(GOOGLE_SERVICE_ACCOUNT_JSON)}")
+    log_line(f"[BOOT] spreadsheet_id_exists={bool(SPREADSHEET_ID)}")
 
     # Local run only.
     # Production trên Render nên chạy bằng gunicorn (WSGI server)
