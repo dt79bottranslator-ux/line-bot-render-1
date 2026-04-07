@@ -34,10 +34,18 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "").strip()
-GOOGLE_SHEET_WORKSHEET = os.getenv("GOOGLE_SHEET_WORKSHEET", "logs").strip()
+GOOGLE_SHEET_WORKSHEET = os.getenv("GOOGLE_SHEET_WORKSHEET", "FORENSIC_JOURNAL").strip()
 
 # Múi giờ Đài Loan
 TW_TZ = timezone(timedelta(hours=8))
+
+# =========================================================
+# BUSINESS LOCK
+# =========================================================
+# Mục tiêu chính hiện tại:
+# Lao động nước ngoài (VI/ID/TH...) giao tiếp với người Đài Loan
+# => ngôn ngữ đích khóa cứng = zh-TW
+LOCKED_TARGET_LANG = "zh-TW"
 
 # =========================================================
 # CONSTANTS
@@ -70,12 +78,12 @@ ALLOWED_FINAL_STATUS = {
 ALLOWED_ERROR_CODE = {
     "NONE",
     "GOOGLE_TIMEOUT",
+    "GOOGLE_API_ERROR",
     "LINE_REPLY_400",
     "SHEET_APPEND_ERROR",
     "INVALID_SIGNATURE",
 }
 
-DEFAULT_TARGET_LANG = "zh-TW"
 HTTP_TIMEOUT_SECONDS = 15
 
 # =========================================================
@@ -98,15 +106,15 @@ def mask_text(text: str, max_len: int = 1000) -> str:
         return text
     return text[:max_len]
 
+def get_locked_target_lang() -> str:
+    return LOCKED_TARGET_LANG
+
 def load_service_account_info() -> Dict[str, Any]:
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         raise ValueError("Missing GOOGLE_SERVICE_ACCOUNT_JSON")
 
     raw = GOOGLE_SERVICE_ACCOUNT_JSON
 
-    # Hỗ trợ 2 dạng:
-    # 1) JSON text trực tiếp
-    # 2) base64-encoded JSON
     try:
         if raw.startswith("{"):
             return json.loads(raw)
@@ -116,14 +124,17 @@ def load_service_account_info() -> Dict[str, Any]:
     except Exception as exc:
         raise ValueError(f"Invalid GOOGLE_SERVICE_ACCOUNT_JSON: {exc}") from exc
 
-def get_worksheet():
+def get_gspread_client():
     info = load_service_account_info()
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
-    gc = gspread.authorize(creds)
+    return gspread.authorize(creds)
+
+def get_worksheet():
+    gc = get_gspread_client()
     sh = gc.open(GOOGLE_SHEET_NAME)
     ws = sh.worksheet(GOOGLE_SHEET_WORKSHEET)
     return ws
@@ -134,17 +145,20 @@ def ensure_headers(ws) -> None:
         if not existing:
             ws.append_row(SHEET_HEADERS, value_input_option="RAW")
         else:
-            # Không update dữ liệu event, nhưng header chưa chuẩn thì fail sớm để tránh sai schema
             raise ValueError(
                 f"Worksheet headers mismatch. Found={existing}, Expected={SHEET_HEADERS}"
             )
+
+def get_forensic_ws():
+    ws = get_worksheet()
+    ensure_headers(ws)
+    return ws
 
 def event_already_logged(ws, event_id: str) -> bool:
     if not event_id:
         return False
 
     values = ws.col_values(2)  # event_id column
-    # row 1 = header
     return event_id in values[1:]
 
 def verify_line_signature(channel_secret: str, body: bytes, signature: str) -> bool:
@@ -174,10 +188,40 @@ def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any
 
     return event, None
 
-def get_target_lang_for_user(_user_id: str) -> str:
-    # Kiến trúc hiện tại khóa tối giản:
-    # không thêm logic profile phức tạp nếu chưa có bằng chứng yêu cầu.
-    return DEFAULT_TARGET_LANG
+def extract_leading_mentions(text: str) -> Tuple[str, str]:
+    """
+    Giữ các token @ ở đầu câu.
+    Ví dụ:
+    '@A @B mai tăng ca' -> ('@A @B', 'mai tăng ca')
+    'hello' -> ('', 'hello')
+    """
+    tokens = safe_str(text).split()
+    mentions = []
+    remainder = []
+
+    still_collecting_mentions = True
+    for token in tokens:
+        if still_collecting_mentions and token.startswith("@"):
+            mentions.append(token)
+        else:
+            still_collecting_mentions = False
+            remainder.append(token)
+
+    mention_text = " ".join(mentions).strip()
+    clean_text = " ".join(remainder).strip()
+
+    if not clean_text:
+        clean_text = safe_str(text)
+
+    return mention_text, clean_text
+
+def build_group_reply_text(mention_text: str, translated_text: str) -> str:
+    mention_text = safe_str(mention_text)
+    translated_text = safe_str(translated_text)
+
+    if mention_text:
+        return f"{mention_text} {translated_text}".strip()
+    return translated_text
 
 def google_detect_language(text: str, trace_id: str) -> Tuple[Optional[str], Optional[str]]:
     url = "https://translation.googleapis.com/language/translate/v2/detect"
@@ -285,8 +329,7 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Option
 
 def append_forensic_row(row: List[Any], trace_id: str) -> Tuple[bool, Optional[str]]:
     try:
-        ws = get_worksheet()
-        ensure_headers(ws)
+        ws = get_forensic_ws()
         ws.append_row(row, value_input_option="RAW")
         logger.info(f"[{trace_id}] Sheet append success")
         return True, None
@@ -311,7 +354,7 @@ def build_row(
     if final_status not in ALLOWED_FINAL_STATUS:
         raise ValueError(f"Invalid final_status: {final_status}")
     if error_code not in ALLOWED_ERROR_CODE:
-        error_code = "SHEET_APPEND_ERROR" if error_code else "NONE"
+        error_code = "GOOGLE_API_ERROR" if error_code else "NONE"
 
     return [
         trace_id,
@@ -331,6 +374,8 @@ def build_row(
 def compute_translate_error_code(err: Optional[str]) -> str:
     if err == "GOOGLE_TIMEOUT":
         return "GOOGLE_TIMEOUT"
+    if err:
+        return "GOOGLE_API_ERROR"
     return "NONE"
 
 # =========================================================
@@ -342,6 +387,7 @@ def health():
         "ok": True,
         "service": "line-multilang-bot",
         "time": now_tw_iso(),
+        "target_lang_lock": LOCKED_TARGET_LANG,
     }), 200
 
 # =========================================================
@@ -358,15 +404,14 @@ def callback():
     signature = request.headers.get("X-Line-Signature", "").strip()
 
     logger.info(f"[{trace_id}] Webhook received")
-    logger.info(f"[{trace_id}] Raw body={body_text}")
 
-    # Giá trị mặc định forensic
+    # forensic defaults
     event_id = ""
     user_id = ""
     source_type = ""
     input_text = ""
     detected_lang = ""
-    target_lang = DEFAULT_TARGET_LANG
+    target_lang = get_locked_target_lang()
     translated_text = ""
     final_status = "FAILED_PARSE"
     error_code = "NONE"
@@ -407,7 +452,6 @@ def callback():
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         final_status = "FAILED_PARSE"
-        error_code = "NONE"
 
         logger.exception(f"[{trace_id}] JSON parse failed: {exc}")
 
@@ -432,7 +476,6 @@ def callback():
     if parse_error:
         latency_ms = int((time.perf_counter() - started) * 1000)
         final_status = "FAILED_PARSE"
-        error_code = "NONE"
 
         logger.error(f"[{trace_id}] Parse event failed: {parse_error}")
 
@@ -460,6 +503,8 @@ def callback():
     input_text = safe_str(event.get("message", {}).get("text"))
     reply_token = safe_str(event.get("replyToken"))
 
+    mention_text, clean_input_text = extract_leading_mentions(input_text)
+
     logger.info(
         f"[{trace_id}] Parsed event_id={event_id} user_id={user_id} "
         f"source_type={source_type} input_text={input_text}"
@@ -467,21 +512,18 @@ def callback():
 
     # 4) IDEMPOTENCY CHECK
     try:
-        ws = get_worksheet()
-        ensure_headers(ws)
+        ws = get_forensic_ws()
         if event_already_logged(ws, event_id):
             logger.warning(f"[{trace_id}] Duplicate event_id={event_id} ignored")
             return "OK", 200
     except Exception as exc:
-        # Không fail sớm vì sheet đọc lỗi không có nghĩa là translate/reply phải chết ngay.
-        # Nhưng phải log để forensic runtime.
         logger.exception(f"[{trace_id}] Idempotency check failed: {exc}")
 
-    # 5) TARGET LANG
-    target_lang = get_target_lang_for_user(user_id)
+    # 5) TARGET LANG LOCK
+    target_lang = get_locked_target_lang()
 
     # 6) DETECT LANGUAGE
-    detected_lang, detect_err = google_detect_language(input_text, trace_id)
+    detected_lang, detect_err = google_detect_language(clean_input_text, trace_id)
     if detect_err:
         latency_ms = int((time.perf_counter() - started) * 1000)
         final_status = "FAILED_TRANSLATE"
@@ -506,7 +548,7 @@ def callback():
 
     # 7) TRANSLATE
     translated_text, translate_err = google_translate_text(
-        text=input_text,
+        text=clean_input_text,
         target_lang=target_lang,
         source_lang=detected_lang,
         trace_id=trace_id,
@@ -534,8 +576,11 @@ def callback():
         append_forensic_row(row, trace_id)
         return "OK", 200
 
-    # 8) REPLY LINE
-    reply_ok, reply_err = line_reply(reply_token, translated_text, trace_id)
+    # 8) BUILD FINAL REPLY
+    final_reply_text = build_group_reply_text(mention_text, translated_text)
+
+    # 9) REPLY LINE
+    reply_ok, reply_err = line_reply(reply_token, final_reply_text, trace_id)
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     if reply_ok:
@@ -543,11 +588,12 @@ def callback():
         error_code = "NONE"
     else:
         final_status = "FAILED_REPLY"
-        error_code = reply_err if reply_err in ALLOWED_ERROR_CODE else "NONE"
         if reply_err == "LINE_REPLY_400":
             error_code = "LINE_REPLY_400"
+        else:
+            error_code = "NONE"
 
-    # 9) APPEND SINGLE FORENSIC ROW
+    # 10) APPEND SINGLE FORENSIC ROW
     row = build_row(
         trace_id=trace_id,
         event_id=event_id,
@@ -557,7 +603,7 @@ def callback():
         input_text=input_text,
         detected_lang=detected_lang or "",
         target_lang=target_lang,
-        translated_text=translated_text or "",
+        translated_text=final_reply_text or "",
         final_status=final_status,
         error_code=error_code,
         latency_ms=latency_ms,
@@ -565,11 +611,9 @@ def callback():
 
     append_ok, append_err = append_forensic_row(row, trace_id)
 
-    # 10) FINAL HTTP
+    # 11) FINAL HTTP
     if not append_ok:
         logger.error(f"[{trace_id}] FAILED_SHEET append_err={append_err}")
-        # Không thể ghi FAILED_SHEET vào Sheet vì chính append đã lỗi.
-        # Runtime log là bằng chứng phụ duy nhất.
         return "OK", 200
 
     return "OK", 200
