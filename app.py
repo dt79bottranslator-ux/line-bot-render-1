@@ -42,9 +42,6 @@ TW_TZ = timezone(timedelta(hours=8))
 # =========================================================
 # BUSINESS LOCK
 # =========================================================
-# Mục tiêu chính:
-# Lao động nước ngoài giao tiếp với người Đài Loan
-# => ngôn ngữ đích khóa cứng = zh-TW
 LOCKED_TARGET_LANG = "zh-TW"
 
 # =========================================================
@@ -137,12 +134,6 @@ def get_gspread_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
     return gspread.authorize(creds)
 
-def get_worksheet():
-    gc = get_gspread_client()
-    sh = gc.open(GOOGLE_SHEET_NAME)
-    ws = sh.worksheet(GOOGLE_SHEET_WORKSHEET)
-    return ws
-
 def ensure_headers(ws) -> None:
     existing = ws.row_values(1)
     if existing != SHEET_HEADERS:
@@ -154,15 +145,29 @@ def ensure_headers(ws) -> None:
             )
 
 def get_forensic_ws():
-    ws = get_worksheet()
+    logger.info("SHEET_TRACE: step=load_client:start")
+    gc = get_gspread_client()
+    logger.info("SHEET_TRACE: step=load_client:ok")
+
+    logger.info(f"SHEET_TRACE: step=open_spreadsheet:start name={GOOGLE_SHEET_NAME}")
+    sh = gc.open(GOOGLE_SHEET_NAME)
+    logger.info("SHEET_TRACE: step=open_spreadsheet:ok")
+
+    logger.info(f"SHEET_TRACE: step=open_worksheet:start worksheet={GOOGLE_SHEET_WORKSHEET}")
+    ws = sh.worksheet(GOOGLE_SHEET_WORKSHEET)
+    logger.info("SHEET_TRACE: step=open_worksheet:ok")
+
+    logger.info("SHEET_TRACE: step=ensure_headers:start")
     ensure_headers(ws)
+    logger.info("SHEET_TRACE: step=ensure_headers:ok")
+
     return ws
 
 def event_already_logged(ws, event_id: str) -> bool:
     if not event_id:
         return False
 
-    values = ws.col_values(2)  # event_id column
+    values = ws.col_values(2)
     return event_id in values[1:]
 
 # =========================================================
@@ -197,17 +202,12 @@ def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any
 
 def extract_prefix_and_content(text: str) -> Tuple[str, str]:
     """
-    Giữ nguyên prefix nhận diện người được nhắc, không cho dịch nickname/alias.
-
     Ví dụ:
     '@文勇 - Ethan ngày mai tăng ca đến 2:00'
     -> ('@文勇 - Ethan', 'ngày mai tăng ca đến 2:00')
 
     '@阿勇 mai tăng ca đến 20:00'
     -> ('@阿勇', 'mai tăng ca đến 20:00')
-
-    'hello'
-    -> ('', 'hello')
     """
     text = safe_str(text)
     if not text:
@@ -216,23 +216,18 @@ def extract_prefix_and_content(text: str) -> Tuple[str, str]:
     if not text.startswith("@"):
         return "", text
 
-    # Pattern ưu tiên: @nickname - alias content
     if " - " in text:
         left, right = text.split(" - ", 1)
         right = safe_str(right)
-
-        # right = alias + content
         right_parts = right.split(" ", 1)
+
         if len(right_parts) == 2:
             alias = safe_str(right_parts[0])
             content = safe_str(right_parts[1])
-
             if content:
                 prefix = f"{safe_str(left)} - {alias}".strip()
                 return prefix, content
 
-        # Nếu không tách được content, fallback sang chỉ giữ @ đầu câu
-        # để tránh nuốt nhầm toàn bộ text vào prefix
     parts = text.split(" ", 1)
     if len(parts) == 2:
         return safe_str(parts[0]), safe_str(parts[1])
@@ -241,10 +236,7 @@ def extract_prefix_and_content(text: str) -> Tuple[str, str]:
 
 def build_group_reply_text(prefix_text: str, translated_text: str) -> str:
     prefix_text = safe_str(prefix_text)
-    translated_text = safe_str(translated_text)
-
-    if not translated_text:
-        translated_text = FALLBACK_REPLY_TEXT
+    translated_text = safe_str(translated_text) or FALLBACK_REPLY_TEXT
 
     if prefix_text:
         return f"{prefix_text} {translated_text}".strip()
@@ -367,8 +359,10 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Option
 # =========================================================
 def append_forensic_row(row: List[Any], trace_id: str) -> Tuple[bool, Optional[str]]:
     try:
+        logger.info(f"[{trace_id}] SHEET_TRACE: step=append_row:start")
         ws = get_forensic_ws()
         ws.append_row(row, value_input_option="RAW")
+        logger.info(f"[{trace_id}] SHEET_TRACE: step=append_row:ok")
         logger.info(f"[{trace_id}] Sheet append success")
         return True, None
     except Exception as exc:
@@ -449,7 +443,6 @@ def callback():
 
     logger.info(f"[{trace_id}] Webhook received")
 
-    # forensic defaults
     event_id = ""
     user_id = ""
     source_type = ""
@@ -556,17 +549,19 @@ def callback():
 
     # 4) IDEMPOTENCY CHECK
     try:
+        logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:start")
         ws = get_forensic_ws()
         if event_already_logged(ws, event_id):
             logger.warning(f"[{trace_id}] Duplicate event_id={event_id} ignored")
             return "OK", 200
+        logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:ok")
     except Exception as exc:
         logger.exception(f"[{trace_id}] Idempotency check failed: {exc}")
 
     # 5) TARGET LANG LOCK
     target_lang = get_locked_target_lang()
 
-    # Không có nội dung để dịch sau khi tách prefix
+    # 6) EMPTY CONTENT AFTER PREFIX SPLIT
     if not clean_input_text:
         final_reply_text = prefix_text or FALLBACK_REPLY_TEXT
         reply_ok, reply_err = line_reply(reply_token, final_reply_text, trace_id)
@@ -592,7 +587,7 @@ def callback():
         append_forensic_row(row, trace_id)
         return "OK", 200
 
-    # 6) DETECT LANGUAGE
+    # 7) DETECT LANGUAGE
     detected_lang, detect_err = google_detect_language(clean_input_text, trace_id)
     if detect_err:
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -616,7 +611,7 @@ def callback():
         append_forensic_row(row, trace_id)
         return "OK", 200
 
-    # 7) TRANSLATE
+    # 8) TRANSLATE
     translated_text, translate_err = google_translate_text(
         text=clean_input_text,
         target_lang=target_lang,
@@ -646,10 +641,10 @@ def callback():
         append_forensic_row(row, trace_id)
         return "OK", 200
 
-    # 8) BUILD FINAL REPLY
+    # 9) BUILD FINAL REPLY
     final_reply_text = build_group_reply_text(prefix_text, translated_text)
 
-    # 9) REPLY LINE
+    # 10) REPLY LINE
     reply_ok, reply_err = line_reply(reply_token, final_reply_text, trace_id)
     latency_ms = int((time.perf_counter() - started) * 1000)
 
@@ -660,7 +655,7 @@ def callback():
         final_status = "FAILED_REPLY"
         error_code = compute_reply_error_code(reply_err)
 
-    # 10) APPEND SINGLE FORENSIC ROW
+    # 11) APPEND SINGLE FORENSIC ROW
     row = build_row(
         trace_id=trace_id,
         event_id=event_id,
@@ -678,7 +673,7 @@ def callback():
 
     append_ok, append_err = append_forensic_row(row, trace_id)
 
-    # 11) FINAL HTTP
+    # 12) FINAL HTTP
     if not append_ok:
         logger.error(f"[{trace_id}] FAILED_SHEET append_err={append_err}")
         return "OK", 200
