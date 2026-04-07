@@ -35,6 +35,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "").strip()
 GOOGLE_SHEET_WORKSHEET = os.getenv("GOOGLE_SHEET_WORKSHEET", "FORENSIC_JOURNAL").strip()
+FREE_DAILY_CHAR_LIMIT = int(os.getenv("FREE_DAILY_CHAR_LIMIT", "1000").strip() or "1000")
 
 # Múi giờ Đài Loan
 TW_TZ = timezone(timedelta(hours=8))
@@ -63,6 +64,13 @@ SHEET_HEADERS = [
     "char_count",
     "request_type",
     "is_group_format",
+    "group_id",
+    "room_id",
+    "billing_scope",
+    "billing_key",
+    "quota_limit",
+    "quota_used",
+    "quota_remaining",
 ]
 
 ALLOWED_FINAL_STATUS = {
@@ -73,6 +81,7 @@ ALLOWED_FINAL_STATUS = {
     "FAILED_REPLY",
     "FAILED_SHEET",
     "PARTIAL_SUCCESS",
+    "BLOCKED_QUOTA",
 }
 
 ALLOWED_ERROR_CODE = {
@@ -82,6 +91,7 @@ ALLOWED_ERROR_CODE = {
     "LINE_REPLY_400",
     "SHEET_APPEND_ERROR",
     "INVALID_SIGNATURE",
+    "QUOTA_EXCEEDED",
 }
 
 HTTP_TIMEOUT_SECONDS = 15
@@ -113,6 +123,43 @@ def mask_text(text: str, max_len: int = 1000) -> str:
 
 def get_locked_target_lang() -> str:
     return LOCKED_TARGET_LANG
+
+
+def safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return default
+
+
+def get_tw_date_str() -> str:
+    return datetime.now(TW_TZ).date().isoformat()
+
+
+def extract_source_ids(event: Dict[str, Any]) -> Tuple[str, str, str]:
+    source = event.get("source", {})
+    source_type = safe_str(source.get("type"))
+    user_id = safe_str(source.get("userId"))
+    group_id = safe_str(source.get("groupId"))
+    room_id = safe_str(source.get("roomId"))
+    return source_type, user_id, group_id, room_id
+
+
+def get_billing_target(source_type: str, user_id: str, group_id: str, room_id: str) -> Tuple[str, str]:
+    if source_type == "group" and group_id:
+        return "GROUP", group_id
+    if source_type == "room" and room_id:
+        return "ROOM", room_id
+    return "USER", user_id
+
+
+def make_quota_block_message() -> str:
+    return (
+        "🚫 Bạn đã dùng hết lượt miễn phí hôm nay\n\n"
+        "Để tiếp tục dịch ngay:\n"
+        "→ Nâng cấp gói Pro (không giới hạn)\n\n"
+        "Chỉ 5 USD/tháng"
+    )
 
 
 # =========================================================
@@ -185,6 +232,27 @@ def event_already_logged(ws, event_id: str) -> bool:
 
     values = ws.col_values(2)
     return event_id in values[1:]
+
+
+def get_today_quota_used(ws, billing_key: str) -> int:
+    if not billing_key:
+        return 0
+
+    records = ws.get_all_records(expected_headers=SHEET_HEADERS)
+    today = get_tw_date_str()
+    total = 0
+
+    for record in records:
+        if safe_str(record.get("billing_key")) != billing_key:
+            continue
+
+        received_at = safe_str(record.get("received_at"))
+        if not received_at.startswith(today):
+            continue
+
+        total += safe_int(record.get("char_count"), 0)
+
+    return total
 
 
 # =========================================================
@@ -404,6 +472,12 @@ def build_row(
     final_status: str,
     error_code: str,
     latency_ms: int,
+    group_id: str = "",
+    room_id: str = "",
+    billing_scope: str = "",
+    billing_key: str = "",
+    quota_limit: int = 0,
+    quota_used: int = 0,
 ) -> List[Any]:
     if final_status not in ALLOWED_FINAL_STATUS:
         raise ValueError(f"Invalid final_status: {final_status}")
@@ -482,6 +556,12 @@ def callback():
     event_id = ""
     user_id = ""
     source_type = ""
+    group_id = ""
+    room_id = ""
+    billing_scope = ""
+    billing_key = ""
+    quota_limit = FREE_DAILY_CHAR_LIMIT
+    quota_used = 0
     input_text = ""
     detected_lang = ""
     target_lang = get_locked_target_lang()
@@ -515,6 +595,12 @@ def callback():
             final_status=final_status,
             error_code=error_code,
             latency_ms=latency_ms,
+            group_id=group_id,
+            room_id=room_id,
+            billing_scope=billing_scope,
+            billing_key=billing_key,
+            quota_limit=quota_limit,
+            quota_used=quota_used,
         )
         append_forensic_row(row, trace_id)
         return "Invalid signature", 403
@@ -541,6 +627,12 @@ def callback():
             final_status=final_status,
             error_code=error_code,
             latency_ms=latency_ms,
+            group_id=group_id,
+            room_id=room_id,
+            billing_scope=billing_scope,
+            billing_key=billing_key,
+            quota_limit=quota_limit,
+            quota_used=quota_used,
         )
         append_forensic_row(row, trace_id)
         return "Bad payload", 400
@@ -552,8 +644,8 @@ def callback():
 
     # 3) EXTRACT DATA
     event_id = safe_str(event.get("message", {}).get("id"))
-    user_id = safe_str(event.get("source", {}).get("userId"))
-    source_type = safe_str(event.get("source", {}).get("type"))
+    source_type, user_id, group_id, room_id = extract_source_ids(event)
+    billing_scope, billing_key = get_billing_target(source_type, user_id, group_id, room_id)
     input_text = safe_str(event.get("message", {}).get("text"))
     reply_token = safe_str(event.get("replyToken"))
 
@@ -571,6 +663,48 @@ def callback():
         if event_already_logged(ws, event_id):
             logger.warning(f"[{trace_id}] Duplicate event_id={event_id} ignored")
             return "OK", 200
+
+        quota_used = get_today_quota_used(ws, billing_key)
+        current_char_count = len(input_text or "")
+        if billing_key and (quota_used + current_char_count) > quota_limit:
+            logger.warning(
+                f"[{trace_id}] Quota exceeded billing_scope={billing_scope} "
+                f"billing_key={billing_key} used={quota_used} current={current_char_count} limit={quota_limit}"
+            )
+            block_message = make_quota_block_message()
+            reply_ok, reply_err = line_reply(reply_token, block_message, trace_id)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+
+            final_status = "BLOCKED_QUOTA" if reply_ok else "FAILED_REPLY"
+            error_code = "QUOTA_EXCEEDED" if reply_ok else compute_reply_error_code(reply_err)
+
+            row = build_row(
+                trace_id=trace_id,
+                event_id=event_id,
+                received_at=received_at,
+                user_id=user_id,
+                source_type=source_type,
+                input_text=input_text,
+                detected_lang="",
+                target_lang=target_lang,
+                translated_text=block_message,
+                final_status=final_status,
+                error_code=error_code,
+                latency_ms=latency_ms,
+                group_id=group_id,
+                room_id=room_id,
+                billing_scope=billing_scope,
+                billing_key=billing_key,
+                quota_limit=quota_limit,
+                quota_used=quota_used,
+            )
+            append_forensic_row(row, trace_id)
+            return "OK", 200
+
+        logger.info(
+            f"[{trace_id}] QUOTA_CHECK billing_scope={billing_scope} billing_key={billing_key} "
+            f"used={quota_used} current={current_char_count} limit={quota_limit}"
+        )
         logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:ok")
     except Exception as exc:
         logger.exception(f"[{trace_id}] Idempotency check failed: {exc}")
@@ -600,6 +734,12 @@ def callback():
             final_status=final_status,
             error_code=error_code,
             latency_ms=latency_ms,
+            group_id=group_id,
+            room_id=room_id,
+            billing_scope=billing_scope,
+            billing_key=billing_key,
+            quota_limit=quota_limit,
+            quota_used=quota_used,
         )
         append_forensic_row(row, trace_id)
         return "OK", 200
@@ -624,6 +764,12 @@ def callback():
             final_status=final_status,
             error_code=error_code,
             latency_ms=latency_ms,
+            group_id=group_id,
+            room_id=room_id,
+            billing_scope=billing_scope,
+            billing_key=billing_key,
+            quota_limit=quota_limit,
+            quota_used=quota_used,
         )
         append_forensic_row(row, trace_id)
         return "OK", 200
@@ -654,6 +800,12 @@ def callback():
             final_status=final_status,
             error_code=error_code,
             latency_ms=latency_ms,
+            group_id=group_id,
+            room_id=room_id,
+            billing_scope=billing_scope,
+            billing_key=billing_key,
+            quota_limit=quota_limit,
+            quota_used=quota_used,
         )
         append_forensic_row(row, trace_id)
         return "OK", 200
