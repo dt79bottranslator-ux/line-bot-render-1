@@ -60,6 +60,9 @@ SHEET_HEADERS = [
     "final_status",
     "error_code",
     "latency_ms",
+    "char_count",
+    "request_type",
+    "is_group_format",
 ]
 
 ALLOWED_FINAL_STATUS = {
@@ -408,19 +411,27 @@ def build_row(
     if error_code not in ALLOWED_ERROR_CODE:
         error_code = "GOOGLE_API_ERROR" if error_code else "NONE"
 
+    raw_input_text = safe_str(input_text)
+    char_count = len(raw_input_text)
+    request_type = "text" if raw_input_text else "empty"
+    is_group_format = "YES" if raw_input_text.startswith("@") else "NO"
+
     return [
         trace_id,
         event_id,
         received_at,
         user_id,
         source_type,
-        mask_text(input_text),
+        mask_text(raw_input_text),
         detected_lang,
         target_lang,
         mask_text(translated_text),
         final_status,
         error_code,
         latency_ms,
+        char_count,
+        request_type,
+        is_group_format,
     ]
 
 
