@@ -90,13 +90,16 @@ FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
 
+
 def make_trace_id() -> str:
     return f"trc_{uuid.uuid4().hex[:16]}"
+
 
 def safe_str(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
 
 def mask_text(text: str, max_len: int = 1000) -> str:
     text = safe_str(text)
@@ -104,8 +107,10 @@ def mask_text(text: str, max_len: int = 1000) -> str:
         return text
     return text[:max_len]
 
+
 def get_locked_target_lang() -> str:
     return LOCKED_TARGET_LANG
+
 
 # =========================================================
 # GOOGLE SHEETS HELPERS
@@ -125,6 +130,8 @@ def load_service_account_info() -> Dict[str, Any]:
     except Exception as exc:
         raise ValueError(f"Invalid GOOGLE_SERVICE_ACCOUNT_JSON: {exc}") from exc
 
+
+
 def get_gspread_client():
     info = load_service_account_info()
     scope = [
@@ -133,6 +140,8 @@ def get_gspread_client():
     ]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
     return gspread.authorize(creds)
+
+
 
 def ensure_headers(ws) -> None:
     existing = ws.row_values(1)
@@ -143,6 +152,8 @@ def ensure_headers(ws) -> None:
             raise ValueError(
                 f"Worksheet headers mismatch. Found={existing}, Expected={SHEET_HEADERS}"
             )
+
+
 
 def get_forensic_ws():
     logger.info("SHEET_TRACE: step=load_client:start")
@@ -163,12 +174,15 @@ def get_forensic_ws():
 
     return ws
 
+
+
 def event_already_logged(ws, event_id: str) -> bool:
     if not event_id:
         return False
 
     values = ws.col_values(2)
     return event_id in values[1:]
+
 
 # =========================================================
 # LINE / MESSAGE HELPERS
@@ -185,6 +199,8 @@ def verify_line_signature(channel_secret: str, body: bytes, signature: str) -> b
     computed = base64.b64encode(digest).decode("utf-8")
     return hmac.compare_digest(computed, signature)
 
+
+
 def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     events = payload.get("events", [])
     if not events:
@@ -200,15 +216,9 @@ def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any
 
     return event, None
 
-def extract_prefix_and_content(text: str) -> Tuple[str, str]:
-    """
-    Ví dụ:
-    '@文勇 - Ethan ngày mai tăng ca đến 2:00'
-    -> ('@文勇 - Ethan', 'ngày mai tăng ca đến 2:00')
 
-    '@阿勇 mai tăng ca đến 20:00'
-    -> ('@阿勇', 'mai tăng ca đến 20:00')
-    """
+
+def extract_prefix_and_content(text: str) -> Tuple[str, str]:
     text = safe_str(text)
     if not text:
         return "", ""
@@ -234,6 +244,8 @@ def extract_prefix_and_content(text: str) -> Tuple[str, str]:
 
     return text, ""
 
+
+
 def build_group_reply_text(prefix_text: str, translated_text: str) -> str:
     prefix_text = safe_str(prefix_text)
     translated_text = safe_str(translated_text) or FALLBACK_REPLY_TEXT
@@ -241,6 +253,7 @@ def build_group_reply_text(prefix_text: str, translated_text: str) -> str:
     if prefix_text:
         return f"{prefix_text} {translated_text}".strip()
     return translated_text
+
 
 # =========================================================
 # GOOGLE TRANSLATE HELPERS
@@ -272,6 +285,8 @@ def google_detect_language(text: str, trace_id: str) -> Tuple[Optional[str], Opt
     except Exception as exc:
         logger.exception(f"[{trace_id}] Google detect exception: {exc}")
         return None, "DETECT_EXCEPTION"
+
+
 
 def google_translate_text(
     text: str,
@@ -314,6 +329,7 @@ def google_translate_text(
         logger.exception(f"[{trace_id}] Google translate exception: {exc}")
         return None, "TRANSLATE_EXCEPTION"
 
+
 # =========================================================
 # LINE REPLY HELPERS
 # =========================================================
@@ -330,9 +346,9 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Option
         "messages": [
             {
                 "type": "text",
-                "text": final_text
+                "text": final_text,
             }
-        ]
+        ],
     }
 
     try:
@@ -354,6 +370,7 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Option
         logger.exception(f"[{trace_id}] LINE reply exception: {exc}")
         return False, "LINE_REPLY_EXCEPTION"
 
+
 # =========================================================
 # FORENSIC HELPERS
 # =========================================================
@@ -368,6 +385,8 @@ def append_forensic_row(row: List[Any], trace_id: str) -> Tuple[bool, Optional[s
     except Exception as exc:
         logger.exception(f"[{trace_id}] Sheet append failed: {exc}")
         return False, "SHEET_APPEND_ERROR"
+
+
 
 def build_row(
     trace_id: str,
@@ -404,6 +423,8 @@ def build_row(
         latency_ms,
     ]
 
+
+
 def compute_translate_error_code(err: Optional[str]) -> str:
     if err == "GOOGLE_TIMEOUT":
         return "GOOGLE_TIMEOUT"
@@ -411,10 +432,13 @@ def compute_translate_error_code(err: Optional[str]) -> str:
         return "GOOGLE_API_ERROR"
     return "NONE"
 
+
+
 def compute_reply_error_code(err: Optional[str]) -> str:
     if err == "LINE_REPLY_400":
         return "LINE_REPLY_400"
     return "NONE"
+
 
 # =========================================================
 # HEALTH
@@ -427,6 +451,7 @@ def health():
         "time": now_tw_iso(),
         "target_lang_lock": LOCKED_TARGET_LANG,
     }), 200
+
 
 # =========================================================
 # WEBHOOK
@@ -457,7 +482,7 @@ def callback():
     is_valid_signature = verify_line_signature(
         LINE_CHANNEL_SECRET,
         body_bytes,
-        signature
+        signature,
     )
     if not is_valid_signature:
         latency_ms = int((time.perf_counter() - started) * 1000)
@@ -511,27 +536,8 @@ def callback():
 
     event, parse_error = parse_message_event(payload)
     if parse_error:
-        latency_ms = int((time.perf_counter() - started) * 1000)
-        final_status = "FAILED_PARSE"
-
-        logger.error(f"[{trace_id}] Parse event failed: {parse_error}")
-
-        row = build_row(
-            trace_id=trace_id,
-            event_id=event_id,
-            received_at=received_at,
-            user_id=user_id,
-            source_type=source_type,
-            input_text=input_text,
-            detected_lang=detected_lang,
-            target_lang=target_lang,
-            translated_text=translated_text,
-            final_status=final_status,
-            error_code=error_code,
-            latency_ms=latency_ms,
-        )
-        append_forensic_row(row, trace_id)
-        return "Ignored", 200
+        logger.warning(f"[{trace_id}] Verify/empty event payload: {parse_error}")
+        return "OK", 200
 
     # 3) EXTRACT DATA
     event_id = safe_str(event.get("message", {}).get("id"))
@@ -679,6 +685,7 @@ def callback():
         return "OK", 200
 
     return "OK", 200
+
 
 # =========================================================
 # MAIN
