@@ -42,8 +42,8 @@ TW_TZ = timezone(timedelta(hours=8))
 # =========================================================
 # BUSINESS LOCK
 # =========================================================
-# Mục tiêu chính hiện tại:
-# Lao động nước ngoài (VI/ID/TH...) giao tiếp với người Đài Loan
+# Mục tiêu chính:
+# Lao động nước ngoài giao tiếp với người Đài Loan
 # => ngôn ngữ đích khóa cứng = zh-TW
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -85,9 +85,10 @@ ALLOWED_ERROR_CODE = {
 }
 
 HTTP_TIMEOUT_SECONDS = 15
+FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 
 # =========================================================
-# HELPERS
+# BASIC HELPERS
 # =========================================================
 def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
@@ -109,6 +110,9 @@ def mask_text(text: str, max_len: int = 1000) -> str:
 def get_locked_target_lang() -> str:
     return LOCKED_TARGET_LANG
 
+# =========================================================
+# GOOGLE SHEETS HELPERS
+# =========================================================
 def load_service_account_info() -> Dict[str, Any]:
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         raise ValueError("Missing GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -161,6 +165,9 @@ def event_already_logged(ws, event_id: str) -> bool:
     values = ws.col_values(2)  # event_id column
     return event_id in values[1:]
 
+# =========================================================
+# LINE / MESSAGE HELPERS
+# =========================================================
 def verify_line_signature(channel_secret: str, body: bytes, signature: str) -> bool:
     if not channel_secret or not signature:
         return False
@@ -188,41 +195,64 @@ def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any
 
     return event, None
 
-def extract_leading_mentions(text: str) -> Tuple[str, str]:
+def extract_prefix_and_content(text: str) -> Tuple[str, str]:
     """
-    Giữ các token @ ở đầu câu.
+    Giữ nguyên prefix nhận diện người được nhắc, không cho dịch nickname/alias.
+
     Ví dụ:
-    '@A @B mai tăng ca' -> ('@A @B', 'mai tăng ca')
-    'hello' -> ('', 'hello')
+    '@文勇 - Ethan ngày mai tăng ca đến 2:00'
+    -> ('@文勇 - Ethan', 'ngày mai tăng ca đến 2:00')
+
+    '@阿勇 mai tăng ca đến 20:00'
+    -> ('@阿勇', 'mai tăng ca đến 20:00')
+
+    'hello'
+    -> ('', 'hello')
     """
-    tokens = safe_str(text).split()
-    mentions = []
-    remainder = []
+    text = safe_str(text)
+    if not text:
+        return "", ""
 
-    still_collecting_mentions = True
-    for token in tokens:
-        if still_collecting_mentions and token.startswith("@"):
-            mentions.append(token)
-        else:
-            still_collecting_mentions = False
-            remainder.append(token)
+    if not text.startswith("@"):
+        return "", text
 
-    mention_text = " ".join(mentions).strip()
-    clean_text = " ".join(remainder).strip()
+    # Pattern ưu tiên: @nickname - alias content
+    if " - " in text:
+        left, right = text.split(" - ", 1)
+        right = safe_str(right)
 
-    if not clean_text:
-        clean_text = safe_str(text)
+        # right = alias + content
+        right_parts = right.split(" ", 1)
+        if len(right_parts) == 2:
+            alias = safe_str(right_parts[0])
+            content = safe_str(right_parts[1])
 
-    return mention_text, clean_text
+            if content:
+                prefix = f"{safe_str(left)} - {alias}".strip()
+                return prefix, content
 
-def build_group_reply_text(mention_text: str, translated_text: str) -> str:
-    mention_text = safe_str(mention_text)
+        # Nếu không tách được content, fallback sang chỉ giữ @ đầu câu
+        # để tránh nuốt nhầm toàn bộ text vào prefix
+    parts = text.split(" ", 1)
+    if len(parts) == 2:
+        return safe_str(parts[0]), safe_str(parts[1])
+
+    return text, ""
+
+def build_group_reply_text(prefix_text: str, translated_text: str) -> str:
+    prefix_text = safe_str(prefix_text)
     translated_text = safe_str(translated_text)
 
-    if mention_text:
-        return f"{mention_text} {translated_text}".strip()
+    if not translated_text:
+        translated_text = FALLBACK_REPLY_TEXT
+
+    if prefix_text:
+        return f"{prefix_text} {translated_text}".strip()
     return translated_text
 
+# =========================================================
+# GOOGLE TRANSLATE HELPERS
+# =========================================================
 def google_detect_language(text: str, trace_id: str) -> Tuple[Optional[str], Optional[str]]:
     url = "https://translation.googleapis.com/language/translate/v2/detect"
     params = {"key": GOOGLE_API_KEY}
@@ -292,7 +322,12 @@ def google_translate_text(
         logger.exception(f"[{trace_id}] Google translate exception: {exc}")
         return None, "TRANSLATE_EXCEPTION"
 
+# =========================================================
+# LINE REPLY HELPERS
+# =========================================================
 def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Optional[str]]:
+    final_text = safe_str(text) or FALLBACK_REPLY_TEXT
+
     url = "https://api.line.me/v2/bot/message/reply"
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
@@ -303,7 +338,7 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Option
         "messages": [
             {
                 "type": "text",
-                "text": text
+                "text": final_text
             }
         ]
     }
@@ -327,6 +362,9 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, Option
         logger.exception(f"[{trace_id}] LINE reply exception: {exc}")
         return False, "LINE_REPLY_EXCEPTION"
 
+# =========================================================
+# FORENSIC HELPERS
+# =========================================================
 def append_forensic_row(row: List[Any], trace_id: str) -> Tuple[bool, Optional[str]]:
     try:
         ws = get_forensic_ws()
@@ -353,6 +391,7 @@ def build_row(
 ) -> List[Any]:
     if final_status not in ALLOWED_FINAL_STATUS:
         raise ValueError(f"Invalid final_status: {final_status}")
+
     if error_code not in ALLOWED_ERROR_CODE:
         error_code = "GOOGLE_API_ERROR" if error_code else "NONE"
 
@@ -376,6 +415,11 @@ def compute_translate_error_code(err: Optional[str]) -> str:
         return "GOOGLE_TIMEOUT"
     if err:
         return "GOOGLE_API_ERROR"
+    return "NONE"
+
+def compute_reply_error_code(err: Optional[str]) -> str:
+    if err == "LINE_REPLY_400":
+        return "LINE_REPLY_400"
     return "NONE"
 
 # =========================================================
@@ -503,7 +547,7 @@ def callback():
     input_text = safe_str(event.get("message", {}).get("text"))
     reply_token = safe_str(event.get("replyToken"))
 
-    mention_text, clean_input_text = extract_leading_mentions(input_text)
+    prefix_text, clean_input_text = extract_prefix_and_content(input_text)
 
     logger.info(
         f"[{trace_id}] Parsed event_id={event_id} user_id={user_id} "
@@ -521,6 +565,32 @@ def callback():
 
     # 5) TARGET LANG LOCK
     target_lang = get_locked_target_lang()
+
+    # Không có nội dung để dịch sau khi tách prefix
+    if not clean_input_text:
+        final_reply_text = prefix_text or FALLBACK_REPLY_TEXT
+        reply_ok, reply_err = line_reply(reply_token, final_reply_text, trace_id)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        final_status = "SUCCESS" if reply_ok else "FAILED_REPLY"
+        error_code = "NONE" if reply_ok else compute_reply_error_code(reply_err)
+
+        row = build_row(
+            trace_id=trace_id,
+            event_id=event_id,
+            received_at=received_at,
+            user_id=user_id,
+            source_type=source_type,
+            input_text=input_text,
+            detected_lang="",
+            target_lang=target_lang,
+            translated_text=final_reply_text,
+            final_status=final_status,
+            error_code=error_code,
+            latency_ms=latency_ms,
+        )
+        append_forensic_row(row, trace_id)
+        return "OK", 200
 
     # 6) DETECT LANGUAGE
     detected_lang, detect_err = google_detect_language(clean_input_text, trace_id)
@@ -577,7 +647,7 @@ def callback():
         return "OK", 200
 
     # 8) BUILD FINAL REPLY
-    final_reply_text = build_group_reply_text(mention_text, translated_text)
+    final_reply_text = build_group_reply_text(prefix_text, translated_text)
 
     # 9) REPLY LINE
     reply_ok, reply_err = line_reply(reply_token, final_reply_text, trace_id)
@@ -588,10 +658,7 @@ def callback():
         error_code = "NONE"
     else:
         final_status = "FAILED_REPLY"
-        if reply_err == "LINE_REPLY_400":
-            error_code = "LINE_REPLY_400"
-        else:
-            error_code = "NONE"
+        error_code = compute_reply_error_code(reply_err)
 
     # 10) APPEND SINGLE FORENSIC ROW
     row = build_row(
