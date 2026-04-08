@@ -136,7 +136,7 @@ def get_tw_date_str() -> str:
     return datetime.now(TW_TZ).date().isoformat()
 
 
-def extract_source_ids(event: Dict[str, Any]) -> Tuple[str, str, str]:
+def extract_source_ids(event: Dict[str, Any]) -> Tuple[str, str, str, str]:
     source = event.get("source", {})
     source_type = safe_str(source.get("type"))
     user_id = safe_str(source.get("userId"))
@@ -468,7 +468,7 @@ def build_row(
     billing_scope: str = "",
     billing_key: str = "",
     quota_limit: int = 0,
-    quota_used: int = 0,
+    quota_used_before: int = 0,
 ) -> List[Any]:
     if final_status not in ALLOWED_FINAL_STATUS:
         raise ValueError(f"Invalid final_status: {final_status}")
@@ -481,7 +481,13 @@ def build_row(
     request_type = "text" if raw_input_text else "empty"
     is_group_format = "YES" if raw_input_text.startswith("@") else "NO"
 
-    quota_remaining = max(quota_limit - (quota_used + char_count), 0)
+    # BLOCKED_QUOTA: không cộng thêm request hiện tại vì đã bị chặn
+    if final_status == "BLOCKED_QUOTA":
+        quota_used = quota_used_before
+    else:
+        quota_used = quota_used_before + char_count
+
+    quota_remaining = max(quota_limit - quota_used, 0)
 
     return [
         trace_id,
@@ -559,7 +565,7 @@ def callback():
     billing_scope = ""
     billing_key = ""
     quota_limit = FREE_DAILY_CHAR_LIMIT
-    quota_used = 0
+    quota_used_before = 0
     input_text = ""
     detected_lang = ""
     target_lang = get_locked_target_lang()
@@ -598,7 +604,7 @@ def callback():
             billing_scope=billing_scope,
             billing_key=billing_key,
             quota_limit=quota_limit,
-            quota_used=quota_used,
+            quota_used_before=quota_used_before,
         )
         append_forensic_row(row, trace_id)
         return "Invalid signature", 403
@@ -630,7 +636,7 @@ def callback():
             billing_scope=billing_scope,
             billing_key=billing_key,
             quota_limit=quota_limit,
-            quota_used=quota_used,
+            quota_used_before=quota_used_before,
         )
         append_forensic_row(row, trace_id)
         return "Bad payload", 400
@@ -654,20 +660,22 @@ def callback():
         f"source_type={source_type} input_text={input_text}"
     )
 
-    # 4) IDEMPOTENCY CHECK
+    # 4) IDEMPOTENCY CHECK + QUOTA CHECK
     try:
         logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:start")
         ws = get_forensic_ws()
+
         if event_already_logged(ws, event_id):
             logger.warning(f"[{trace_id}] Duplicate event_id={event_id} ignored")
             return "OK", 200
 
-        quota_used = get_today_quota_used(ws, billing_key)
+        quota_used_before = get_today_quota_used(ws, billing_key)
         current_char_count = len(input_text or "")
-        if billing_key and (quota_used + current_char_count) > quota_limit:
+
+        if billing_key and (quota_used_before + current_char_count) > quota_limit:
             logger.warning(
                 f"[{trace_id}] Quota exceeded billing_scope={billing_scope} "
-                f"billing_key={billing_key} used={quota_used} current={current_char_count} limit={quota_limit}"
+                f"billing_key={billing_key} used={quota_used_before} current={current_char_count} limit={quota_limit}"
             )
             block_message = make_quota_block_message()
             reply_ok, reply_err = line_reply(reply_token, block_message, trace_id)
@@ -694,16 +702,17 @@ def callback():
                 billing_scope=billing_scope,
                 billing_key=billing_key,
                 quota_limit=quota_limit,
-                quota_used=quota_used,
+                quota_used_before=quota_used_before,
             )
             append_forensic_row(row, trace_id)
             return "OK", 200
 
         logger.info(
             f"[{trace_id}] QUOTA_CHECK billing_scope={billing_scope} billing_key={billing_key} "
-            f"used={quota_used} current={current_char_count} limit={quota_limit}"
+            f"used={quota_used_before} current={current_char_count} limit={quota_limit}"
         )
         logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:ok")
+
     except Exception as exc:
         logger.exception(f"[{trace_id}] Idempotency check failed: {exc}")
 
@@ -737,7 +746,7 @@ def callback():
             billing_scope=billing_scope,
             billing_key=billing_key,
             quota_limit=quota_limit,
-            quota_used=quota_used,
+            quota_used_before=quota_used_before,
         )
         append_forensic_row(row, trace_id)
         return "OK", 200
@@ -767,7 +776,7 @@ def callback():
             billing_scope=billing_scope,
             billing_key=billing_key,
             quota_limit=quota_limit,
-            quota_used=quota_used,
+            quota_used_before=quota_used_before,
         )
         append_forensic_row(row, trace_id)
         return "OK", 200
@@ -803,7 +812,7 @@ def callback():
             billing_scope=billing_scope,
             billing_key=billing_key,
             quota_limit=quota_limit,
-            quota_used=quota_used,
+            quota_used_before=quota_used_before,
         )
         append_forensic_row(row, trace_id)
         return "OK", 200
@@ -841,7 +850,7 @@ def callback():
         billing_scope=billing_scope,
         billing_key=billing_key,
         quota_limit=quota_limit,
-        quota_used=quota_used,
+        quota_used_before=quota_used_before,
     )
 
     append_ok, append_err = append_forensic_row(row, trace_id)
