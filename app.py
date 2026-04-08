@@ -316,11 +316,45 @@ def update_balance_row(
     row_index: int,
     quota_used: int,
     quota_remaining: int,
+    trace_id: str,
 ) -> None:
-    ws.update(
-        f"C{row_index}:E{row_index}",
-        [[quota_used, quota_remaining, now_tw_iso()]]
+    if not row_index or row_index < 2:
+        raise ValueError(f"Invalid BALANCE row_index={row_index}")
+
+    range_name = f"C{row_index}:E{row_index}"
+    payload = [[quota_used, quota_remaining, now_tw_iso()]]
+
+    logger.info(
+        f"[{trace_id}] BALANCE_WRITE_START row={row_index} range={range_name} "
+        f"used={quota_used} remaining={quota_remaining}"
     )
+
+    ws.update(
+        range_name=range_name,
+        values=payload,
+        value_input_option="RAW",
+    )
+
+    logger.info(
+        f"[{trace_id}] BALANCE_WRITE_DONE row={row_index} range={range_name} "
+        f"used={quota_used} remaining={quota_remaining}"
+    )
+
+    verify_values = ws.get(range_name)
+    logger.info(f"[{trace_id}] BALANCE_WRITE_VERIFY row={row_index} values={verify_values}")
+
+    if not verify_values or not verify_values[0]:
+        raise RuntimeError(f"BALANCE write verify empty at row={row_index}")
+
+    actual_used = safe_int(verify_values[0][0], -1)
+    actual_remaining = safe_int(verify_values[0][1], -1) if len(verify_values[0]) > 1 else -1
+
+    if actual_used != quota_used or actual_remaining != quota_remaining:
+        raise RuntimeError(
+            "BALANCE write verify mismatch "
+            f"row={row_index} expected_used={quota_used} actual_used={actual_used} "
+            f"expected_remaining={quota_remaining} actual_remaining={actual_remaining}"
+        )
 
 
 # =========================================================
@@ -805,6 +839,7 @@ def callback():
             balance_row_index,
             quota_used=new_quota_used,
             quota_remaining=new_quota_remaining,
+            trace_id=trace_id,
         )
 
         logger.info(
