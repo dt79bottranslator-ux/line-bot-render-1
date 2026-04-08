@@ -145,7 +145,8 @@ def callback():
     payload = json.loads(body.decode())
     event = payload["events"][0]
 
-    source_type, user_id, group_id, room_id = extract_source_ids(event) logger.info(f"[ADMIN_DEBUG] user_id={user_id}")
+    source_type, user_id, group_id, room_id = extract_source_ids(event) 
+    logger.info(f"[ADMIN_DEBUG] user_id={user_id}")
     input_text = safe_str(event["message"]["text"])
     reply_token = event["replyToken"]
 
