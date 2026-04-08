@@ -35,6 +35,7 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "").strip()
 GOOGLE_SHEET_WORKSHEET = os.getenv("GOOGLE_SHEET_WORKSHEET", "FORENSIC_JOURNAL").strip()
+BALANCE_WORKSHEET = os.getenv("BALANCE_WORKSHEET", "BALANCE").strip()
 FREE_DAILY_CHAR_LIMIT = int(os.getenv("FREE_DAILY_CHAR_LIMIT", "1000").strip() or "1000")
 
 # Múi giờ Đài Loan
@@ -73,6 +74,14 @@ SHEET_HEADERS = [
     "quota_remaining",
 ]
 
+BALANCE_HEADERS = [
+    "billing_key",
+    "quota_limit",
+    "quota_used",
+    "quota_remaining",
+    "last_updated",
+]
+
 ALLOWED_FINAL_STATUS = {
     "SUCCESS",
     "FAILED_SIGNATURE",
@@ -92,6 +101,7 @@ ALLOWED_ERROR_CODE = {
     "SHEET_APPEND_ERROR",
     "INVALID_SIGNATURE",
     "QUOTA_EXCEEDED",
+    "BALANCE_ERROR",
 }
 
 HTTP_TIMEOUT_SECONDS = 15
@@ -202,6 +212,17 @@ def ensure_headers(ws) -> None:
             )
 
 
+def ensure_balance_headers(ws) -> None:
+    existing = ws.row_values(1)
+    if existing != BALANCE_HEADERS:
+        if not existing:
+            ws.append_row(BALANCE_HEADERS, value_input_option="RAW")
+        else:
+            raise ValueError(
+                f"BALANCE headers mismatch. Found={existing}, Expected={BALANCE_HEADERS}"
+            )
+
+
 def get_forensic_ws():
     logger.info("SHEET_TRACE: step=load_client:start")
     gc = get_gspread_client()
@@ -218,6 +239,26 @@ def get_forensic_ws():
     logger.info("SHEET_TRACE: step=ensure_headers:start")
     ensure_headers(ws)
     logger.info("SHEET_TRACE: step=ensure_headers:ok")
+
+    return ws
+
+
+def get_balance_ws():
+    logger.info("BALANCE_TRACE: step=load_client:start")
+    gc = get_gspread_client()
+    logger.info("BALANCE_TRACE: step=load_client:ok")
+
+    logger.info(f"BALANCE_TRACE: step=open_spreadsheet:start name={GOOGLE_SHEET_NAME}")
+    sh = gc.open(GOOGLE_SHEET_NAME)
+    logger.info("BALANCE_TRACE: step=open_spreadsheet:ok")
+
+    logger.info(f"BALANCE_TRACE: step=open_worksheet:start worksheet={BALANCE_WORKSHEET}")
+    ws = sh.worksheet(BALANCE_WORKSHEET)
+    logger.info("BALANCE_TRACE: step=open_worksheet:ok")
+
+    logger.info("BALANCE_TRACE: step=ensure_headers:start")
+    ensure_balance_headers(ws)
+    logger.info("BALANCE_TRACE: step=ensure_headers:ok")
 
     return ws
 
@@ -249,6 +290,37 @@ def get_today_quota_used(ws, billing_key: str) -> int:
         total += safe_int(record.get("char_count"), 0)
 
     return total
+
+
+def get_balance_row(ws, billing_key: str) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+    if not billing_key:
+        return None, None
+
+    records = ws.get_all_records(expected_headers=BALANCE_HEADERS)
+
+    for idx, record in enumerate(records, start=2):
+        if safe_str(record.get("billing_key")) == billing_key:
+            return idx, {
+                "billing_key": safe_str(record.get("billing_key")),
+                "quota_limit": safe_int(record.get("quota_limit"), FREE_DAILY_CHAR_LIMIT),
+                "quota_used": safe_int(record.get("quota_used"), 0),
+                "quota_remaining": safe_int(record.get("quota_remaining"), FREE_DAILY_CHAR_LIMIT),
+                "last_updated": safe_str(record.get("last_updated")),
+            }
+
+    return None, None
+
+
+def update_balance_row(
+    ws,
+    row_index: int,
+    quota_used: int,
+    quota_remaining: int,
+) -> None:
+    ws.update(
+        f"C{row_index}:E{row_index}",
+        [[quota_used, quota_remaining, now_tw_iso()]]
+    )
 
 
 # =========================================================
@@ -481,7 +553,6 @@ def build_row(
     request_type = "text" if raw_input_text else "empty"
     is_group_format = "YES" if raw_input_text.startswith("@") else "NO"
 
-    # BLOCKED_QUOTA: không cộng thêm request hiện tại vì đã bị chặn
     if final_status == "BLOCKED_QUOTA":
         quota_used = quota_used_before
     else:
@@ -660,7 +731,7 @@ def callback():
         f"source_type={source_type} input_text={input_text}"
     )
 
-    # 4) IDEMPOTENCY CHECK + QUOTA CHECK
+    # 4) IDEMPOTENCY CHECK + QUOTA CHECK (BALANCE FIRST)
     try:
         logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:start")
         ws = get_forensic_ws()
@@ -669,14 +740,32 @@ def callback():
             logger.warning(f"[{trace_id}] Duplicate event_id={event_id} ignored")
             return "OK", 200
 
-        quota_used_before = get_today_quota_used(ws, billing_key)
         current_char_count = len(input_text or "")
 
-        if billing_key and (quota_used_before + current_char_count) > quota_limit:
+        balance_ws = get_balance_ws()
+        balance_row_index, balance = get_balance_row(balance_ws, billing_key)
+
+        if not balance:
+            logger.error(f"[{trace_id}] Missing BALANCE row for billing_key={billing_key}")
+            return "Missing balance row", 500
+
+        quota_limit = balance["quota_limit"]
+        quota_used_before = balance["quota_used"]
+        quota_remaining_before = balance["quota_remaining"]
+
+        logger.info(
+            f"[{trace_id}] BALANCE_CHECK billing_scope={billing_scope} "
+            f"billing_key={billing_key} used={quota_used_before} "
+            f"remaining={quota_remaining_before} current={current_char_count} limit={quota_limit}"
+        )
+
+        if quota_remaining_before < current_char_count:
             logger.warning(
                 f"[{trace_id}] Quota exceeded billing_scope={billing_scope} "
-                f"billing_key={billing_key} used={quota_used_before} current={current_char_count} limit={quota_limit}"
+                f"billing_key={billing_key} used={quota_used_before} "
+                f"remaining={quota_remaining_before} current={current_char_count} limit={quota_limit}"
             )
+
             block_message = make_quota_block_message()
             reply_ok, reply_err = line_reply(reply_token, block_message, trace_id)
             latency_ms = int((time.perf_counter() - started) * 1000)
@@ -707,14 +796,27 @@ def callback():
             append_forensic_row(row, trace_id)
             return "OK", 200
 
+        # RESERVE QUOTA BEFORE API CALL
+        new_quota_used = quota_used_before + current_char_count
+        new_quota_remaining = quota_remaining_before - current_char_count
+
+        update_balance_row(
+            balance_ws,
+            balance_row_index,
+            quota_used=new_quota_used,
+            quota_remaining=new_quota_remaining,
+        )
+
         logger.info(
-            f"[{trace_id}] QUOTA_CHECK billing_scope={billing_scope} billing_key={billing_key} "
-            f"used={quota_used_before} current={current_char_count} limit={quota_limit}"
+            f"[{trace_id}] BALANCE_RESERVED billing_scope={billing_scope} "
+            f"billing_key={billing_key} used={new_quota_used} "
+            f"remaining={new_quota_remaining}"
         )
         logger.info(f"[{trace_id}] SHEET_TRACE: step=idempotency_check:ok")
 
     except Exception as exc:
         logger.exception(f"[{trace_id}] Idempotency check failed: {exc}")
+        return "Balance check failed", 500
 
     # 5) TARGET LANG LOCK
     target_lang = get_locked_target_lang()
