@@ -11,12 +11,9 @@ import time
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional, Tuple, List
 
 import requests
-import gspread
-from flask import Flask, request, jsonify
-from oauth2client.service_account import ServiceAccountCredentials
+from flask import Flask, request
 
 app = Flask(__name__)
 
@@ -35,11 +32,6 @@ logger = logging.getLogger(__name__)
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "").strip()
-GOOGLE_SHEET_WORKSHEET = os.getenv("GOOGLE_SHEET_WORKSHEET", "FORENSIC_JOURNAL").strip()
-BALANCE_WORKSHEET = os.getenv("BALANCE_WORKSHEET", "BALANCE").strip()
-FREE_DAILY_CHAR_LIMIT = int(os.getenv("FREE_DAILY_CHAR_LIMIT", "1000"))
 
 # 👉 ADMIN
 ADMIN_IDS = os.getenv("ADMIN_IDS", "")
@@ -60,9 +52,6 @@ FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 # =========================================================
 # BASIC
 # =========================================================
-def now_tw_iso():
-    return datetime.now(TW_TZ).isoformat()
-
 def make_trace_id():
     return f"trc_{uuid.uuid4().hex[:12]}"
 
@@ -77,13 +66,6 @@ def extract_source_ids(event):
         safe_str(s.get("groupId")),
         safe_str(s.get("roomId"))
     )
-
-def get_billing_target(source_type, user_id, group_id, room_id):
-    if source_type == "group" and group_id:
-        return "GROUP", group_id
-    if source_type == "room" and room_id:
-        return "ROOM", room_id
-    return "USER", user_id
 
 # =========================================================
 # LINE
@@ -107,28 +89,35 @@ def line_reply(reply_token, text, trace_id):
         r = requests.post(url, headers=headers, json=payload, timeout=HTTP_TIMEOUT_SECONDS)
         logger.info(f"[{trace_id}] LINE {r.status_code}")
         return r.status_code == 200
-    except:
+    except Exception as e:
+        logger.error(f"[{trace_id}] LINE ERROR: {e}")
         return False
 
 # =========================================================
 # GOOGLE TRANSLATE
 # =========================================================
 def detect_lang(text, trace_id):
-    url = "https://translation.googleapis.com/language/translate/v2/detect"
-    r = requests.post(url, params={"key": GOOGLE_API_KEY}, data={"q": text})
-    if r.status_code != 200:
+    try:
+        url = "https://translation.googleapis.com/language/translate/v2/detect"
+        r = requests.post(url, params={"key": GOOGLE_API_KEY}, data={"q": text}, timeout=HTTP_TIMEOUT_SECONDS)
+        if r.status_code != 200:
+            return None
+        return r.json()["data"]["detections"][0][0]["language"]
+    except:
         return None
-    return r.json()["data"]["detections"][0][0]["language"]
 
 def translate(text, target, source, trace_id):
-    url = "https://translation.googleapis.com/language/translate/v2"
-    data = {"q": text, "target": target}
-    if source:
-        data["source"] = source
-    r = requests.post(url, params={"key": GOOGLE_API_KEY}, data=data)
-    if r.status_code != 200:
+    try:
+        url = "https://translation.googleapis.com/language/translate/v2"
+        data = {"q": text, "target": target}
+        if source:
+            data["source"] = source
+        r = requests.post(url, params={"key": GOOGLE_API_KEY}, data=data, timeout=HTTP_TIMEOUT_SECONDS)
+        if r.status_code != 200:
+            return None
+        return html.unescape(r.json()["data"]["translations"][0]["translatedText"])
+    except:
         return None
-    return html.unescape(r.json()["data"]["translations"][0]["translatedText"])
 
 # =========================================================
 # WEBHOOK
@@ -145,13 +134,16 @@ def callback():
     payload = json.loads(body.decode())
     event = payload["events"][0]
 
-    source_type, user_id, group_id, room_id = extract_source_ids(event) 
+    source_type, user_id, group_id, room_id = extract_source_ids(event)
+
+    # 👉 DEBUG USER_ID
     logger.info(f"[ADMIN_DEBUG] user_id={user_id}")
+
     input_text = safe_str(event["message"]["text"])
     reply_token = event["replyToken"]
 
     # =====================================================
-    # COMMAND DETECT
+    # COMMAND: !all
     # =====================================================
     if input_text.startswith("!all"):
         content = input_text.replace("!all", "", 1).strip()
@@ -167,7 +159,7 @@ def callback():
         lang = detect_lang(content, trace_id)
         translated = translate(content, LOCKED_TARGET_LANG, lang, trace_id)
 
-        msg = f"📢 THÔNG BÁO:\n{translated}"
+        msg = f"📢 THÔNG BÁO:\n{translated or content}"
         line_reply(reply_token, msg, trace_id)
         return "OK", 200
 
