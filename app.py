@@ -181,7 +181,6 @@ def load_service_account_info() -> Dict[str, Any]:
         raise ValueError(f"Invalid GOOGLE_SERVICE_ACCOUNT_JSON: {exc}") from exc
 
 
-
 def get_gspread_client():
     info = load_service_account_info()
     scope = [
@@ -190,7 +189,6 @@ def get_gspread_client():
     ]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(info, scope)
     return gspread.authorize(creds)
-
 
 
 def ensure_headers(ws) -> None:
@@ -202,7 +200,6 @@ def ensure_headers(ws) -> None:
             raise ValueError(
                 f"Worksheet headers mismatch. Found={existing}, Expected={SHEET_HEADERS}"
             )
-
 
 
 def get_forensic_ws():
@@ -223,7 +220,6 @@ def get_forensic_ws():
     logger.info("SHEET_TRACE: step=ensure_headers:ok")
 
     return ws
-
 
 
 def event_already_logged(ws, event_id: str) -> bool:
@@ -271,7 +267,6 @@ def verify_line_signature(channel_secret: str, body: bytes, signature: str) -> b
     return hmac.compare_digest(computed, signature)
 
 
-
 def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     events = payload.get("events", [])
     if not events:
@@ -286,7 +281,6 @@ def parse_message_event(payload: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any
         return None, "Message type is not text"
 
     return event, None
-
 
 
 def extract_prefix_and_content(text: str) -> Tuple[str, str]:
@@ -314,7 +308,6 @@ def extract_prefix_and_content(text: str) -> Tuple[str, str]:
         return safe_str(parts[0]), safe_str(parts[1])
 
     return text, ""
-
 
 
 def build_group_reply_text(prefix_text: str, translated_text: str) -> str:
@@ -356,7 +349,6 @@ def google_detect_language(text: str, trace_id: str) -> Tuple[Optional[str], Opt
     except Exception as exc:
         logger.exception(f"[{trace_id}] Google detect exception: {exc}")
         return None, "DETECT_EXCEPTION"
-
 
 
 def google_translate_text(
@@ -458,7 +450,6 @@ def append_forensic_row(row: List[Any], trace_id: str) -> Tuple[bool, Optional[s
         return False, "SHEET_APPEND_ERROR"
 
 
-
 def build_row(
     trace_id: str,
     event_id: str,
@@ -490,6 +481,8 @@ def build_row(
     request_type = "text" if raw_input_text else "empty"
     is_group_format = "YES" if raw_input_text.startswith("@") else "NO"
 
+    quota_remaining = max(quota_limit - (quota_used + char_count), 0)
+
     return [
         trace_id,
         event_id,
@@ -506,8 +499,14 @@ def build_row(
         char_count,
         request_type,
         is_group_format,
+        group_id,
+        room_id,
+        billing_scope,
+        billing_key,
+        quota_limit,
+        quota_used,
+        quota_remaining,
     ]
-
 
 
 def compute_translate_error_code(err: Optional[str]) -> str:
@@ -516,7 +515,6 @@ def compute_translate_error_code(err: Optional[str]) -> str:
     if err:
         return "GOOGLE_API_ERROR"
     return "NONE"
-
 
 
 def compute_reply_error_code(err: Optional[str]) -> str:
@@ -838,6 +836,12 @@ def callback():
         final_status=final_status,
         error_code=error_code,
         latency_ms=latency_ms,
+        group_id=group_id,
+        room_id=room_id,
+        billing_scope=billing_scope,
+        billing_key=billing_key,
+        quota_limit=quota_limit,
+        quota_used=quota_used,
     )
 
     append_ok, append_err = append_forensic_row(row, trace_id)
