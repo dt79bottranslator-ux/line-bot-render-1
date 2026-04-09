@@ -113,6 +113,9 @@ def parse_all_command(input_text: str):
     content = raw[4:].strip()
     return True, content
 
+def ms_since(start_perf: float) -> int:
+    return int((time.perf_counter() - start_perf) * 1000)
+
 # =========================================================
 # LINE HELPERS
 # =========================================================
@@ -125,6 +128,7 @@ def verify_line_signature(secret, body, signature):
     return hmac.compare_digest(computed, signature)
 
 def line_reply(reply_token, text, trace_id):
+    started = time.perf_counter()
     final_text = safe_str(text) or FALLBACK_REPLY_TEXT
 
     url = "https://api.line.me/v2/bot/message/reply"
@@ -149,18 +153,24 @@ def line_reply(reply_token, text, trace_id):
             json=payload,
             timeout=HTTP_TIMEOUT_SECONDS
         )
-        logger.info(f"[{trace_id}] LINE_REPLY status={r.status_code}")
+        latency_ms = ms_since(started)
+        logger.info(f"[{trace_id}] LINE_REPLY status={r.status_code} latency_ms={latency_ms}")
+
         if r.status_code != 200:
             logger.error(f"[{trace_id}] LINE_REPLY body={r.text}")
-        return r.status_code == 200
+
+        return r.status_code == 200, latency_ms
+
     except Exception as e:
-        logger.exception(f"[{trace_id}] LINE_REPLY exception={e}")
-        return False
+        latency_ms = ms_since(started)
+        logger.exception(f"[{trace_id}] LINE_REPLY exception={e} latency_ms={latency_ms}")
+        return False, latency_ms
 
 # =========================================================
 # GOOGLE TRANSLATE HELPERS
 # =========================================================
 def detect_lang(text, trace_id):
+    started = time.perf_counter()
     try:
         url = "https://translation.googleapis.com/language/translate/v2/detect"
         r = requests.post(
@@ -170,19 +180,24 @@ def detect_lang(text, trace_id):
             timeout=HTTP_TIMEOUT_SECONDS
         )
 
-        logger.info(f"[{trace_id}] GOOGLE_DETECT status={r.status_code}")
+        latency_ms = ms_since(started)
+        logger.info(f"[{trace_id}] GOOGLE_DETECT status={r.status_code} latency_ms={latency_ms}")
 
         if r.status_code != 200:
             logger.error(f"[{trace_id}] GOOGLE_DETECT body={r.text}")
-            return None
+            return None, latency_ms
 
         payload = r.json()
-        return payload["data"]["detections"][0][0]["language"]
+        detected_lang = payload["data"]["detections"][0][0]["language"]
+        return detected_lang, latency_ms
+
     except Exception as e:
-        logger.exception(f"[{trace_id}] GOOGLE_DETECT exception={e}")
-        return None
+        latency_ms = ms_since(started)
+        logger.exception(f"[{trace_id}] GOOGLE_DETECT exception={e} latency_ms={latency_ms}")
+        return None, latency_ms
 
 def translate(text, target, source, trace_id):
+    started = time.perf_counter()
     try:
         url = "https://translation.googleapis.com/language/translate/v2"
         data = {
@@ -200,18 +215,21 @@ def translate(text, target, source, trace_id):
             timeout=HTTP_TIMEOUT_SECONDS
         )
 
-        logger.info(f"[{trace_id}] GOOGLE_TRANSLATE status={r.status_code}")
+        latency_ms = ms_since(started)
+        logger.info(f"[{trace_id}] GOOGLE_TRANSLATE status={r.status_code} latency_ms={latency_ms}")
 
         if r.status_code != 200:
             logger.error(f"[{trace_id}] GOOGLE_TRANSLATE body={r.text}")
-            return None
+            return None, latency_ms
 
         payload = r.json()
         translated = payload["data"]["translations"][0]["translatedText"]
-        return html.unescape(translated)
+        return html.unescape(translated), latency_ms
+
     except Exception as e:
-        logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE exception={e}")
-        return None
+        latency_ms = ms_since(started)
+        logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE exception={e} latency_ms={latency_ms}")
+        return None, latency_ms
 
 # =========================================================
 # AUDIT LOG HELPERS
@@ -239,6 +257,16 @@ def log_all_audit(
         f"note={json.dumps(note, ensure_ascii=False)}"
     )
 
+def log_total_latency(trace_id, route_name, total_ms, source_type, group_id, room_id):
+    logger.info(
+        f"[LATENCY] trace_id={trace_id} "
+        f"route={route_name} "
+        f"total_ms={total_ms} "
+        f"source_type={source_type} "
+        f"group_id={group_id} "
+        f"room_id={room_id}"
+    )
+
 # =========================================================
 # HEALTH
 # =========================================================
@@ -246,7 +274,7 @@ def log_all_audit(
 def health():
     return jsonify({
         "ok": True,
-        "service": "line-bot-render-step2-clean",
+        "service": "line-bot-render-latency",
         "time": now_tw_iso()
     }), 200
 
@@ -255,15 +283,28 @@ def health():
 # =========================================================
 @app.route("/callback", methods=["POST"])
 def callback():
+    total_started = time.perf_counter()
     trace_id = make_trace_id()
     body = request.get_data()
     sig = request.headers.get("X-Line-Signature", "").strip()
 
     logger.info(f"[{trace_id}] WEBHOOK_RECEIVED")
 
+    source_type = ""
+    group_id = ""
+    room_id = ""
+
     # 1) SIGNATURE
     if not verify_line_signature(LINE_CHANNEL_SECRET, body, sig):
         logger.error(f"[{trace_id}] INVALID_SIGNATURE")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="invalid_signature",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
         return "Invalid", 403
 
     # 2) JSON PARSE
@@ -271,22 +312,54 @@ def callback():
         payload = json.loads(body.decode("utf-8"))
     except Exception as e:
         logger.exception(f"[{trace_id}] JSON_PARSE_ERROR exception={e}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="bad_payload",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
         return "Bad payload", 400
 
     events = payload.get("events", [])
     if not events:
         logger.warning(f"[{trace_id}] NO_EVENTS")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="no_events",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
         return "OK", 200
 
     event = events[0]
 
     if event.get("type") != "message":
         logger.info(f"[{trace_id}] SKIP_NON_MESSAGE type={event.get('type')}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="skip_non_message",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
         return "OK", 200
 
     message = event.get("message", {})
     if message.get("type") != "text":
         logger.info(f"[{trace_id}] SKIP_NON_TEXT message_type={message.get('type')}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="skip_non_text",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
         return "OK", 200
 
     # 3) EXTRACT
@@ -304,6 +377,14 @@ def callback():
     # 4) EMPTY INPUT
     if not input_text:
         logger.info(f"[{trace_id}] SKIP_EMPTY_TEXT")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="skip_empty_text",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
         return "OK", 200
 
     # =====================================================
@@ -325,6 +406,14 @@ def callback():
                 note="user is not in ADMIN_IDS"
             )
             line_reply(reply_token, "❌ Không có quyền", trace_id)
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="all_deny_not_admin",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
             return "OK", 200
 
         if not content:
@@ -340,6 +429,14 @@ def callback():
                 note="!all without content"
             )
             line_reply(reply_token, "⚠️ !all cần nội dung", trace_id)
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="all_deny_empty",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
             return "OK", 200
 
         if len(content) > MAX_ALL_CHARS:
@@ -358,6 +455,14 @@ def callback():
                 reply_token,
                 f"⚠️ !all tối đa {MAX_ALL_CHARS} ký tự",
                 trace_id
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="all_deny_too_long",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
             )
             return "OK", 200
 
@@ -379,15 +484,23 @@ def callback():
                 f"⏳ Vui lòng chờ {remaining} giây rồi dùng !all lại",
                 trace_id
             )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="all_deny_rate_limit",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
             return "OK", 200
 
-        lang = detect_lang(content, trace_id)
-        translated = translate(content, LOCKED_TARGET_LANG, lang, trace_id)
+        lang, detect_ms = detect_lang(content, trace_id)
+        translated, translate_ms = translate(content, LOCKED_TARGET_LANG, lang, trace_id)
 
         final_text = translated or content
         msg = f"📢 THÔNG BÁO:\n{final_text}"
 
-        reply_ok = line_reply(reply_token, msg, trace_id)
+        reply_ok, reply_ms = line_reply(reply_token, msg, trace_id)
 
         log_all_audit(
             trace_id=trace_id,
@@ -398,17 +511,47 @@ def callback():
             raw_input=input_text,
             content=content,
             status="SUCCESS" if reply_ok else "FAILED_REPLY",
-            note=f"detected_lang={lang or 'unknown'}"
+            note=(
+                f"detected_lang={lang or 'unknown'} "
+                f"detect_ms={detect_ms} "
+                f"translate_ms={translate_ms} "
+                f"reply_ms={reply_ms}"
+            )
+        )
+
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="all_success" if reply_ok else "all_failed_reply",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
         )
         return "OK", 200
 
     # =====================================================
     # NORMAL TRANSLATE
     # =====================================================
-    lang = detect_lang(input_text, trace_id)
-    translated = translate(input_text, LOCKED_TARGET_LANG, lang, trace_id)
+    lang, detect_ms = detect_lang(input_text, trace_id)
+    translated, translate_ms = translate(input_text, LOCKED_TARGET_LANG, lang, trace_id)
+    reply_ok, reply_ms = line_reply(reply_token, translated or FALLBACK_REPLY_TEXT, trace_id)
 
-    line_reply(reply_token, translated or FALLBACK_REPLY_TEXT, trace_id)
+    logger.info(
+        f"[NORMAL_FLOW] trace_id={trace_id} "
+        f"detect_ms={detect_ms} "
+        f"translate_ms={translate_ms} "
+        f"reply_ms={reply_ms} "
+        f"reply_ok={reply_ok}"
+    )
+
+    log_total_latency(
+        trace_id=trace_id,
+        route_name="normal_translate",
+        total_ms=ms_since(total_started),
+        source_type=source_type,
+        group_id=group_id,
+        room_id=room_id
+    )
     return "OK", 200
 
 # =========================================================
