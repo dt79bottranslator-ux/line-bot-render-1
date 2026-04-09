@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import requests
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
@@ -49,7 +49,8 @@ LOCKED_TARGET_LANG = "zh-TW"
 HTTP_TIMEOUT_SECONDS = 15
 FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 
-# In-memory admin !all rate limit store
+# In-memory rate limit store
+# key = "{user_id}:{group_or_room_or_user}"
 LAST_ALL_USED_AT = {}
 
 # =========================================================
@@ -79,17 +80,38 @@ def extract_source_ids(event):
 def get_now_ts() -> int:
     return int(time.time())
 
-def allow_all_command(user_id: str):
+def get_scope_key(source_type: str, user_id: str, group_id: str, room_id: str) -> str:
+    if source_type == "group" and group_id:
+        return group_id
+    if source_type == "room" and room_id:
+        return room_id
+    return user_id or "unknown"
+
+def get_all_rate_limit_key(user_id: str, scope_key: str) -> str:
+    return f"{user_id}:{scope_key}"
+
+def allow_all_command(user_id: str, scope_key: str):
     now_ts = get_now_ts()
-    last_ts = LAST_ALL_USED_AT.get(user_id, 0)
+    rate_key = get_all_rate_limit_key(user_id, scope_key)
+    last_ts = LAST_ALL_USED_AT.get(rate_key, 0)
     diff = now_ts - last_ts
 
     if diff < ALL_COOLDOWN_SECONDS:
         remaining = ALL_COOLDOWN_SECONDS - diff
         return False, remaining
 
-    LAST_ALL_USED_AT[user_id] = now_ts
+    LAST_ALL_USED_AT[rate_key] = now_ts
     return True, 0
+
+def parse_all_command(input_text: str):
+    raw = safe_str(input_text)
+    lowered = raw.lower()
+
+    if not lowered.startswith("!all"):
+        return False, ""
+
+    content = raw[4:].strip()
+    return True, content
 
 # =========================================================
 # LINE HELPERS
@@ -154,7 +176,8 @@ def detect_lang(text, trace_id):
             logger.error(f"[{trace_id}] GOOGLE_DETECT body={r.text}")
             return None
 
-        return r.json()["data"]["detections"][0][0]["language"]
+        payload = r.json()
+        return payload["data"]["detections"][0][0]["language"]
     except Exception as e:
         logger.exception(f"[{trace_id}] GOOGLE_DETECT exception={e}")
         return None
@@ -183,7 +206,8 @@ def translate(text, target, source, trace_id):
             logger.error(f"[{trace_id}] GOOGLE_TRANSLATE body={r.text}")
             return None
 
-        translated = r.json()["data"]["translations"][0]["translatedText"]
+        payload = r.json()
+        translated = payload["data"]["translations"][0]["translatedText"]
         return html.unescape(translated)
     except Exception as e:
         logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE exception={e}")
@@ -220,11 +244,11 @@ def log_all_audit(
 # =========================================================
 @app.route("/", methods=["GET"])
 def health():
-    return {
+    return jsonify({
         "ok": True,
-        "service": "line-bot-render-step2",
+        "service": "line-bot-render-step2-clean",
         "time": now_tw_iso()
-    }, 200
+    }), 200
 
 # =========================================================
 # WEBHOOK
@@ -267,7 +291,7 @@ def callback():
 
     # 3) EXTRACT
     source_type, user_id, group_id, room_id = extract_source_ids(event)
-    logger.info(f"[ADMIN_DEBUG] user_id={user_id}")
+    scope_key = get_scope_key(source_type, user_id, group_id, room_id)
 
     input_text = safe_str(message.get("text"))
     reply_token = safe_str(event.get("replyToken"))
@@ -277,12 +301,17 @@ def callback():
         f"group_id={group_id} room_id={room_id} text={json.dumps(input_text, ensure_ascii=False)}"
     )
 
+    # 4) EMPTY INPUT
+    if not input_text:
+        logger.info(f"[{trace_id}] SKIP_EMPTY_TEXT")
+        return "OK", 200
+
     # =====================================================
     # COMMAND: !all
     # =====================================================
-    if input_text.startswith("!all"):
-        content = input_text.replace("!all", "", 1).strip()
+    is_all_command, content = parse_all_command(input_text)
 
+    if is_all_command:
         if not is_admin(user_id):
             log_all_audit(
                 trace_id=trace_id,
@@ -332,7 +361,7 @@ def callback():
             )
             return "OK", 200
 
-        allowed, remaining = allow_all_command(user_id)
+        allowed, remaining = allow_all_command(user_id, scope_key)
         if not allowed:
             log_all_audit(
                 trace_id=trace_id,
