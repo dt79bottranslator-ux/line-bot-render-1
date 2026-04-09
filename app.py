@@ -66,11 +66,11 @@ LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 
 # In-memory rate limit store
-# key = "{user_id}:{group_or_room_or_user}"
+# key = "{user_id}:{scope_key}"
 LAST_ALL_USED_AT = {}
 
 # In-memory runtime state store for Phase 1 hot path
-# key = scope_key
+# key = "{user_id}:{scope_key}"
 RUNTIME_USER_STATE = {}
 RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
@@ -79,21 +79,28 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 # STARTUP VALIDATION
 # =========================================================
 def validate_startup_config():
-    missing = []
+    missing_required = []
+    missing_optional = []
 
     if not LINE_CHANNEL_ACCESS_TOKEN:
-        missing.append("LINE_CHANNEL_ACCESS_TOKEN")
+        missing_required.append("LINE_CHANNEL_ACCESS_TOKEN")
     if not LINE_CHANNEL_SECRET:
-        missing.append("LINE_CHANNEL_SECRET")
+        missing_required.append("LINE_CHANNEL_SECRET")
     if not GOOGLE_API_KEY:
-        missing.append("GOOGLE_API_KEY")
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        missing.append("GOOGLE_SERVICE_ACCOUNT_JSON")
+        missing_required.append("GOOGLE_API_KEY")
 
-    if missing:
-        logger.warning(f"[STARTUP] Missing env: {', '.join(missing)}")
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        missing_optional.append("GOOGLE_SERVICE_ACCOUNT_JSON")
+
+    if missing_required:
+        logger.warning(f"[STARTUP] Missing required env: {', '.join(missing_required)}")
     else:
         logger.info("[STARTUP] Required env loaded")
+
+    if missing_optional:
+        logger.warning(f"[STARTUP] Missing optional env: {', '.join(missing_optional)}")
+    else:
+        logger.info("[STARTUP] Optional sheet env loaded")
 
     logger.info(
         f"[STARTUP] admin_count={len(ADMIN_LIST)} "
@@ -103,7 +110,8 @@ def validate_startup_config():
         f"read_timeout_s={READ_TIMEOUT_SECONDS} "
         f"phase1_spreadsheet_name={PHASE1_SPREADSHEET_NAME} "
         f"runtime_state_ttl_s={RUNTIME_STATE_TTL_SECONDS} "
-        f"runtime_state_max_keys={RUNTIME_STATE_MAX_KEYS}"
+        f"runtime_state_max_keys={RUNTIME_STATE_MAX_KEYS} "
+        f"sheet_env_ready={bool(GOOGLE_SERVICE_ACCOUNT_JSON)}"
     )
 
 def is_runtime_ready() -> bool:
@@ -111,8 +119,10 @@ def is_runtime_ready() -> bool:
         bool(LINE_CHANNEL_ACCESS_TOKEN),
         bool(LINE_CHANNEL_SECRET),
         bool(GOOGLE_API_KEY),
-        bool(GOOGLE_SERVICE_ACCOUNT_JSON),
     ])
+
+def is_sheet_env_ready() -> bool:
+    return bool(GOOGLE_SERVICE_ACCOUNT_JSON)
 
 validate_startup_config()
 
@@ -164,6 +174,9 @@ def get_scope_key(source_type: str, user_id: str, group_id: str, room_id: str) -
 
 def get_all_rate_limit_key(user_id: str, scope_key: str) -> str:
     return f"{user_id}:{scope_key}"
+
+def get_runtime_state_key(user_id: str, scope_key: str) -> str:
+    return f"{safe_str(user_id)}:{safe_str(scope_key)}"
 
 def cleanup_rate_limit_store(now_ts: int):
     if len(LAST_ALL_USED_AT) < RATE_LIMIT_STORE_MAX_KEYS:
@@ -294,7 +307,7 @@ def find_user_state_row(ws, user_id: str, scope_key: str):
 def get_user_state(user_id: str, scope_key: str, trace_id: str):
     try:
         ws = get_user_state_worksheet()
-        row_index, row = find_user_state_row(ws, user_id, scope_key)
+        _row_index, row = find_user_state_row(ws, user_id, scope_key)
 
         if not row:
             state_data = empty_user_state(user_id, scope_key)
@@ -394,31 +407,40 @@ def make_runtime_state(user_id: str, scope_key: str):
     }
 
 def cleanup_runtime_state_store(now_ts: int):
-    if len(RUNTIME_USER_STATE) < RUNTIME_STATE_MAX_KEYS:
-        return
-
     expired_before = now_ts - max(RUNTIME_STATE_TTL_SECONDS, 300)
+
     stale_keys = [
         k for k, v in RUNTIME_USER_STATE.items()
         if int(v.get("last_seen_ts", 0) or 0) < expired_before
     ]
-
     for k in stale_keys:
         RUNTIME_USER_STATE.pop(k, None)
 
-    logger.info(
-        f"[RUNTIME_STATE] cleanup removed={len(stale_keys)} "
-        f"remaining={len(RUNTIME_USER_STATE)}"
-    )
+    if len(RUNTIME_USER_STATE) > RUNTIME_STATE_MAX_KEYS:
+        sorted_items = sorted(
+            RUNTIME_USER_STATE.items(),
+            key=lambda item: int(item[1].get("last_seen_ts", 0) or 0)
+        )
+        overflow = len(RUNTIME_USER_STATE) - RUNTIME_STATE_MAX_KEYS
+        for k, _v in sorted_items[:overflow]:
+            RUNTIME_USER_STATE.pop(k, None)
+
+    if stale_keys:
+        logger.info(
+            f"[RUNTIME_STATE] cleanup removed={len(stale_keys)} "
+            f"remaining={len(RUNTIME_USER_STATE)}"
+        )
 
 def get_runtime_state(user_id: str, scope_key: str, trace_id: str):
     now_ts = get_now_ts()
     cleanup_runtime_state_store(now_ts)
 
-    state = RUNTIME_USER_STATE.get(scope_key)
+    state_key = get_runtime_state_key(user_id, scope_key)
+    state = RUNTIME_USER_STATE.get(state_key)
+
     if not state:
         state = make_runtime_state(user_id, scope_key)
-        RUNTIME_USER_STATE[scope_key] = state
+        RUNTIME_USER_STATE[state_key] = state
         logger.info(
             f"[{trace_id}] RUNTIME_STATE_GET status=NEW "
             f"user_id={user_id} scope_key={scope_key} "
@@ -427,8 +449,6 @@ def get_runtime_state(user_id: str, scope_key: str, trace_id: str):
         return state
 
     state["last_seen_ts"] = now_ts
-    state["updated_at"] = now_tw_iso()
-
     logger.info(
         f"[{trace_id}] RUNTIME_STATE_GET status=FOUND "
         f"user_id={user_id} scope_key={scope_key} "
@@ -448,6 +468,7 @@ def set_runtime_state(
     now_ts = get_now_ts()
     cleanup_runtime_state_store(now_ts)
 
+    state_key = get_runtime_state_key(user_id, scope_key)
     state = {
         "user_id": safe_str(user_id),
         "scope_key": safe_str(scope_key),
@@ -459,7 +480,7 @@ def set_runtime_state(
         "last_seen_ts": now_ts,
     }
 
-    RUNTIME_USER_STATE[scope_key] = state
+    RUNTIME_USER_STATE[state_key] = state
 
     if trace_id:
         logger.info(
@@ -711,7 +732,7 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-runtime-state-ready",
+        "service": "line-bot-render-phase1-runtime-state-safe",
         "time": now_tw_iso(),
         "ready": ready,
         "timeouts": {
@@ -721,6 +742,7 @@ def health():
         "phase1": {
             "spreadsheet_name": PHASE1_SPREADSHEET_NAME,
             "user_state_sheet": USER_STATE_SHEET_NAME,
+            "sheet_env_ready": is_sheet_env_ready(),
             "state_read_in_callback": False,
             "runtime_state_enabled": True,
             "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS
@@ -755,7 +777,6 @@ def callback():
         )
         return "Service unavailable", 503
 
-    # 1) SIGNATURE
     if not verify_line_signature(LINE_CHANNEL_SECRET, body, sig):
         logger.error(f"[{trace_id}] INVALID_SIGNATURE")
         log_total_latency(
@@ -768,7 +789,6 @@ def callback():
         )
         return "Invalid", 403
 
-    # 2) JSON PARSE
     try:
         payload = json.loads(body.decode("utf-8"))
     except Exception as e:
@@ -823,7 +843,6 @@ def callback():
         )
         return "OK", 200
 
-    # 3) EXTRACT
     source_type, user_id, group_id, room_id = extract_source_ids(event)
     scope_key = get_scope_key(source_type, user_id, group_id, room_id)
 
@@ -842,7 +861,6 @@ def callback():
         f"current_state={runtime_state.get('current_state')}"
     )
 
-    # 4) EMPTY INPUT
     if not input_text:
         logger.info(f"[{trace_id}] SKIP_EMPTY_TEXT")
         log_total_latency(
@@ -855,9 +873,6 @@ def callback():
         )
         return "OK", 200
 
-    # =====================================================
-    # COMMAND: !all
-    # =====================================================
     is_all_command, content = parse_all_command(input_text)
 
     if is_all_command:
@@ -1003,9 +1018,6 @@ def callback():
         )
         return "OK", 200
 
-    # =====================================================
-    # NORMAL TRANSLATE
-    # =====================================================
     translated, translate_ms, detected_source_language = translate_auto_source(
         input_text,
         LOCKED_TARGET_LANG,
