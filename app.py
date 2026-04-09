@@ -601,7 +601,7 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-state-ready",
+        "service": "line-bot-render-phase1-timeout-isolated",
         "time": now_tw_iso(),
         "ready": ready,
         "timeouts": {
@@ -610,7 +610,8 @@ def health():
         },
         "phase1": {
             "spreadsheet_name": PHASE1_SPREADSHEET_NAME,
-            "user_state_sheet": USER_STATE_SHEET_NAME
+            "user_state_sheet": USER_STATE_SHEET_NAME,
+            "state_read_in_callback": False
         }
     }), 200 if ready else 503
 
@@ -722,12 +723,9 @@ def callback():
         f"group_id={group_id} room_id={room_id} text={json.dumps(input_text, ensure_ascii=False)}"
     )
 
-    # STATE READ FOR PHASE 1 READINESS
-    state_data = get_user_state(user_id, scope_key, trace_id)
     logger.info(
-        f"[{trace_id}] STATE_CONTEXT "
-        f"user_id={user_id} scope_key={scope_key} "
-        f"current_state={state_data.get('current_state')}"
+        f"[{trace_id}] STATE_READ_SKIPPED_FOR_TIMEOUT_ISOLATION "
+        f"user_id={user_id} scope_key={scope_key}"
     )
 
     # 4) EMPTY INPUT
