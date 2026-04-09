@@ -13,6 +13,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 import requests
+import gspread
+from google.oauth2.service_account import Credentials
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -32,6 +34,10 @@ logger = logging.getLogger(__name__)
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
+
+GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
+USER_STATE_SHEET_NAME = "user_state"
 
 # ADMIN
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").strip()
@@ -75,6 +81,8 @@ def validate_startup_config():
         missing.append("LINE_CHANNEL_SECRET")
     if not GOOGLE_API_KEY:
         missing.append("GOOGLE_API_KEY")
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        missing.append("GOOGLE_SERVICE_ACCOUNT_JSON")
 
     if missing:
         logger.warning(f"[STARTUP] Missing env: {', '.join(missing)}")
@@ -86,7 +94,8 @@ def validate_startup_config():
         f"all_cooldown_seconds={ALL_COOLDOWN_SECONDS} "
         f"max_all_chars={MAX_ALL_CHARS} "
         f"connect_timeout_s={CONNECT_TIMEOUT_SECONDS} "
-        f"read_timeout_s={READ_TIMEOUT_SECONDS}"
+        f"read_timeout_s={READ_TIMEOUT_SECONDS} "
+        f"phase1_spreadsheet_name={PHASE1_SPREADSHEET_NAME}"
     )
 
 def is_runtime_ready() -> bool:
@@ -94,6 +103,7 @@ def is_runtime_ready() -> bool:
         bool(LINE_CHANNEL_ACCESS_TOKEN),
         bool(LINE_CHANNEL_SECRET),
         bool(GOOGLE_API_KEY),
+        bool(GOOGLE_SERVICE_ACCOUNT_JSON),
     ])
 
 validate_startup_config()
@@ -195,6 +205,170 @@ def parse_all_command(input_text: str):
 
 def ms_since(start_perf: float) -> int:
     return int((time.perf_counter() - start_perf) * 1000)
+
+# =========================================================
+# STATE HELPERS - PHASE 1
+# =========================================================
+STATE_IDLE = "idle"
+STATE_AWAITING_NEED_TYPE = "awaiting_need_type"
+STATE_AWAITING_URGENCY = "awaiting_urgency"
+STATE_AWAITING_RESIDENCE_CARD = "awaiting_residence_card"
+STATE_AWAITING_PHONE_NUMBER = "awaiting_phone_number"
+STATE_CASE_COMPLETED = "case_completed"
+
+ALLOWED_STATES = {
+    STATE_IDLE,
+    STATE_AWAITING_NEED_TYPE,
+    STATE_AWAITING_URGENCY,
+    STATE_AWAITING_RESIDENCE_CARD,
+    STATE_AWAITING_PHONE_NUMBER,
+    STATE_CASE_COMPLETED,
+}
+
+def get_google_credentials():
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        raise ValueError("missing GOOGLE_SERVICE_ACCOUNT_JSON")
+
+    try:
+        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+    except Exception as e:
+        raise ValueError(f"invalid GOOGLE_SERVICE_ACCOUNT_JSON: {type(e).__name__}:{e}")
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    return Credentials.from_service_account_info(info, scopes=scopes)
+
+def get_gspread_client():
+    creds = get_google_credentials()
+    return gspread.authorize(creds)
+
+def open_phase1_spreadsheet():
+    gc = get_gspread_client()
+    return gc.open(PHASE1_SPREADSHEET_NAME)
+
+def get_user_state_worksheet():
+    ss = open_phase1_spreadsheet()
+    return ss.worksheet(USER_STATE_SHEET_NAME)
+
+def normalize_state_value(value: str) -> str:
+    state = safe_str(value)
+    if state in ALLOWED_STATES:
+        return state
+    return STATE_IDLE
+
+def empty_user_state(user_id: str, scope_key: str):
+    return {
+        "user_id": safe_str(user_id),
+        "scope_key": safe_str(scope_key),
+        "current_state": STATE_IDLE,
+        "temp_need_type": "",
+        "temp_urgency_level": "",
+        "temp_residence_card_image_url": "",
+        "updated_at": now_tw_iso(),
+    }
+
+def find_user_state_row(ws, user_id: str, scope_key: str):
+    user_id = safe_str(user_id)
+    scope_key = safe_str(scope_key)
+
+    records = ws.get_all_records()
+    for idx, row in enumerate(records, start=2):  # row 1 = header
+        if (
+            safe_str(row.get("user_id")) == user_id and
+            safe_str(row.get("scope_key")) == scope_key
+        ):
+            return idx, row
+
+    return None, None
+
+def get_user_state(user_id: str, scope_key: str, trace_id: str):
+    try:
+        ws = get_user_state_worksheet()
+        row_index, row = find_user_state_row(ws, user_id, scope_key)
+
+        if not row:
+            state_data = empty_user_state(user_id, scope_key)
+            logger.info(
+                f"[{trace_id}] STATE_GET status=NEW_DEFAULT "
+                f"user_id={user_id} scope_key={scope_key}"
+            )
+            return state_data
+
+        state_data = {
+            "user_id": safe_str(row.get("user_id")),
+            "scope_key": safe_str(row.get("scope_key")),
+            "current_state": normalize_state_value(row.get("current_state")),
+            "temp_need_type": safe_str(row.get("temp_need_type")),
+            "temp_urgency_level": safe_str(row.get("temp_urgency_level")),
+            "temp_residence_card_image_url": safe_str(row.get("temp_residence_card_image_url")),
+            "updated_at": safe_str(row.get("updated_at")),
+        }
+
+        logger.info(
+            f"[{trace_id}] STATE_GET status=FOUND "
+            f"user_id={user_id} scope_key={scope_key} "
+            f"current_state={state_data['current_state']}"
+        )
+        return state_data
+
+    except Exception as e:
+        logger.exception(
+            f"[{trace_id}] STATE_GET exception={type(e).__name__}:{e} "
+            f"user_id={user_id} scope_key={scope_key}"
+        )
+        return empty_user_state(user_id, scope_key)
+
+def upsert_user_state(
+    user_id: str,
+    scope_key: str,
+    current_state: str,
+    temp_need_type: str,
+    temp_urgency_level: str,
+    temp_residence_card_image_url: str,
+    trace_id: str
+):
+    ws = get_user_state_worksheet()
+    row_index, _existing = find_user_state_row(ws, user_id, scope_key)
+
+    final_row = [
+        safe_str(user_id),
+        safe_str(scope_key),
+        normalize_state_value(current_state),
+        safe_str(temp_need_type),
+        safe_str(temp_urgency_level),
+        safe_str(temp_residence_card_image_url),
+        now_tw_iso(),
+    ]
+
+    if row_index:
+        ws.update(f"A{row_index}:G{row_index}", [final_row])
+        logger.info(
+            f"[{trace_id}] STATE_UPSERT action=UPDATE "
+            f"user_id={user_id} scope_key={scope_key} "
+            f"current_state={final_row[2]}"
+        )
+        return "updated"
+
+    ws.append_row(final_row, value_input_option="RAW")
+    logger.info(
+        f"[{trace_id}] STATE_UPSERT action=INSERT "
+        f"user_id={user_id} scope_key={scope_key} "
+        f"current_state={final_row[2]}"
+    )
+    return "inserted"
+
+def reset_user_state(user_id: str, scope_key: str, trace_id: str):
+    return upsert_user_state(
+        user_id=user_id,
+        scope_key=scope_key,
+        current_state=STATE_IDLE,
+        temp_need_type="",
+        temp_urgency_level="",
+        temp_residence_card_image_url="",
+        trace_id=trace_id
+    )
 
 # =========================================================
 # OUTBOUND HTTP HELPERS
@@ -427,12 +601,16 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-no-detect-hardened",
+        "service": "line-bot-render-phase1-state-ready",
         "time": now_tw_iso(),
         "ready": ready,
         "timeouts": {
             "connect_seconds": CONNECT_TIMEOUT_SECONDS,
             "read_seconds": READ_TIMEOUT_SECONDS
+        },
+        "phase1": {
+            "spreadsheet_name": PHASE1_SPREADSHEET_NAME,
+            "user_state_sheet": USER_STATE_SHEET_NAME
         }
     }), 200 if ready else 503
 
@@ -542,6 +720,14 @@ def callback():
     logger.info(
         f"[{trace_id}] INPUT source_type={source_type} "
         f"group_id={group_id} room_id={room_id} text={json.dumps(input_text, ensure_ascii=False)}"
+    )
+
+    # STATE READ FOR PHASE 1 READINESS
+    state_data = get_user_state(user_id, scope_key, trace_id)
+    logger.info(
+        f"[{trace_id}] STATE_CONTEXT "
+        f"user_id={user_id} scope_key={scope_key} "
+        f"current_state={state_data.get('current_state')}"
     )
 
     # 4) EMPTY INPUT
