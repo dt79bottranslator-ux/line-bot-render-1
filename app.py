@@ -46,10 +46,18 @@ MAX_ALL_CHARS = int(os.getenv("MAX_ALL_CHARS", "500").strip() or "500")
 # =========================================================
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
-HTTP_TIMEOUT_SECONDS = 15
+
+CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
+READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
+OUTBOUND_TIMEOUT = (CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS)
+
 FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 LINE_TEXT_HARD_LIMIT = 5000
 RATE_LIMIT_STORE_MAX_KEYS = 5000
+ERROR_BODY_LOG_LIMIT = 800
+
+LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
+GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 
 # In-memory rate limit store
 # key = "{user_id}:{group_or_room_or_user}"
@@ -76,8 +84,17 @@ def validate_startup_config():
     logger.info(
         f"[STARTUP] admin_count={len(ADMIN_LIST)} "
         f"all_cooldown_seconds={ALL_COOLDOWN_SECONDS} "
-        f"max_all_chars={MAX_ALL_CHARS}"
+        f"max_all_chars={MAX_ALL_CHARS} "
+        f"connect_timeout_s={CONNECT_TIMEOUT_SECONDS} "
+        f"read_timeout_s={READ_TIMEOUT_SECONDS}"
     )
+
+def is_runtime_ready() -> bool:
+    return all([
+        bool(LINE_CHANNEL_ACCESS_TOKEN),
+        bool(LINE_CHANNEL_SECRET),
+        bool(GOOGLE_API_KEY),
+    ])
 
 validate_startup_config()
 
@@ -98,6 +115,12 @@ def crop_text(text: str, max_len: int = LINE_TEXT_HARD_LIMIT) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len]
+
+def truncate_log_text(text: str, max_len: int = ERROR_BODY_LOG_LIMIT) -> str:
+    text = safe_str(text)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "...<truncated>"
 
 def is_admin(user_id: str) -> bool:
     return user_id in ADMIN_LIST
@@ -174,6 +197,99 @@ def ms_since(start_perf: float) -> int:
     return int((time.perf_counter() - start_perf) * 1000)
 
 # =========================================================
+# OUTBOUND HTTP HELPERS
+# =========================================================
+def post_json(url, headers, payload, trace_id, op_name):
+    started = time.perf_counter()
+
+    try:
+        r = requests.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=OUTBOUND_TIMEOUT
+        )
+        latency_ms = ms_since(started)
+        logger.info(f"[{trace_id}] {op_name} status={r.status_code} latency_ms={latency_ms}")
+
+        if r.status_code != 200:
+            logger.error(
+                f"[{trace_id}] {op_name} body={truncate_log_text(r.text)} "
+                f"url={url}"
+            )
+
+        return r, latency_ms
+
+    except requests.Timeout as e:
+        latency_ms = ms_since(started)
+        logger.exception(
+            f"[{trace_id}] {op_name} timeout_exception={type(e).__name__} "
+            f"latency_ms={latency_ms} url={url}"
+        )
+        return None, latency_ms
+
+    except requests.RequestException as e:
+        latency_ms = ms_since(started)
+        logger.exception(
+            f"[{trace_id}] {op_name} request_exception={type(e).__name__} "
+            f"latency_ms={latency_ms} url={url}"
+        )
+        return None, latency_ms
+
+    except Exception as e:
+        latency_ms = ms_since(started)
+        logger.exception(
+            f"[{trace_id}] {op_name} exception={type(e).__name__}:{e} "
+            f"latency_ms={latency_ms} url={url}"
+        )
+        return None, latency_ms
+
+def post_form(url, params, data, trace_id, op_name):
+    started = time.perf_counter()
+
+    try:
+        r = requests.post(
+            url,
+            params=params,
+            data=data,
+            timeout=OUTBOUND_TIMEOUT
+        )
+        latency_ms = ms_since(started)
+        logger.info(f"[{trace_id}] {op_name} status={r.status_code} latency_ms={latency_ms}")
+
+        if r.status_code != 200:
+            logger.error(
+                f"[{trace_id}] {op_name} body={truncate_log_text(r.text)} "
+                f"url={url}"
+            )
+
+        return r, latency_ms
+
+    except requests.Timeout as e:
+        latency_ms = ms_since(started)
+        logger.exception(
+            f"[{trace_id}] {op_name} timeout_exception={type(e).__name__} "
+            f"latency_ms={latency_ms} url={url}"
+        )
+        return None, latency_ms
+
+    except requests.RequestException as e:
+        latency_ms = ms_since(started)
+        logger.exception(
+            f"[{trace_id}] {op_name} request_exception={type(e).__name__} "
+            f"latency_ms={latency_ms} url={url}"
+        )
+        return None, latency_ms
+
+    except Exception as e:
+        latency_ms = ms_since(started)
+        logger.exception(
+            f"[{trace_id}] {op_name} exception={type(e).__name__}:{e} "
+            f"latency_ms={latency_ms} url={url}"
+        )
+        return None, latency_ms
+
+# =========================================================
 # LINE HELPERS
 # =========================================================
 def verify_line_signature(secret, body, signature):
@@ -185,10 +301,16 @@ def verify_line_signature(secret, body, signature):
     return hmac.compare_digest(computed, signature)
 
 def line_reply(reply_token, text, trace_id):
-    started = time.perf_counter()
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        logger.error(f"[{trace_id}] LINE_REPLY skipped reason=missing_channel_access_token")
+        return False, 0
+
+    if not reply_token:
+        logger.error(f"[{trace_id}] LINE_REPLY skipped reason=missing_reply_token")
+        return False, 0
+
     final_text = crop_text(text or FALLBACK_REPLY_TEXT)
 
-    url = "https://api.line.me/v2/bot/message/reply"
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json"
@@ -203,69 +325,63 @@ def line_reply(reply_token, text, trace_id):
         ]
     }
 
-    try:
-        r = requests.post(
-            url,
-            headers=headers,
-            json=payload,
-            timeout=HTTP_TIMEOUT_SECONDS
-        )
-        latency_ms = ms_since(started)
-        logger.info(f"[{trace_id}] LINE_REPLY status={r.status_code} latency_ms={latency_ms}")
+    r, latency_ms = post_json(
+        url=LINE_REPLY_API_URL,
+        headers=headers,
+        payload=payload,
+        trace_id=trace_id,
+        op_name="LINE_REPLY"
+    )
 
-        if r.status_code != 200:
-            logger.error(f"[{trace_id}] LINE_REPLY body={r.text}")
-
-        return r.status_code == 200, latency_ms
-
-    except Exception as e:
-        latency_ms = ms_since(started)
-        logger.exception(f"[{trace_id}] LINE_REPLY exception={e} latency_ms={latency_ms}")
+    if not r:
         return False, latency_ms
+
+    return r.status_code == 200, latency_ms
 
 # =========================================================
 # GOOGLE TRANSLATE HELPERS
 # =========================================================
 def translate_auto_source(text, target, trace_id):
-    started = time.perf_counter()
-    try:
-        url = "https://translation.googleapis.com/language/translate/v2"
-        data = {
-            "q": text,
-            "target": target,
-            "format": "text"
-        }
+    if not GOOGLE_API_KEY:
+        logger.error(f"[{trace_id}] GOOGLE_TRANSLATE skipped reason=missing_google_api_key")
+        return None, 0, None
 
-        r = requests.post(
-            url,
-            params={"key": GOOGLE_API_KEY},
-            data=data,
-            timeout=HTTP_TIMEOUT_SECONDS
-        )
+    data = {
+        "q": text,
+        "target": target,
+        "format": "text"
+    }
 
-        latency_ms = ms_since(started)
-        logger.info(f"[{trace_id}] GOOGLE_TRANSLATE status={r.status_code} latency_ms={latency_ms}")
+    r, latency_ms = post_form(
+        url=GOOGLE_TRANSLATE_API_URL,
+        params={"key": GOOGLE_API_KEY},
+        data=data,
+        trace_id=trace_id,
+        op_name="GOOGLE_TRANSLATE"
+    )
 
-        if r.status_code != 200:
-            logger.error(f"[{trace_id}] GOOGLE_TRANSLATE body={r.text}")
-            return None, latency_ms, None
-
-        payload = r.json()
-        translations = payload.get("data", {}).get("translations", [])
-        if not translations:
-            logger.error(f"[{trace_id}] GOOGLE_TRANSLATE empty translations")
-            return None, latency_ms, None
-
-        first = translations[0]
-        translated = html.unescape(first.get("translatedText", ""))
-        detected_source_language = first.get("detectedSourceLanguage")
-
-        return translated, latency_ms, detected_source_language
-
-    except Exception as e:
-        latency_ms = ms_since(started)
-        logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE exception={e} latency_ms={latency_ms}")
+    if not r:
         return None, latency_ms, None
+
+    if r.status_code != 200:
+        return None, latency_ms, None
+
+    try:
+        payload = r.json()
+    except Exception as e:
+        logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE json_parse_exception={type(e).__name__}:{e}")
+        return None, latency_ms, None
+
+    translations = payload.get("data", {}).get("translations", [])
+    if not translations:
+        logger.error(f"[{trace_id}] GOOGLE_TRANSLATE empty_translations")
+        return None, latency_ms, None
+
+    first = translations[0]
+    translated = html.unescape(first.get("translatedText", ""))
+    detected_source_language = first.get("detectedSourceLanguage")
+
+    return translated, latency_ms, detected_source_language
 
 # =========================================================
 # AUDIT LOG HELPERS
@@ -308,11 +424,17 @@ def log_total_latency(trace_id, route_name, total_ms, source_type, group_id, roo
 # =========================================================
 @app.route("/", methods=["GET"])
 def health():
+    ready = is_runtime_ready()
     return jsonify({
-        "ok": True,
-        "service": "line-bot-render-no-detect-clean",
-        "time": now_tw_iso()
-    }), 200
+        "ok": ready,
+        "service": "line-bot-render-no-detect-hardened",
+        "time": now_tw_iso(),
+        "ready": ready,
+        "timeouts": {
+            "connect_seconds": CONNECT_TIMEOUT_SECONDS,
+            "read_seconds": READ_TIMEOUT_SECONDS
+        }
+    }), 200 if ready else 503
 
 # =========================================================
 # WEBHOOK
@@ -329,6 +451,18 @@ def callback():
     source_type = ""
     group_id = ""
     room_id = ""
+
+    if not is_runtime_ready():
+        logger.error(f"[{trace_id}] RUNTIME_NOT_READY")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="runtime_not_ready",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "Service unavailable", 503
 
     # 1) SIGNATURE
     if not verify_line_signature(LINE_CHANNEL_SECRET, body, sig):
@@ -347,7 +481,7 @@ def callback():
     try:
         payload = json.loads(body.decode("utf-8"))
     except Exception as e:
-        logger.exception(f"[{trace_id}] JSON_PARSE_ERROR exception={e}")
+        logger.exception(f"[{trace_id}] JSON_PARSE_ERROR exception={type(e).__name__}:{e}")
         log_total_latency(
             trace_id=trace_id,
             route_name="bad_payload",
