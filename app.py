@@ -48,10 +48,38 @@ TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 HTTP_TIMEOUT_SECONDS = 15
 FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
+LINE_TEXT_HARD_LIMIT = 5000
+RATE_LIMIT_STORE_MAX_KEYS = 5000
 
 # In-memory rate limit store
 # key = "{user_id}:{group_or_room_or_user}"
 LAST_ALL_USED_AT = {}
+
+# =========================================================
+# STARTUP VALIDATION
+# =========================================================
+def validate_startup_config():
+    missing = []
+
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        missing.append("LINE_CHANNEL_ACCESS_TOKEN")
+    if not LINE_CHANNEL_SECRET:
+        missing.append("LINE_CHANNEL_SECRET")
+    if not GOOGLE_API_KEY:
+        missing.append("GOOGLE_API_KEY")
+
+    if missing:
+        logger.warning(f"[STARTUP] Missing env: {', '.join(missing)}")
+    else:
+        logger.info("[STARTUP] Required env loaded")
+
+    logger.info(
+        f"[STARTUP] admin_count={len(ADMIN_LIST)} "
+        f"all_cooldown_seconds={ALL_COOLDOWN_SECONDS} "
+        f"max_all_chars={MAX_ALL_CHARS}"
+    )
+
+validate_startup_config()
 
 # =========================================================
 # BASIC HELPERS
@@ -64,6 +92,12 @@ def make_trace_id():
 
 def safe_str(v):
     return str(v).strip() if v else ""
+
+def crop_text(text: str, max_len: int = LINE_TEXT_HARD_LIMIT) -> str:
+    text = safe_str(text)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len]
 
 def is_admin(user_id: str) -> bool:
     return user_id in ADMIN_LIST
@@ -90,8 +124,28 @@ def get_scope_key(source_type: str, user_id: str, group_id: str, room_id: str) -
 def get_all_rate_limit_key(user_id: str, scope_key: str) -> str:
     return f"{user_id}:{scope_key}"
 
+def cleanup_rate_limit_store(now_ts: int):
+    if len(LAST_ALL_USED_AT) < RATE_LIMIT_STORE_MAX_KEYS:
+        return
+
+    expired_before = now_ts - max(ALL_COOLDOWN_SECONDS * 3, 60)
+    stale_keys = [
+        k for k, v in LAST_ALL_USED_AT.items()
+        if v < expired_before
+    ]
+
+    for k in stale_keys:
+        LAST_ALL_USED_AT.pop(k, None)
+
+    logger.info(
+        f"[RATE_LIMIT] cleanup done removed={len(stale_keys)} "
+        f"remaining={len(LAST_ALL_USED_AT)}"
+    )
+
 def allow_all_command(user_id: str, scope_key: str):
     now_ts = get_now_ts()
+    cleanup_rate_limit_store(now_ts)
+
     rate_key = get_all_rate_limit_key(user_id, scope_key)
     last_ts = LAST_ALL_USED_AT.get(rate_key, 0)
     diff = now_ts - last_ts
@@ -107,11 +161,14 @@ def parse_all_command(input_text: str):
     raw = safe_str(input_text)
     lowered = raw.lower()
 
-    if not lowered.startswith("!all"):
-        return False, ""
+    if lowered == "!all":
+        return True, ""
 
-    content = raw[4:].strip()
-    return True, content
+    if lowered.startswith("!all "):
+        content = raw[5:].strip()
+        return True, content
+
+    return False, ""
 
 def ms_since(start_perf: float) -> int:
     return int((time.perf_counter() - start_perf) * 1000)
@@ -129,7 +186,7 @@ def verify_line_signature(secret, body, signature):
 
 def line_reply(reply_token, text, trace_id):
     started = time.perf_counter()
-    final_text = safe_str(text) or FALLBACK_REPLY_TEXT
+    final_text = crop_text(text or FALLBACK_REPLY_TEXT)
 
     url = "https://api.line.me/v2/bot/message/reply"
     headers = {
@@ -253,7 +310,7 @@ def log_total_latency(trace_id, route_name, total_ms, source_type, group_id, roo
 def health():
     return jsonify({
         "ok": True,
-        "service": "line-bot-render-no-detect",
+        "service": "line-bot-render-no-detect-clean",
         "time": now_tw_iso()
     }), 200
 
@@ -384,7 +441,7 @@ def callback():
                 status="DENY_NOT_ADMIN",
                 note="user is not in ADMIN_IDS"
             )
-            line_reply(reply_token, "❌ Không có quyền", trace_id)
+            reply_ok, reply_ms = line_reply(reply_token, "❌ Không có quyền", trace_id)
             log_total_latency(
                 trace_id=trace_id,
                 route_name="all_deny_not_admin",
@@ -393,6 +450,7 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
+            logger.info(f"[{trace_id}] DENY_NOT_ADMIN reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         if not content:
@@ -407,7 +465,7 @@ def callback():
                 status="DENY_EMPTY",
                 note="!all without content"
             )
-            line_reply(reply_token, "⚠️ !all cần nội dung", trace_id)
+            reply_ok, reply_ms = line_reply(reply_token, "⚠️ !all cần nội dung", trace_id)
             log_total_latency(
                 trace_id=trace_id,
                 route_name="all_deny_empty",
@@ -416,6 +474,7 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
+            logger.info(f"[{trace_id}] DENY_EMPTY reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         if len(content) > MAX_ALL_CHARS:
@@ -430,7 +489,7 @@ def callback():
                 status="DENY_TOO_LONG",
                 note=f"content length > {MAX_ALL_CHARS}"
             )
-            line_reply(
+            reply_ok, reply_ms = line_reply(
                 reply_token,
                 f"⚠️ !all tối đa {MAX_ALL_CHARS} ký tự",
                 trace_id
@@ -443,6 +502,7 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
+            logger.info(f"[{trace_id}] DENY_TOO_LONG reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         allowed, remaining = allow_all_command(user_id, scope_key)
@@ -458,7 +518,7 @@ def callback():
                 status="DENY_RATE_LIMIT",
                 note=f"cooldown_remaining={remaining}s"
             )
-            line_reply(
+            reply_ok, reply_ms = line_reply(
                 reply_token,
                 f"⏳ Vui lòng chờ {remaining} giây rồi dùng !all lại",
                 trace_id
@@ -471,6 +531,7 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
+            logger.info(f"[{trace_id}] DENY_RATE_LIMIT reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         translated, translate_ms, detected_source_language = translate_auto_source(
