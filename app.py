@@ -69,6 +69,12 @@ GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translat
 # key = "{user_id}:{group_or_room_or_user}"
 LAST_ALL_USED_AT = {}
 
+# In-memory runtime state store for Phase 1 hot path
+# key = scope_key
+RUNTIME_USER_STATE = {}
+RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
+RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
+
 # =========================================================
 # STARTUP VALIDATION
 # =========================================================
@@ -95,7 +101,9 @@ def validate_startup_config():
         f"max_all_chars={MAX_ALL_CHARS} "
         f"connect_timeout_s={CONNECT_TIMEOUT_SECONDS} "
         f"read_timeout_s={READ_TIMEOUT_SECONDS} "
-        f"phase1_spreadsheet_name={PHASE1_SPREADSHEET_NAME}"
+        f"phase1_spreadsheet_name={PHASE1_SPREADSHEET_NAME} "
+        f"runtime_state_ttl_s={RUNTIME_STATE_TTL_SECONDS} "
+        f"runtime_state_max_keys={RUNTIME_STATE_MAX_KEYS}"
     )
 
 def is_runtime_ready() -> bool:
@@ -274,7 +282,7 @@ def find_user_state_row(ws, user_id: str, scope_key: str):
     scope_key = safe_str(scope_key)
 
     records = ws.get_all_records()
-    for idx, row in enumerate(records, start=2):  # row 1 = header
+    for idx, row in enumerate(records, start=2):
         if (
             safe_str(row.get("user_id")) == user_id and
             safe_str(row.get("scope_key")) == scope_key
@@ -361,6 +369,108 @@ def upsert_user_state(
 
 def reset_user_state(user_id: str, scope_key: str, trace_id: str):
     return upsert_user_state(
+        user_id=user_id,
+        scope_key=scope_key,
+        current_state=STATE_IDLE,
+        temp_need_type="",
+        temp_urgency_level="",
+        temp_residence_card_image_url="",
+        trace_id=trace_id
+    )
+
+# =========================================================
+# RUNTIME STATE HELPERS - HOT PATH SAFE
+# =========================================================
+def make_runtime_state(user_id: str, scope_key: str):
+    return {
+        "user_id": safe_str(user_id),
+        "scope_key": safe_str(scope_key),
+        "current_state": STATE_IDLE,
+        "temp_need_type": "",
+        "temp_urgency_level": "",
+        "temp_residence_card_image_url": "",
+        "updated_at": now_tw_iso(),
+        "last_seen_ts": get_now_ts(),
+    }
+
+def cleanup_runtime_state_store(now_ts: int):
+    if len(RUNTIME_USER_STATE) < RUNTIME_STATE_MAX_KEYS:
+        return
+
+    expired_before = now_ts - max(RUNTIME_STATE_TTL_SECONDS, 300)
+    stale_keys = [
+        k for k, v in RUNTIME_USER_STATE.items()
+        if int(v.get("last_seen_ts", 0) or 0) < expired_before
+    ]
+
+    for k in stale_keys:
+        RUNTIME_USER_STATE.pop(k, None)
+
+    logger.info(
+        f"[RUNTIME_STATE] cleanup removed={len(stale_keys)} "
+        f"remaining={len(RUNTIME_USER_STATE)}"
+    )
+
+def get_runtime_state(user_id: str, scope_key: str, trace_id: str):
+    now_ts = get_now_ts()
+    cleanup_runtime_state_store(now_ts)
+
+    state = RUNTIME_USER_STATE.get(scope_key)
+    if not state:
+        state = make_runtime_state(user_id, scope_key)
+        RUNTIME_USER_STATE[scope_key] = state
+        logger.info(
+            f"[{trace_id}] RUNTIME_STATE_GET status=NEW "
+            f"user_id={user_id} scope_key={scope_key} "
+            f"current_state={state['current_state']}"
+        )
+        return state
+
+    state["last_seen_ts"] = now_ts
+    state["updated_at"] = now_tw_iso()
+
+    logger.info(
+        f"[{trace_id}] RUNTIME_STATE_GET status=FOUND "
+        f"user_id={user_id} scope_key={scope_key} "
+        f"current_state={state['current_state']}"
+    )
+    return state
+
+def set_runtime_state(
+    user_id: str,
+    scope_key: str,
+    current_state: str,
+    temp_need_type: str = "",
+    temp_urgency_level: str = "",
+    temp_residence_card_image_url: str = "",
+    trace_id: str = ""
+):
+    now_ts = get_now_ts()
+    cleanup_runtime_state_store(now_ts)
+
+    state = {
+        "user_id": safe_str(user_id),
+        "scope_key": safe_str(scope_key),
+        "current_state": normalize_state_value(current_state),
+        "temp_need_type": safe_str(temp_need_type),
+        "temp_urgency_level": safe_str(temp_urgency_level),
+        "temp_residence_card_image_url": safe_str(temp_residence_card_image_url),
+        "updated_at": now_tw_iso(),
+        "last_seen_ts": now_ts,
+    }
+
+    RUNTIME_USER_STATE[scope_key] = state
+
+    if trace_id:
+        logger.info(
+            f"[{trace_id}] RUNTIME_STATE_SET "
+            f"user_id={user_id} scope_key={scope_key} "
+            f"current_state={state['current_state']}"
+        )
+    return state
+
+def reset_runtime_state(user_id: str, scope_key: str, trace_id: str):
+    return set_runtime_state(
         user_id=user_id,
         scope_key=scope_key,
         current_state=STATE_IDLE,
@@ -601,7 +711,7 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-timeout-isolated",
+        "service": "line-bot-render-phase1-runtime-state-ready",
         "time": now_tw_iso(),
         "ready": ready,
         "timeouts": {
@@ -611,7 +721,9 @@ def health():
         "phase1": {
             "spreadsheet_name": PHASE1_SPREADSHEET_NAME,
             "user_state_sheet": USER_STATE_SHEET_NAME,
-            "state_read_in_callback": False
+            "state_read_in_callback": False,
+            "runtime_state_enabled": True,
+            "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS
         }
     }), 200 if ready else 503
 
@@ -723,9 +835,11 @@ def callback():
         f"group_id={group_id} room_id={room_id} text={json.dumps(input_text, ensure_ascii=False)}"
     )
 
+    runtime_state = get_runtime_state(user_id, scope_key, trace_id)
     logger.info(
-        f"[{trace_id}] STATE_READ_SKIPPED_FOR_TIMEOUT_ISOLATION "
-        f"user_id={user_id} scope_key={scope_key}"
+        f"[{trace_id}] RUNTIME_STATE_CONTEXT "
+        f"user_id={user_id} scope_key={scope_key} "
+        f"current_state={runtime_state.get('current_state')}"
     )
 
     # 4) EMPTY INPUT
