@@ -169,34 +169,7 @@ def line_reply(reply_token, text, trace_id):
 # =========================================================
 # GOOGLE TRANSLATE HELPERS
 # =========================================================
-def detect_lang(text, trace_id):
-    started = time.perf_counter()
-    try:
-        url = "https://translation.googleapis.com/language/translate/v2/detect"
-        r = requests.post(
-            url,
-            params={"key": GOOGLE_API_KEY},
-            data={"q": text},
-            timeout=HTTP_TIMEOUT_SECONDS
-        )
-
-        latency_ms = ms_since(started)
-        logger.info(f"[{trace_id}] GOOGLE_DETECT status={r.status_code} latency_ms={latency_ms}")
-
-        if r.status_code != 200:
-            logger.error(f"[{trace_id}] GOOGLE_DETECT body={r.text}")
-            return None, latency_ms
-
-        payload = r.json()
-        detected_lang = payload["data"]["detections"][0][0]["language"]
-        return detected_lang, latency_ms
-
-    except Exception as e:
-        latency_ms = ms_since(started)
-        logger.exception(f"[{trace_id}] GOOGLE_DETECT exception={e} latency_ms={latency_ms}")
-        return None, latency_ms
-
-def translate(text, target, source, trace_id):
+def translate_auto_source(text, target, trace_id):
     started = time.perf_counter()
     try:
         url = "https://translation.googleapis.com/language/translate/v2"
@@ -205,8 +178,6 @@ def translate(text, target, source, trace_id):
             "target": target,
             "format": "text"
         }
-        if source:
-            data["source"] = source
 
         r = requests.post(
             url,
@@ -220,16 +191,24 @@ def translate(text, target, source, trace_id):
 
         if r.status_code != 200:
             logger.error(f"[{trace_id}] GOOGLE_TRANSLATE body={r.text}")
-            return None, latency_ms
+            return None, latency_ms, None
 
         payload = r.json()
-        translated = payload["data"]["translations"][0]["translatedText"]
-        return html.unescape(translated), latency_ms
+        translations = payload.get("data", {}).get("translations", [])
+        if not translations:
+            logger.error(f"[{trace_id}] GOOGLE_TRANSLATE empty translations")
+            return None, latency_ms, None
+
+        first = translations[0]
+        translated = html.unescape(first.get("translatedText", ""))
+        detected_source_language = first.get("detectedSourceLanguage")
+
+        return translated, latency_ms, detected_source_language
 
     except Exception as e:
         latency_ms = ms_since(started)
         logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE exception={e} latency_ms={latency_ms}")
-        return None, latency_ms
+        return None, latency_ms, None
 
 # =========================================================
 # AUDIT LOG HELPERS
@@ -274,7 +253,7 @@ def log_total_latency(trace_id, route_name, total_ms, source_type, group_id, roo
 def health():
     return jsonify({
         "ok": True,
-        "service": "line-bot-render-latency",
+        "service": "line-bot-render-no-detect",
         "time": now_tw_iso()
     }), 200
 
@@ -494,8 +473,11 @@ def callback():
             )
             return "OK", 200
 
-        lang, detect_ms = detect_lang(content, trace_id)
-        translated, translate_ms = translate(content, LOCKED_TARGET_LANG, lang, trace_id)
+        translated, translate_ms, detected_source_language = translate_auto_source(
+            content,
+            LOCKED_TARGET_LANG,
+            trace_id
+        )
 
         final_text = translated or content
         msg = f"📢 THÔNG BÁO:\n{final_text}"
@@ -512,8 +494,7 @@ def callback():
             content=content,
             status="SUCCESS" if reply_ok else "FAILED_REPLY",
             note=(
-                f"detected_lang={lang or 'unknown'} "
-                f"detect_ms={detect_ms} "
+                f"detected_source_language={detected_source_language or 'unknown'} "
                 f"translate_ms={translate_ms} "
                 f"reply_ms={reply_ms}"
             )
@@ -532,13 +513,16 @@ def callback():
     # =====================================================
     # NORMAL TRANSLATE
     # =====================================================
-    lang, detect_ms = detect_lang(input_text, trace_id)
-    translated, translate_ms = translate(input_text, LOCKED_TARGET_LANG, lang, trace_id)
+    translated, translate_ms, detected_source_language = translate_auto_source(
+        input_text,
+        LOCKED_TARGET_LANG,
+        trace_id
+    )
     reply_ok, reply_ms = line_reply(reply_token, translated or FALLBACK_REPLY_TEXT, trace_id)
 
     logger.info(
         f"[NORMAL_FLOW] trace_id={trace_id} "
-        f"detect_ms={detect_ms} "
+        f"detected_source_language={detected_source_language or 'unknown'} "
         f"translate_ms={translate_ms} "
         f"reply_ms={reply_ms} "
         f"reply_ok={reply_ok}"
