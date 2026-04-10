@@ -51,7 +51,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE_BASELINE__WORKER_ENTRY_TRIGGER_V2"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__NEED_TYPE_TO_URGENCY_V3"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -99,6 +99,12 @@ NEED_TYPE_V1 = {
     "airport_taxi": "Taxi / sân bay",
     "motorcycle": "Xe máy",
     "other_service": "Dịch vụ khác",
+}
+
+URGENCY_LEVEL_V1 = {
+    "urgent": "Gấp hôm nay",
+    "soon": "Trong vài ngày",
+    "normal": "Chưa gấp",
 }
 
 # =========================================================
@@ -202,7 +208,7 @@ def extract_source_ids(event: dict) -> Tuple[str, str, str, str]:
         safe_str(s.get("type")),
         safe_str(s.get("userId")),
         safe_str(s.get("groupId")),
-        safe_str(s.get("roomId"))
+        safe_str(s.get("roomId")),
     )
 
 
@@ -367,7 +373,9 @@ def set_runtime_state(
         logger.info(
             f"[{trace_id}] RUNTIME_STATE_SET "
             f"user_id={user_id} scope_key={scope_key} "
-            f"current_state={state['current_state']}"
+            f"current_state={state['current_state']} "
+            f"temp_need_type={state['temp_need_type']} "
+            f"temp_urgency_level={state['temp_urgency_level']}"
         )
     return state
 
@@ -378,22 +386,21 @@ def post_json(url: str, headers: dict, payload: dict, trace_id: str, op_name: st
     started = time.perf_counter()
 
     try:
-        r = requests.post(
+        response = requests.post(
             url=url,
             headers=headers,
             json=payload,
             timeout=OUTBOUND_TIMEOUT
         )
         latency_ms = ms_since(started)
-        logger.info(f"[{trace_id}] {op_name} status={r.status_code} latency_ms={latency_ms}")
+        logger.info(f"[{trace_id}] {op_name} status={response.status_code} latency_ms={latency_ms}")
 
-        if r.status_code != 200:
+        if response.status_code != 200:
             logger.error(
-                f"[{trace_id}] {op_name} body={truncate_log_text(r.text)} "
+                f"[{trace_id}] {op_name} body={truncate_log_text(response.text)} "
                 f"url={url}"
             )
-
-        return r, latency_ms
+        return response, latency_ms
 
     except requests.Timeout as e:
         latency_ms = ms_since(started)
@@ -424,22 +431,21 @@ def post_form(url: str, params: dict, data: dict, trace_id: str, op_name: str):
     started = time.perf_counter()
 
     try:
-        r = requests.post(
+        response = requests.post(
             url=url,
             params=params,
             data=data,
             timeout=OUTBOUND_TIMEOUT
         )
         latency_ms = ms_since(started)
-        logger.info(f"[{trace_id}] {op_name} status={r.status_code} latency_ms={latency_ms}")
+        logger.info(f"[{trace_id}] {op_name} status={response.status_code} latency_ms={latency_ms}")
 
-        if r.status_code != 200:
+        if response.status_code != 200:
             logger.error(
-                f"[{trace_id}] {op_name} body={truncate_log_text(r.text)} "
+                f"[{trace_id}] {op_name} body={truncate_log_text(response.text)} "
                 f"url={url}"
             )
-
-        return r, latency_ms
+        return response, latency_ms
 
     except requests.Timeout as e:
         latency_ms = ms_since(started)
@@ -487,7 +493,6 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, int]:
         return False, 0
 
     final_text = crop_text(text or FALLBACK_REPLY_TEXT)
-
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
         "Content-Type": "application/json"
@@ -502,7 +507,7 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, int]:
         ]
     }
 
-    r, latency_ms = post_json(
+    response, latency_ms = post_json(
         url=LINE_REPLY_API_URL,
         headers=headers,
         payload=payload,
@@ -510,10 +515,10 @@ def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, int]:
         op_name="LINE_REPLY"
     )
 
-    if not r:
+    if not response:
         return False, latency_ms
 
-    return r.status_code == 200, latency_ms
+    return response.status_code == 200, latency_ms
 
 # =========================================================
 # GOOGLE TRANSLATE HELPERS
@@ -529,7 +534,7 @@ def translate_auto_source(text: str, target: str, trace_id: str) -> Tuple[Option
         "format": "text"
     }
 
-    r, latency_ms = post_form(
+    response, latency_ms = post_form(
         url=GOOGLE_TRANSLATE_API_URL,
         params={"key": GOOGLE_API_KEY},
         data=data,
@@ -537,14 +542,14 @@ def translate_auto_source(text: str, target: str, trace_id: str) -> Tuple[Option
         op_name="GOOGLE_TRANSLATE"
     )
 
-    if not r:
+    if not response:
         return None, latency_ms, None
 
-    if r.status_code != 200:
+    if response.status_code != 200:
         return None, latency_ms, None
 
     try:
-        payload = r.json()
+        payload = response.json()
     except Exception as e:
         logger.exception(f"[{trace_id}] GOOGLE_TRANSLATE json_parse_exception={type(e).__name__}:{e}")
         return None, latency_ms, None
@@ -557,7 +562,6 @@ def translate_auto_source(text: str, target: str, trace_id: str) -> Tuple[Option
     first = translations[0]
     translated = html.unescape(first.get("translatedText", ""))
     detected_source_language = first.get("detectedSourceLanguage")
-
     return translated, latency_ms, detected_source_language
 
 # =========================================================
@@ -604,6 +608,10 @@ def is_worker_entry_command(input_text: str) -> bool:
     return safe_str(input_text).lower() == WORKER_ENTRY_COMMAND
 
 
+def is_valid_need_type(input_text: str) -> bool:
+    return safe_str(input_text) in NEED_TYPE_V1
+
+
 def build_worker_need_menu_text() -> str:
     return (
         "📋 YÊU CẦU HỖ TRỢ\n"
@@ -619,6 +627,17 @@ def build_worker_need_menu_text() -> str:
         "9. motorcycle = Xe máy\n"
         "10. other_service = Dịch vụ khác\n\n"
         "Ví dụ gửi: transfer_job"
+    )
+
+
+def build_urgency_menu_text() -> str:
+    return (
+        "⏱️ MỨC ĐỘ GẤP\n"
+        "Vui lòng chọn 1 mức độ bằng cách gửi đúng mã dưới đây:\n\n"
+        "1. urgent = Gấp hôm nay\n"
+        "2. soon = Trong vài ngày\n"
+        "3. normal = Chưa gấp\n\n"
+        "Ví dụ gửi: urgent"
     )
 
 
@@ -644,23 +663,51 @@ def handle_worker_entry(
     return line_reply(reply_token, build_worker_need_menu_text(), trace_id)
 
 
-def handle_awaiting_need_type_placeholder(reply_token: str, trace_id: str) -> Tuple[bool, int]:
-    text = (
-        "📌 Hệ thống đang chờ bạn chọn nhu cầu.\n"
-        "Vui lòng gửi đúng 1 mã NEED_TYPE V1.\n\n"
-        "Các mã hợp lệ:\n"
-        "- transfer_job\n"
-        "- part_time\n"
-        "- taiwan_job\n"
-        "- overseas_referral\n"
-        "- passport\n"
-        "- arc\n"
-        "- driver_license\n"
-        "- airport_taxi\n"
-        "- motorcycle\n"
-        "- other_service"
+def handle_need_type_selection(
+    user_id: str,
+    scope_key: str,
+    input_text: str,
+    reply_token: str,
+    trace_id: str,
+) -> Tuple[bool, int]:
+    selected_need_type = safe_str(input_text)
+
+    if not is_valid_need_type(selected_need_type):
+        logger.info(
+            f"[{trace_id}] NEED_TYPE_INVALID input={json.dumps(selected_need_type, ensure_ascii=False)}"
+        )
+        text = (
+            "❌ Mã nhu cầu không hợp lệ.\n"
+            "Vui lòng gửi đúng 1 mã trong danh sách dưới đây:\n\n"
+            "- transfer_job\n"
+            "- part_time\n"
+            "- taiwan_job\n"
+            "- overseas_referral\n"
+            "- passport\n"
+            "- arc\n"
+            "- driver_license\n"
+            "- airport_taxi\n"
+            "- motorcycle\n"
+            "- other_service"
+        )
+        return line_reply(reply_token, text, trace_id)
+
+    existing_state = get_runtime_state(user_id, scope_key, trace_id)
+    set_runtime_state(
+        user_id=user_id,
+        scope_key=scope_key,
+        current_state=STATE_AWAITING_URGENCY,
+        temp_need_type=selected_need_type,
+        temp_urgency_level=existing_state.get("temp_urgency_level", ""),
+        temp_residence_card_image_url=existing_state.get("temp_residence_card_image_url", ""),
+        trace_id=trace_id,
     )
-    return line_reply(reply_token, text, trace_id)
+
+    logger.info(
+        f"[{trace_id}] NEED_TYPE_ACCEPTED selected={selected_need_type} "
+        f"next_state={STATE_AWAITING_URGENCY}"
+    )
+    return line_reply(reply_token, build_urgency_menu_text(), trace_id)
 
 # =========================================================
 # COMMAND HELPERS
@@ -686,7 +733,7 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-worker-entry-trigger",
+        "service": "line-bot-render-phase1-need-type-selection",
         "app_version": APP_VERSION,
         "time": now_tw_iso(),
         "ready": ready,
@@ -702,7 +749,9 @@ def health():
             "runtime_state_enabled": True,
             "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS,
             "worker_entry_command": WORKER_ENTRY_COMMAND,
-            "worker_entry_enabled": True
+            "worker_entry_enabled": True,
+            "need_type_selection_enabled": True,
+            "urgency_menu_enabled": True,
         }
     }), 200 if ready else 503
 
@@ -1023,11 +1072,17 @@ def callback():
         return "OK", 200
 
     if current_state == STATE_AWAITING_NEED_TYPE:
-        reply_ok, reply_ms = handle_awaiting_need_type_placeholder(reply_token, trace_id)
-        logger.info(f"[{trace_id}] AWAITING_NEED_TYPE_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+        reply_ok, reply_ms = handle_need_type_selection(
+            user_id=user_id,
+            scope_key=scope_key,
+            input_text=input_text,
+            reply_token=reply_token,
+            trace_id=trace_id,
+        )
+        logger.info(f"[{trace_id}] NEED_TYPE_SELECTION_REPLY reply_ok={reply_ok} reply_ms={reply_ms}")
         log_total_latency(
             trace_id=trace_id,
-            route_name="awaiting_need_type_placeholder",
+            route_name="need_type_selection",
             total_ms=ms_since(total_started),
             source_type=source_type,
             group_id=group_id,
