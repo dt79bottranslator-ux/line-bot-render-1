@@ -1,6 +1,3 @@
-# =========================================================
-# IMPORT
-# =========================================================
 import os
 import json
 import html
@@ -11,10 +8,9 @@ import time
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Dict, Tuple, Optional
 
 import requests
-import gspread
-from google.oauth2.service_account import Credentials
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -35,6 +31,7 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 
+# Giữ env này để sẵn cho phase sau, nhưng KHÔNG đọc Sheet trong hot path /callback
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
 USER_STATE_SHEET_NAME = "user_state"
@@ -47,9 +44,14 @@ ADMIN_LIST = [x.strip() for x in ADMIN_IDS.split(",") if x.strip()]
 ALL_COOLDOWN_SECONDS = int(os.getenv("ALL_COOLDOWN_SECONDS", "15").strip() or "15")
 MAX_ALL_CHARS = int(os.getenv("MAX_ALL_CHARS", "500").strip() or "500")
 
+# RUNTIME STATE
+RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
+RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
+
 # =========================================================
-# CONSTANT
+# CONSTANTS
 # =========================================================
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE_BASELINE__WORKER_ENTRY_TRIGGER_V2"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -65,20 +67,51 @@ ERROR_BODY_LOG_LIMIT = 800
 LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 
-# In-memory rate limit store
-# key = "{user_id}:{scope_key}"
-LAST_ALL_USED_AT = {}
+WORKER_ENTRY_COMMAND = "/worker"
 
-# In-memory runtime state store for Phase 1 hot path
+# =========================================================
+# PHASE 1 STATE MACHINE
+# =========================================================
+STATE_IDLE = "idle"
+STATE_AWAITING_NEED_TYPE = "awaiting_need_type"
+STATE_AWAITING_URGENCY = "awaiting_urgency"
+STATE_AWAITING_RESIDENCE_CARD = "awaiting_residence_card"
+STATE_AWAITING_PHONE_NUMBER = "awaiting_phone_number"
+STATE_CASE_COMPLETED = "case_completed"
+
+ALLOWED_STATES = {
+    STATE_IDLE,
+    STATE_AWAITING_NEED_TYPE,
+    STATE_AWAITING_URGENCY,
+    STATE_AWAITING_RESIDENCE_CARD,
+    STATE_AWAITING_PHONE_NUMBER,
+    STATE_CASE_COMPLETED,
+}
+
+NEED_TYPE_V1 = {
+    "transfer_job": "Chuyển chủ / đổi việc",
+    "part_time": "Việc làm thêm",
+    "taiwan_job": "Việc làm tại Đài Loan",
+    "overseas_referral": "Giới thiệu người thân sang Đài",
+    "passport": "Hộ chiếu",
+    "arc": "Thẻ cư trú / ARC",
+    "driver_license": "Bằng lái xe",
+    "airport_taxi": "Taxi / sân bay",
+    "motorcycle": "Xe máy",
+    "other_service": "Dịch vụ khác",
+}
+
+# =========================================================
+# IN-MEMORY STORES
+# =========================================================
 # key = "{user_id}:{scope_key}"
-RUNTIME_USER_STATE = {}
-RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
-RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
+LAST_ALL_USED_AT: Dict[str, int] = {}
+RUNTIME_USER_STATE: Dict[str, Dict[str, str]] = {}
 
 # =========================================================
 # STARTUP VALIDATION
 # =========================================================
-def validate_startup_config():
+def validate_startup_config() -> None:
     missing_required = []
     missing_optional = []
 
@@ -103,7 +136,8 @@ def validate_startup_config():
         logger.info("[STARTUP] Optional sheet env loaded")
 
     logger.info(
-        f"[STARTUP] admin_count={len(ADMIN_LIST)} "
+        f"[STARTUP] app_version={APP_VERSION} "
+        f"admin_count={len(ADMIN_LIST)} "
         f"all_cooldown_seconds={ALL_COOLDOWN_SECONDS} "
         f"max_all_chars={MAX_ALL_CHARS} "
         f"connect_timeout_s={CONNECT_TIMEOUT_SECONDS} "
@@ -114,6 +148,7 @@ def validate_startup_config():
         f"sheet_env_ready={bool(GOOGLE_SERVICE_ACCOUNT_JSON)}"
     )
 
+
 def is_runtime_ready() -> bool:
     return all([
         bool(LINE_CHANNEL_ACCESS_TOKEN),
@@ -121,22 +156,27 @@ def is_runtime_ready() -> bool:
         bool(GOOGLE_API_KEY),
     ])
 
+
 def is_sheet_env_ready() -> bool:
     return bool(GOOGLE_SERVICE_ACCOUNT_JSON)
+
 
 validate_startup_config()
 
 # =========================================================
 # BASIC HELPERS
 # =========================================================
-def now_tw_iso():
+def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
 
-def make_trace_id():
+
+def make_trace_id() -> str:
     return f"trc_{uuid.uuid4().hex[:12]}"
 
-def safe_str(v):
+
+def safe_str(v) -> str:
     return str(v).strip() if v else ""
+
 
 def crop_text(text: str, max_len: int = LINE_TEXT_HARD_LIMIT) -> str:
     text = safe_str(text)
@@ -144,16 +184,19 @@ def crop_text(text: str, max_len: int = LINE_TEXT_HARD_LIMIT) -> str:
         return text
     return text[:max_len]
 
+
 def truncate_log_text(text: str, max_len: int = ERROR_BODY_LOG_LIMIT) -> str:
     text = safe_str(text)
     if len(text) <= max_len:
         return text
     return text[:max_len] + "...<truncated>"
 
+
 def is_admin(user_id: str) -> bool:
     return user_id in ADMIN_LIST
 
-def extract_source_ids(event):
+
+def extract_source_ids(event: dict) -> Tuple[str, str, str, str]:
     s = event.get("source", {})
     return (
         safe_str(s.get("type")),
@@ -162,8 +205,14 @@ def extract_source_ids(event):
         safe_str(s.get("roomId"))
     )
 
+
 def get_now_ts() -> int:
     return int(time.time())
+
+
+def ms_since(start_perf: float) -> int:
+    return int((time.perf_counter() - start_perf) * 1000)
+
 
 def get_scope_key(source_type: str, user_id: str, group_id: str, room_id: str) -> str:
     if source_type == "group" and group_id:
@@ -172,31 +221,41 @@ def get_scope_key(source_type: str, user_id: str, group_id: str, room_id: str) -
         return room_id
     return user_id or "unknown"
 
+
 def get_all_rate_limit_key(user_id: str, scope_key: str) -> str:
     return f"{user_id}:{scope_key}"
+
 
 def get_runtime_state_key(user_id: str, scope_key: str) -> str:
     return f"{safe_str(user_id)}:{safe_str(scope_key)}"
 
-def cleanup_rate_limit_store(now_ts: int):
+
+def normalize_state_value(value: str) -> str:
+    state = safe_str(value)
+    if state in ALLOWED_STATES:
+        return state
+    return STATE_IDLE
+
+# =========================================================
+# RATE LIMIT HELPERS
+# =========================================================
+def cleanup_rate_limit_store(now_ts: int) -> None:
     if len(LAST_ALL_USED_AT) < RATE_LIMIT_STORE_MAX_KEYS:
         return
 
     expired_before = now_ts - max(ALL_COOLDOWN_SECONDS * 3, 60)
-    stale_keys = [
-        k for k, v in LAST_ALL_USED_AT.items()
-        if v < expired_before
-    ]
+    stale_keys = [k for k, v in LAST_ALL_USED_AT.items() if v < expired_before]
 
     for k in stale_keys:
         LAST_ALL_USED_AT.pop(k, None)
 
     logger.info(
-        f"[RATE_LIMIT] cleanup done removed={len(stale_keys)} "
+        f"[RATE_LIMIT] cleanup removed={len(stale_keys)} "
         f"remaining={len(LAST_ALL_USED_AT)}"
     )
 
-def allow_all_command(user_id: str, scope_key: str):
+
+def allow_all_command(user_id: str, scope_key: str) -> Tuple[bool, int]:
     now_ts = get_now_ts()
     cleanup_rate_limit_store(now_ts)
 
@@ -205,196 +264,15 @@ def allow_all_command(user_id: str, scope_key: str):
     diff = now_ts - last_ts
 
     if diff < ALL_COOLDOWN_SECONDS:
-        remaining = ALL_COOLDOWN_SECONDS - diff
-        return False, remaining
+        return False, ALL_COOLDOWN_SECONDS - diff
 
     LAST_ALL_USED_AT[rate_key] = now_ts
     return True, 0
 
-def parse_all_command(input_text: str):
-    raw = safe_str(input_text)
-    lowered = raw.lower()
-
-    if lowered == "!all":
-        return True, ""
-
-    if lowered.startswith("!all "):
-        content = raw[5:].strip()
-        return True, content
-
-    return False, ""
-
-def ms_since(start_perf: float) -> int:
-    return int((time.perf_counter() - start_perf) * 1000)
-
-# =========================================================
-# STATE HELPERS - PHASE 1
-# =========================================================
-STATE_IDLE = "idle"
-STATE_AWAITING_NEED_TYPE = "awaiting_need_type"
-STATE_AWAITING_URGENCY = "awaiting_urgency"
-STATE_AWAITING_RESIDENCE_CARD = "awaiting_residence_card"
-STATE_AWAITING_PHONE_NUMBER = "awaiting_phone_number"
-STATE_CASE_COMPLETED = "case_completed"
-
-ALLOWED_STATES = {
-    STATE_IDLE,
-    STATE_AWAITING_NEED_TYPE,
-    STATE_AWAITING_URGENCY,
-    STATE_AWAITING_RESIDENCE_CARD,
-    STATE_AWAITING_PHONE_NUMBER,
-    STATE_CASE_COMPLETED,
-}
-
-def get_google_credentials():
-    if not GOOGLE_SERVICE_ACCOUNT_JSON:
-        raise ValueError("missing GOOGLE_SERVICE_ACCOUNT_JSON")
-
-    try:
-        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-    except Exception as e:
-        raise ValueError(f"invalid GOOGLE_SERVICE_ACCOUNT_JSON: {type(e).__name__}:{e}")
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive",
-    ]
-    return Credentials.from_service_account_info(info, scopes=scopes)
-
-def get_gspread_client():
-    creds = get_google_credentials()
-    return gspread.authorize(creds)
-
-def open_phase1_spreadsheet():
-    gc = get_gspread_client()
-    return gc.open(PHASE1_SPREADSHEET_NAME)
-
-def get_user_state_worksheet():
-    ss = open_phase1_spreadsheet()
-    return ss.worksheet(USER_STATE_SHEET_NAME)
-
-def normalize_state_value(value: str) -> str:
-    state = safe_str(value)
-    if state in ALLOWED_STATES:
-        return state
-    return STATE_IDLE
-
-def empty_user_state(user_id: str, scope_key: str):
-    return {
-        "user_id": safe_str(user_id),
-        "scope_key": safe_str(scope_key),
-        "current_state": STATE_IDLE,
-        "temp_need_type": "",
-        "temp_urgency_level": "",
-        "temp_residence_card_image_url": "",
-        "updated_at": now_tw_iso(),
-    }
-
-def find_user_state_row(ws, user_id: str, scope_key: str):
-    user_id = safe_str(user_id)
-    scope_key = safe_str(scope_key)
-
-    records = ws.get_all_records()
-    for idx, row in enumerate(records, start=2):
-        if (
-            safe_str(row.get("user_id")) == user_id and
-            safe_str(row.get("scope_key")) == scope_key
-        ):
-            return idx, row
-
-    return None, None
-
-def get_user_state(user_id: str, scope_key: str, trace_id: str):
-    try:
-        ws = get_user_state_worksheet()
-        _row_index, row = find_user_state_row(ws, user_id, scope_key)
-
-        if not row:
-            state_data = empty_user_state(user_id, scope_key)
-            logger.info(
-                f"[{trace_id}] STATE_GET status=NEW_DEFAULT "
-                f"user_id={user_id} scope_key={scope_key}"
-            )
-            return state_data
-
-        state_data = {
-            "user_id": safe_str(row.get("user_id")),
-            "scope_key": safe_str(row.get("scope_key")),
-            "current_state": normalize_state_value(row.get("current_state")),
-            "temp_need_type": safe_str(row.get("temp_need_type")),
-            "temp_urgency_level": safe_str(row.get("temp_urgency_level")),
-            "temp_residence_card_image_url": safe_str(row.get("temp_residence_card_image_url")),
-            "updated_at": safe_str(row.get("updated_at")),
-        }
-
-        logger.info(
-            f"[{trace_id}] STATE_GET status=FOUND "
-            f"user_id={user_id} scope_key={scope_key} "
-            f"current_state={state_data['current_state']}"
-        )
-        return state_data
-
-    except Exception as e:
-        logger.exception(
-            f"[{trace_id}] STATE_GET exception={type(e).__name__}:{e} "
-            f"user_id={user_id} scope_key={scope_key}"
-        )
-        return empty_user_state(user_id, scope_key)
-
-def upsert_user_state(
-    user_id: str,
-    scope_key: str,
-    current_state: str,
-    temp_need_type: str,
-    temp_urgency_level: str,
-    temp_residence_card_image_url: str,
-    trace_id: str
-):
-    ws = get_user_state_worksheet()
-    row_index, _existing = find_user_state_row(ws, user_id, scope_key)
-
-    final_row = [
-        safe_str(user_id),
-        safe_str(scope_key),
-        normalize_state_value(current_state),
-        safe_str(temp_need_type),
-        safe_str(temp_urgency_level),
-        safe_str(temp_residence_card_image_url),
-        now_tw_iso(),
-    ]
-
-    if row_index:
-        ws.update(f"A{row_index}:G{row_index}", [final_row])
-        logger.info(
-            f"[{trace_id}] STATE_UPSERT action=UPDATE "
-            f"user_id={user_id} scope_key={scope_key} "
-            f"current_state={final_row[2]}"
-        )
-        return "updated"
-
-    ws.append_row(final_row, value_input_option="RAW")
-    logger.info(
-        f"[{trace_id}] STATE_UPSERT action=INSERT "
-        f"user_id={user_id} scope_key={scope_key} "
-        f"current_state={final_row[2]}"
-    )
-    return "inserted"
-
-def reset_user_state(user_id: str, scope_key: str, trace_id: str):
-    return upsert_user_state(
-        user_id=user_id,
-        scope_key=scope_key,
-        current_state=STATE_IDLE,
-        temp_need_type="",
-        temp_urgency_level="",
-        temp_residence_card_image_url="",
-        trace_id=trace_id
-    )
-
 # =========================================================
 # RUNTIME STATE HELPERS - HOT PATH SAFE
 # =========================================================
-def make_runtime_state(user_id: str, scope_key: str):
+def make_runtime_state(user_id: str, scope_key: str) -> dict:
     return {
         "user_id": safe_str(user_id),
         "scope_key": safe_str(scope_key),
@@ -406,7 +284,8 @@ def make_runtime_state(user_id: str, scope_key: str):
         "last_seen_ts": get_now_ts(),
     }
 
-def cleanup_runtime_state_store(now_ts: int):
+
+def cleanup_runtime_state_store(now_ts: int) -> None:
     expired_before = now_ts - max(RUNTIME_STATE_TTL_SECONDS, 300)
 
     stale_keys = [
@@ -431,7 +310,8 @@ def cleanup_runtime_state_store(now_ts: int):
             f"remaining={len(RUNTIME_USER_STATE)}"
         )
 
-def get_runtime_state(user_id: str, scope_key: str, trace_id: str):
+
+def get_runtime_state(user_id: str, scope_key: str, trace_id: str) -> dict:
     now_ts = get_now_ts()
     cleanup_runtime_state_store(now_ts)
 
@@ -449,12 +329,14 @@ def get_runtime_state(user_id: str, scope_key: str, trace_id: str):
         return state
 
     state["last_seen_ts"] = now_ts
+    state["updated_at"] = now_tw_iso()
     logger.info(
         f"[{trace_id}] RUNTIME_STATE_GET status=FOUND "
         f"user_id={user_id} scope_key={scope_key} "
         f"current_state={state['current_state']}"
     )
     return state
+
 
 def set_runtime_state(
     user_id: str,
@@ -463,8 +345,8 @@ def set_runtime_state(
     temp_need_type: str = "",
     temp_urgency_level: str = "",
     temp_residence_card_image_url: str = "",
-    trace_id: str = ""
-):
+    trace_id: str = "",
+) -> dict:
     now_ts = get_now_ts()
     cleanup_runtime_state_store(now_ts)
 
@@ -479,7 +361,6 @@ def set_runtime_state(
         "updated_at": now_tw_iso(),
         "last_seen_ts": now_ts,
     }
-
     RUNTIME_USER_STATE[state_key] = state
 
     if trace_id:
@@ -490,26 +371,15 @@ def set_runtime_state(
         )
     return state
 
-def reset_runtime_state(user_id: str, scope_key: str, trace_id: str):
-    return set_runtime_state(
-        user_id=user_id,
-        scope_key=scope_key,
-        current_state=STATE_IDLE,
-        temp_need_type="",
-        temp_urgency_level="",
-        temp_residence_card_image_url="",
-        trace_id=trace_id
-    )
-
 # =========================================================
 # OUTBOUND HTTP HELPERS
 # =========================================================
-def post_json(url, headers, payload, trace_id, op_name):
+def post_json(url: str, headers: dict, payload: dict, trace_id: str, op_name: str):
     started = time.perf_counter()
 
     try:
         r = requests.post(
-            url,
+            url=url,
             headers=headers,
             json=payload,
             timeout=OUTBOUND_TIMEOUT
@@ -549,12 +419,13 @@ def post_json(url, headers, payload, trace_id, op_name):
         )
         return None, latency_ms
 
-def post_form(url, params, data, trace_id, op_name):
+
+def post_form(url: str, params: dict, data: dict, trace_id: str, op_name: str):
     started = time.perf_counter()
 
     try:
         r = requests.post(
-            url,
+            url=url,
             params=params,
             data=data,
             timeout=OUTBOUND_TIMEOUT
@@ -597,7 +468,7 @@ def post_form(url, params, data, trace_id, op_name):
 # =========================================================
 # LINE HELPERS
 # =========================================================
-def verify_line_signature(secret, body, signature):
+def verify_line_signature(secret: str, body: bytes, signature: str) -> bool:
     if not secret or not signature:
         return False
 
@@ -605,7 +476,8 @@ def verify_line_signature(secret, body, signature):
     computed = base64.b64encode(digest).decode("utf-8")
     return hmac.compare_digest(computed, signature)
 
-def line_reply(reply_token, text, trace_id):
+
+def line_reply(reply_token: str, text: str, trace_id: str) -> Tuple[bool, int]:
     if not LINE_CHANNEL_ACCESS_TOKEN:
         logger.error(f"[{trace_id}] LINE_REPLY skipped reason=missing_channel_access_token")
         return False, 0
@@ -646,7 +518,7 @@ def line_reply(reply_token, text, trace_id):
 # =========================================================
 # GOOGLE TRANSLATE HELPERS
 # =========================================================
-def translate_auto_source(text, target, trace_id):
+def translate_auto_source(text: str, target: str, trace_id: str) -> Tuple[Optional[str], int, Optional[str]]:
     if not GOOGLE_API_KEY:
         logger.error(f"[{trace_id}] GOOGLE_TRANSLATE skipped reason=missing_google_api_key")
         return None, 0, None
@@ -692,16 +564,16 @@ def translate_auto_source(text, target, trace_id):
 # AUDIT LOG HELPERS
 # =========================================================
 def log_all_audit(
-    trace_id,
-    user_id,
-    source_type,
-    group_id,
-    room_id,
-    raw_input,
-    content,
-    status,
-    note=""
-):
+    trace_id: str,
+    user_id: str,
+    source_type: str,
+    group_id: str,
+    room_id: str,
+    raw_input: str,
+    content: str,
+    status: str,
+    note: str = ""
+) -> None:
     logger.info(
         f"[ALL_AUDIT] trace_id={trace_id} "
         f"user_id={user_id} "
@@ -714,7 +586,8 @@ def log_all_audit(
         f"note={json.dumps(note, ensure_ascii=False)}"
     )
 
-def log_total_latency(trace_id, route_name, total_ms, source_type, group_id, room_id):
+
+def log_total_latency(trace_id: str, route_name: str, total_ms: int, source_type: str, group_id: str, room_id: str) -> None:
     logger.info(
         f"[LATENCY] trace_id={trace_id} "
         f"route={route_name} "
@@ -725,6 +598,87 @@ def log_total_latency(trace_id, route_name, total_ms, source_type, group_id, roo
     )
 
 # =========================================================
+# PHASE 1 WORKER FLOW HELPERS
+# =========================================================
+def is_worker_entry_command(input_text: str) -> bool:
+    return safe_str(input_text).lower() == WORKER_ENTRY_COMMAND
+
+
+def build_worker_need_menu_text() -> str:
+    return (
+        "📋 YÊU CẦU HỖ TRỢ\n"
+        "Vui lòng chọn 1 nhu cầu bằng cách gửi đúng mã dưới đây:\n\n"
+        "1. transfer_job = Chuyển chủ / đổi việc\n"
+        "2. part_time = Việc làm thêm\n"
+        "3. taiwan_job = Việc làm tại Đài Loan\n"
+        "4. overseas_referral = Giới thiệu người thân sang Đài\n"
+        "5. passport = Hộ chiếu\n"
+        "6. arc = Thẻ cư trú / ARC\n"
+        "7. driver_license = Bằng lái xe\n"
+        "8. airport_taxi = Taxi / sân bay\n"
+        "9. motorcycle = Xe máy\n"
+        "10. other_service = Dịch vụ khác\n\n"
+        "Ví dụ gửi: transfer_job"
+    )
+
+
+def handle_worker_entry(
+    user_id: str,
+    scope_key: str,
+    reply_token: str,
+    trace_id: str,
+) -> Tuple[bool, int]:
+    set_runtime_state(
+        user_id=user_id,
+        scope_key=scope_key,
+        current_state=STATE_AWAITING_NEED_TYPE,
+        temp_need_type="",
+        temp_urgency_level="",
+        temp_residence_card_image_url="",
+        trace_id=trace_id,
+    )
+    logger.info(
+        f"[{trace_id}] WORKER_ENTRY_TRIGGER matched command={WORKER_ENTRY_COMMAND} "
+        f"next_state={STATE_AWAITING_NEED_TYPE}"
+    )
+    return line_reply(reply_token, build_worker_need_menu_text(), trace_id)
+
+
+def handle_awaiting_need_type_placeholder(reply_token: str, trace_id: str) -> Tuple[bool, int]:
+    text = (
+        "📌 Hệ thống đang chờ bạn chọn nhu cầu.\n"
+        "Vui lòng gửi đúng 1 mã NEED_TYPE V1.\n\n"
+        "Các mã hợp lệ:\n"
+        "- transfer_job\n"
+        "- part_time\n"
+        "- taiwan_job\n"
+        "- overseas_referral\n"
+        "- passport\n"
+        "- arc\n"
+        "- driver_license\n"
+        "- airport_taxi\n"
+        "- motorcycle\n"
+        "- other_service"
+    )
+    return line_reply(reply_token, text, trace_id)
+
+# =========================================================
+# COMMAND HELPERS
+# =========================================================
+def parse_all_command(input_text: str) -> Tuple[bool, str]:
+    raw = safe_str(input_text)
+    lowered = raw.lower()
+
+    if lowered == "!all":
+        return True, ""
+
+    if lowered.startswith("!all "):
+        content = raw[5:].strip()
+        return True, content
+
+    return False, ""
+
+# =========================================================
 # HEALTH
 # =========================================================
 @app.route("/", methods=["GET"])
@@ -732,7 +686,8 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-runtime-state-safe",
+        "service": "line-bot-render-phase1-worker-entry-trigger",
+        "app_version": APP_VERSION,
         "time": now_tw_iso(),
         "ready": ready,
         "timeouts": {
@@ -745,7 +700,9 @@ def health():
             "sheet_env_ready": is_sheet_env_ready(),
             "state_read_in_callback": False,
             "runtime_state_enabled": True,
-            "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS
+            "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS,
+            "worker_entry_command": WORKER_ENTRY_COMMAND,
+            "worker_entry_enabled": True
         }
     }), 200 if ready else 503
 
@@ -831,8 +788,45 @@ def callback():
         return "OK", 200
 
     message = event.get("message", {})
-    if message.get("type") != "text":
-        logger.info(f"[{trace_id}] SKIP_NON_TEXT message_type={message.get('type')}")
+    message_type = safe_str(message.get("type"))
+
+    source_type, user_id, group_id, room_id = extract_source_ids(event)
+    scope_key = get_scope_key(source_type, user_id, group_id, room_id)
+    reply_token = safe_str(event.get("replyToken"))
+
+    logger.info(
+        f"[{trace_id}] INPUT_META source_type={source_type} "
+        f"group_id={group_id} room_id={room_id} message_type={message_type}"
+    )
+
+    runtime_state = get_runtime_state(user_id, scope_key, trace_id)
+    current_state = normalize_state_value(runtime_state.get("current_state", STATE_IDLE))
+    logger.info(
+        f"[{trace_id}] RUNTIME_STATE_CONTEXT "
+        f"user_id={user_id} scope_key={scope_key} "
+        f"current_state={current_state}"
+    )
+
+    if message_type == "image":
+        logger.info(f"[{trace_id}] IMAGE_INPUT current_state={current_state}")
+        reply_ok, reply_ms = line_reply(
+            reply_token,
+            "Bước này chưa bật nhận ảnh hoàn chỉnh. Hiện tại hãy dùng /worker rồi chọn nhu cầu trước.",
+            trace_id,
+        )
+        logger.info(f"[{trace_id}] IMAGE_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="image_placeholder",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    if message_type != "text":
+        logger.info(f"[{trace_id}] SKIP_NON_TEXT message_type={message_type}")
         log_total_latency(
             trace_id=trace_id,
             route_name="skip_non_text",
@@ -843,22 +837,11 @@ def callback():
         )
         return "OK", 200
 
-    source_type, user_id, group_id, room_id = extract_source_ids(event)
-    scope_key = get_scope_key(source_type, user_id, group_id, room_id)
-
     input_text = safe_str(message.get("text"))
-    reply_token = safe_str(event.get("replyToken"))
-
     logger.info(
         f"[{trace_id}] INPUT source_type={source_type} "
-        f"group_id={group_id} room_id={room_id} text={json.dumps(input_text, ensure_ascii=False)}"
-    )
-
-    runtime_state = get_runtime_state(user_id, scope_key, trace_id)
-    logger.info(
-        f"[{trace_id}] RUNTIME_STATE_CONTEXT "
-        f"user_id={user_id} scope_key={scope_key} "
-        f"current_state={runtime_state.get('current_state')}"
+        f"group_id={group_id} room_id={room_id} "
+        f"text={json.dumps(input_text, ensure_ascii=False)}"
     )
 
     if not input_text:
@@ -873,8 +856,10 @@ def callback():
         )
         return "OK", 200
 
+    # =====================================================
+    # !ALL
+    # =====================================================
     is_all_command, content = parse_all_command(input_text)
-
     if is_all_command:
         if not is_admin(user_id):
             log_all_audit(
@@ -889,6 +874,7 @@ def callback():
                 note="user is not in ADMIN_IDS"
             )
             reply_ok, reply_ms = line_reply(reply_token, "❌ Không có quyền", trace_id)
+            logger.info(f"[{trace_id}] DENY_NOT_ADMIN reply_ok={reply_ok} reply_ms={reply_ms}")
             log_total_latency(
                 trace_id=trace_id,
                 route_name="all_deny_not_admin",
@@ -897,7 +883,6 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
-            logger.info(f"[{trace_id}] DENY_NOT_ADMIN reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         if not content:
@@ -913,6 +898,7 @@ def callback():
                 note="!all without content"
             )
             reply_ok, reply_ms = line_reply(reply_token, "⚠️ !all cần nội dung", trace_id)
+            logger.info(f"[{trace_id}] DENY_EMPTY reply_ok={reply_ok} reply_ms={reply_ms}")
             log_total_latency(
                 trace_id=trace_id,
                 route_name="all_deny_empty",
@@ -921,7 +907,6 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
-            logger.info(f"[{trace_id}] DENY_EMPTY reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         if len(content) > MAX_ALL_CHARS:
@@ -941,6 +926,7 @@ def callback():
                 f"⚠️ !all tối đa {MAX_ALL_CHARS} ký tự",
                 trace_id
             )
+            logger.info(f"[{trace_id}] DENY_TOO_LONG reply_ok={reply_ok} reply_ms={reply_ms}")
             log_total_latency(
                 trace_id=trace_id,
                 route_name="all_deny_too_long",
@@ -949,7 +935,6 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
-            logger.info(f"[{trace_id}] DENY_TOO_LONG reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         allowed, remaining = allow_all_command(user_id, scope_key)
@@ -970,6 +955,7 @@ def callback():
                 f"⏳ Vui lòng chờ {remaining} giây rồi dùng !all lại",
                 trace_id
             )
+            logger.info(f"[{trace_id}] DENY_RATE_LIMIT reply_ok={reply_ok} reply_ms={reply_ms}")
             log_total_latency(
                 trace_id=trace_id,
                 route_name="all_deny_rate_limit",
@@ -978,7 +964,6 @@ def callback():
                 group_id=group_id,
                 room_id=room_id
             )
-            logger.info(f"[{trace_id}] DENY_RATE_LIMIT reply_ok={reply_ok} reply_ms={reply_ms}")
             return "OK", 200
 
         translated, translate_ms, detected_source_language = translate_auto_source(
@@ -989,7 +974,6 @@ def callback():
 
         final_text = translated or content
         msg = f"📢 THÔNG BÁO:\n{final_text}"
-
         reply_ok, reply_ms = line_reply(reply_token, msg, trace_id)
 
         log_all_audit(
@@ -1007,7 +991,6 @@ def callback():
                 f"reply_ms={reply_ms}"
             )
         )
-
         log_total_latency(
             trace_id=trace_id,
             route_name="all_success" if reply_ok else "all_failed_reply",
@@ -1018,6 +1001,43 @@ def callback():
         )
         return "OK", 200
 
+    # =====================================================
+    # PHASE 1: WORKER ENTRY
+    # =====================================================
+    if is_worker_entry_command(input_text):
+        reply_ok, reply_ms = handle_worker_entry(
+            user_id=user_id,
+            scope_key=scope_key,
+            reply_token=reply_token,
+            trace_id=trace_id,
+        )
+        logger.info(f"[{trace_id}] WORKER_ENTRY_REPLY reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="worker_entry_trigger",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    if current_state == STATE_AWAITING_NEED_TYPE:
+        reply_ok, reply_ms = handle_awaiting_need_type_placeholder(reply_token, trace_id)
+        logger.info(f"[{trace_id}] AWAITING_NEED_TYPE_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="awaiting_need_type_placeholder",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    # =====================================================
+    # NORMAL TRANSLATE
+    # =====================================================
     translated, translate_ms, detected_source_language = translate_auto_source(
         input_text,
         LOCKED_TARGET_LANG,
@@ -1048,4 +1068,5 @@ def callback():
 # =========================================================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
+    logger.info(f"[BOOT] Starting app on port={port}")
     app.run(host="0.0.0.0", port=port)
