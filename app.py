@@ -25,6 +25,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =========================================================
+# BASIC HELPER NEEDED EARLY
+# =========================================================
+def safe_str(v) -> str:
+    return str(v).strip() if v else ""
+
+# =========================================================
 # ENV
 # =========================================================
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
@@ -55,7 +61,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__I18N_JOB_BRANCHING_V5"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__I18N_JOB_BRANCHING_V6"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -117,6 +123,15 @@ URGENCY_LEVEL_V1 = {
     "normal": "normal",
 }
 
+URGENCY_ALIAS_MAP = {
+    "1": "urgent",
+    "2": "soon",
+    "3": "normal",
+    "urgent": "urgent",
+    "soon": "soon",
+    "normal": "normal",
+}
+
 JOB_TARGET_V1 = {
     "job_for_overseas": "job_for_overseas",
     "job_in_taiwan": "job_in_taiwan",
@@ -146,8 +161,8 @@ I18N = {
         "need.other_service": "Dịch vụ khác",
         "example_send": "Ví dụ gửi:",
         "urgency_title": "⏱️ MỨC ĐỘ GẤP",
-        "urgency_intro": "Vui lòng chọn 1 mức độ bằng cách gửi đúng mã dưới đây:",
-        "urgency.urgent": "Gấp hôm nay",
+        "urgency_intro": "Vui lòng chọn 1 mức độ bằng cách gửi đúng mã hoặc số dưới đây:",
+        "urgency.urgent": "Cần gấp hôm nay",
         "urgency.soon": "Trong vài ngày",
         "urgency.normal": "Chưa gấp",
         "job_target_title": "🧭 LOẠI NHU CẦU TÌM VIỆC",
@@ -169,10 +184,11 @@ I18N = {
         "cv.marital_status": "- Tình trạng kết hôn",
         "cv.siblings_count": "- Số anh chị em",
         "cv.birth_order": "- Xếp thứ mấy trong gia đình",
+        "cv.phone_overseas": "- Số điện thoại của người ứng tuyển",
         "cv.work_exp_vn": "- Kinh nghiệm làm việc tại Việt Nam",
         "cv.send_hint": "Có thể gửi ảnh form hoặc nội dung text.",
         "invalid_need_type": "❌ Mã nhu cầu không hợp lệ.\nVui lòng gửi đúng 1 mã trong danh sách dưới đây:",
-        "invalid_urgency": "❌ Mã mức độ gấp không hợp lệ.\nVui lòng gửi đúng 1 mã:",
+        "invalid_urgency": "❌ Mã mức độ gấp không hợp lệ.\nVui lòng gửi đúng 1 mã hoặc số:",
         "invalid_job_target": "❌ Mã loại nhu cầu tìm việc không hợp lệ.\nVui lòng gửi đúng 1 mã:",
         "awaiting_cv_form_text": "Hệ thống đang chờ form/CV. Anh/chị có thể gửi ảnh form hoặc nội dung text theo mẫu đã hướng dẫn.",
         "awaiting_arc_text": "Hệ thống đang chờ ảnh thẻ cư trú / ARC. Vui lòng gửi ảnh rõ mặt trước.",
@@ -200,8 +216,8 @@ I18N = {
         "need.other_service": "Layanan lainnya",
         "example_send": "Contoh kirim:",
         "urgency_title": "⏱️ TINGKAT KEPENTINGAN",
-        "urgency_intro": "Silakan pilih 1 tingkat dengan mengirim kode yang benar di bawah ini:",
-        "urgency.urgent": "Butuh hari ini",
+        "urgency_intro": "Silakan pilih 1 tingkat dengan mengirim kode atau angka yang benar di bawah ini:",
+        "urgency.urgent": "Perlu segera hari ini",
         "urgency.soon": "Dalam beberapa hari",
         "urgency.normal": "Belum mendesak",
         "job_target_title": "🧭 JENIS KEBUTUHAN CARI KERJA",
@@ -223,10 +239,11 @@ I18N = {
         "cv.marital_status": "- Status pernikahan",
         "cv.siblings_count": "- Jumlah saudara",
         "cv.birth_order": "- Anak ke berapa",
+        "cv.phone_overseas": "- Nomor telepon pelamar",
         "cv.work_exp_vn": "- Pengalaman kerja di Vietnam / negara asal",
         "cv.send_hint": "Bisa kirim foto form atau isi dalam bentuk teks.",
         "invalid_need_type": "❌ Kode kebutuhan tidak valid.\nSilakan kirim 1 kode yang benar dari daftar berikut:",
-        "invalid_urgency": "❌ Kode tingkat kepentingan tidak valid.\nSilakan kirim 1 kode yang benar:",
+        "invalid_urgency": "❌ Kode tingkat kepentingan tidak valid.\nSilakan kirim 1 kode atau angka yang benar:",
         "invalid_job_target": "❌ Kode jenis kebutuhan kerja tidak valid.\nSilakan kirim 1 kode yang benar:",
         "awaiting_cv_form_text": "Sistem sedang menunggu form/CV. Anda bisa mengirim foto form atau isi teks sesuai panduan.",
         "awaiting_arc_text": "Sistem sedang menunggu foto kartu ARC / izin tinggal. Silakan kirim foto sisi depan yang jelas.",
@@ -254,8 +271,8 @@ I18N = {
         "need.other_service": "บริการอื่น ๆ",
         "example_send": "ตัวอย่างส่ง:",
         "urgency_title": "⏱️ ระดับความเร่งด่วน",
-        "urgency_intro": "กรุณาเลือก 1 ระดับโดยส่งรหัสที่ถูกต้องด้านล่าง:",
-        "urgency.urgent": "ด่วนวันนี้",
+        "urgency_intro": "กรุณาเลือก 1 ระดับโดยส่งรหัสหรือหมายเลขที่ถูกต้องด้านล่าง:",
+        "urgency.urgent": "ต้องการด่วนวันนี้",
         "urgency.soon": "ภายในไม่กี่วัน",
         "urgency.normal": "ยังไม่ด่วน",
         "job_target_title": "🧭 ประเภทความต้องการหางาน",
@@ -277,10 +294,11 @@ I18N = {
         "cv.marital_status": "- สถานภาพสมรส",
         "cv.siblings_count": "- จำนวนพี่น้อง",
         "cv.birth_order": "- เป็นลูกคนที่เท่าไร",
+        "cv.phone_overseas": "- หมายเลขโทรศัพท์ของผู้สมัคร",
         "cv.work_exp_vn": "- ประสบการณ์ทำงานในเวียดนาม / ประเทศต้นทาง",
         "cv.send_hint": "สามารถส่งเป็นรูปแบบฟอร์มหรือข้อความก็ได้",
         "invalid_need_type": "❌ รหัสความต้องการไม่ถูกต้อง\nกรุณาส่ง 1 รหัสที่ถูกต้องจากรายการด้านล่าง:",
-        "invalid_urgency": "❌ รหัสระดับความเร่งด่วนไม่ถูกต้อง\nกรุณาส่ง 1 รหัสที่ถูกต้อง:",
+        "invalid_urgency": "❌ รหัสระดับความเร่งด่วนไม่ถูกต้อง\nกรุณาส่ง 1 รหัสหรือหมายเลขที่ถูกต้อง:",
         "invalid_job_target": "❌ รหัสประเภทความต้องการหางานไม่ถูกต้อง\nกรุณาส่ง 1 รหัสที่ถูกต้อง:",
         "awaiting_cv_form_text": "ระบบกำลังรอ form/CV คุณสามารถส่งรูปแบบฟอร์มหรือพิมพ์ข้อความตามตัวอย่างได้",
         "awaiting_arc_text": "ระบบกำลังรอรูปบัตร ARC / บัตรพำนัก กรุณาส่งรูปด้านหน้าที่ชัดเจน",
@@ -321,13 +339,19 @@ def load_user_language_map() -> Dict[str, str]:
             language_group = safe_str(v).lower()
             if not user_id:
                 continue
-            if language_group not in SUPPORTED_LANGUAGE_GROUPS:
-                language_group = DEFAULT_LANGUAGE_GROUP if DEFAULT_LANGUAGE_GROUP in SUPPORTED_LANGUAGE_GROUPS else "vi"
             cleaned[user_id] = language_group
         return cleaned
     except Exception as e:
         logger.warning(f"[STARTUP] Failed to parse USER_LANGUAGE_MAP_JSON: {type(e).__name__}:{e}")
         return {}
+
+
+def normalize_language_group(value: str) -> str:
+    lang = safe_str(value).lower()
+    if lang in SUPPORTED_LANGUAGE_GROUPS:
+        return lang
+    fallback = DEFAULT_LANGUAGE_GROUP if DEFAULT_LANGUAGE_GROUP in SUPPORTED_LANGUAGE_GROUPS else "vi"
+    return fallback
 
 
 def validate_startup_config() -> None:
@@ -368,25 +392,9 @@ def validate_startup_config() -> None:
         f"runtime_state_ttl_s={RUNTIME_STATE_TTL_SECONDS} "
         f"runtime_state_max_keys={RUNTIME_STATE_MAX_KEYS} "
         f"sheet_env_ready={bool(GOOGLE_SERVICE_ACCOUNT_JSON)} "
-        f"default_language_group={DEFAULT_LANGUAGE_GROUP} "
+        f"default_language_group={normalize_language_group(DEFAULT_LANGUAGE_GROUP)} "
         f"user_language_map_size={len(USER_LANGUAGE_MAP)}"
     )
-
-
-def is_runtime_ready() -> bool:
-    return all([
-        bool(LINE_CHANNEL_ACCESS_TOKEN),
-        bool(LINE_CHANNEL_SECRET),
-        bool(GOOGLE_API_KEY),
-    ])
-
-
-def is_sheet_env_ready() -> bool:
-    return bool(GOOGLE_SERVICE_ACCOUNT_JSON)
-
-
-def safe_str(v) -> str:
-    return str(v).strip() if v else ""
 
 
 USER_LANGUAGE_MAP = load_user_language_map()
@@ -462,14 +470,6 @@ def normalize_state_value(value: str) -> str:
     return STATE_IDLE
 
 
-def normalize_language_group(value: str) -> str:
-    lang = safe_str(value).lower()
-    if lang in SUPPORTED_LANGUAGE_GROUPS:
-        return lang
-    fallback = DEFAULT_LANGUAGE_GROUP if DEFAULT_LANGUAGE_GROUP in SUPPORTED_LANGUAGE_GROUPS else "vi"
-    return fallback
-
-
 def resolve_user_language_group(user_id: str) -> str:
     return normalize_language_group(USER_LANGUAGE_MAP.get(user_id, DEFAULT_LANGUAGE_GROUP))
 
@@ -483,6 +483,11 @@ def i18n_text(language_group: str, key: str, **kwargs) -> str:
         except Exception:
             return value
     return value
+
+
+def normalize_urgency_input(input_text: str) -> str:
+    raw = safe_str(input_text).lower()
+    return URGENCY_ALIAS_MAP.get(raw, raw)
 
 # =========================================================
 # RATE LIMIT HELPERS
@@ -851,7 +856,7 @@ def is_valid_need_type(input_text: str) -> bool:
 
 
 def is_valid_urgency_level(input_text: str) -> bool:
-    return safe_str(input_text) in URGENCY_LEVEL_V1
+    return normalize_urgency_input(input_text) in URGENCY_LEVEL_V1
 
 
 def is_valid_job_target(input_text: str) -> bool:
@@ -896,7 +901,7 @@ def build_urgency_menu_text(language_group: str) -> str:
         lines.append(f"{idx}. {code} = {i18n_text(language_group, f'urgency.{code}')}")
     lines.extend([
         "",
-        f"{i18n_text(language_group, 'example_send')} urgent"
+        f"{i18n_text(language_group, 'example_send')} 1"
     ])
     return "\n".join(lines)
 
@@ -941,6 +946,7 @@ def build_request_cv_form_text(language_group: str) -> str:
         i18n_text(language_group, "cv.marital_status"),
         i18n_text(language_group, "cv.siblings_count"),
         i18n_text(language_group, "cv.birth_order"),
+        i18n_text(language_group, "cv.phone_overseas"),
         i18n_text(language_group, "cv.work_exp_vn"),
         "",
         i18n_text(language_group, "cv.send_hint"),
@@ -968,9 +974,9 @@ def build_invalid_urgency_text(language_group: str) -> str:
     return "\n".join([
         i18n_text(language_group, "invalid_urgency"),
         "",
-        "- urgent",
-        "- soon",
-        "- normal",
+        "- urgent / 1",
+        "- soon / 2",
+        "- normal / 3",
     ])
 
 
@@ -1048,12 +1054,13 @@ def handle_urgency_selection(
     trace_id: str,
     language_group: str,
 ) -> Tuple[bool, int]:
-    selected_urgency = safe_str(input_text)
+    normalized_input = normalize_urgency_input(input_text)
 
-    if not is_valid_urgency_level(selected_urgency):
-        logger.info(f"[{trace_id}] URGENCY_INVALID input={json.dumps(selected_urgency, ensure_ascii=False)}")
+    if not is_valid_urgency_level(normalized_input):
+        logger.info(f"[{trace_id}] URGENCY_INVALID input={json.dumps(input_text, ensure_ascii=False)}")
         return line_reply(reply_token, build_invalid_urgency_text(language_group), trace_id)
 
+    selected_urgency = normalized_input
     existing_state = get_runtime_state(user_id, scope_key, trace_id)
     current_need_type = safe_str(existing_state.get("temp_need_type"))
 
@@ -1162,7 +1169,7 @@ def health():
         "phase1": {
             "spreadsheet_name": PHASE1_SPREADSHEET_NAME,
             "user_state_sheet": USER_STATE_SHEET_NAME,
-            "sheet_env_ready": is_sheet_env_ready(),
+            "sheet_env_ready": bool(GOOGLE_SERVICE_ACCOUNT_JSON),
             "state_read_in_callback": False,
             "runtime_state_enabled": True,
             "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS,
@@ -1170,6 +1177,7 @@ def health():
             "worker_entry_enabled": True,
             "need_type_selection_enabled": True,
             "urgency_selection_enabled": True,
+            "urgency_numeric_alias_enabled": True,
             "job_target_selection_enabled": True,
             "language_personalization_enabled": True,
             "supported_language_groups": sorted(list(SUPPORTED_LANGUAGE_GROUPS)),
@@ -1177,6 +1185,14 @@ def health():
             "user_language_map_size": len(USER_LANGUAGE_MAP),
         }
     }), 200 if ready else 503
+
+
+def is_runtime_ready() -> bool:
+    return all([
+        bool(LINE_CHANNEL_ACCESS_TOKEN),
+        bool(LINE_CHANNEL_SECRET),
+        bool(GOOGLE_API_KEY),
+    ])
 
 # =========================================================
 # WEBHOOK
