@@ -51,7 +51,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__NEED_TYPE_TO_URGENCY_V3"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__JOB_BRANCHING_V4"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -75,6 +75,8 @@ WORKER_ENTRY_COMMAND = "/worker"
 STATE_IDLE = "idle"
 STATE_AWAITING_NEED_TYPE = "awaiting_need_type"
 STATE_AWAITING_URGENCY = "awaiting_urgency"
+STATE_AWAITING_JOB_TARGET = "awaiting_job_target"
+STATE_AWAITING_CV_FORM = "awaiting_cv_form"
 STATE_AWAITING_RESIDENCE_CARD = "awaiting_residence_card"
 STATE_AWAITING_PHONE_NUMBER = "awaiting_phone_number"
 STATE_CASE_COMPLETED = "case_completed"
@@ -83,6 +85,8 @@ ALLOWED_STATES = {
     STATE_IDLE,
     STATE_AWAITING_NEED_TYPE,
     STATE_AWAITING_URGENCY,
+    STATE_AWAITING_JOB_TARGET,
+    STATE_AWAITING_CV_FORM,
     STATE_AWAITING_RESIDENCE_CARD,
     STATE_AWAITING_PHONE_NUMBER,
     STATE_CASE_COMPLETED,
@@ -105,6 +109,16 @@ URGENCY_LEVEL_V1 = {
     "urgent": "Gấp hôm nay",
     "soon": "Trong vài ngày",
     "normal": "Chưa gấp",
+}
+
+JOB_TARGET_V1 = {
+    "job_for_overseas": "Tìm đơn cho người đang ở nước sở tại sang Đài Loan",
+    "job_in_taiwan": "Tìm việc cho người hiện đang ở Đài Loan",
+}
+
+DIRECT_ARC_NEED_TYPES = {
+    "transfer_job",
+    "part_time",
 }
 
 # =========================================================
@@ -285,6 +299,7 @@ def make_runtime_state(user_id: str, scope_key: str) -> dict:
         "current_state": STATE_IDLE,
         "temp_need_type": "",
         "temp_urgency_level": "",
+        "temp_job_target": "",
         "temp_residence_card_image_url": "",
         "updated_at": now_tw_iso(),
         "last_seen_ts": get_now_ts(),
@@ -350,6 +365,7 @@ def set_runtime_state(
     current_state: str,
     temp_need_type: str = "",
     temp_urgency_level: str = "",
+    temp_job_target: str = "",
     temp_residence_card_image_url: str = "",
     trace_id: str = "",
 ) -> dict:
@@ -363,6 +379,7 @@ def set_runtime_state(
         "current_state": normalize_state_value(current_state),
         "temp_need_type": safe_str(temp_need_type),
         "temp_urgency_level": safe_str(temp_urgency_level),
+        "temp_job_target": safe_str(temp_job_target),
         "temp_residence_card_image_url": safe_str(temp_residence_card_image_url),
         "updated_at": now_tw_iso(),
         "last_seen_ts": now_ts,
@@ -375,7 +392,8 @@ def set_runtime_state(
             f"user_id={user_id} scope_key={scope_key} "
             f"current_state={state['current_state']} "
             f"temp_need_type={state['temp_need_type']} "
-            f"temp_urgency_level={state['temp_urgency_level']}"
+            f"temp_urgency_level={state['temp_urgency_level']} "
+            f"temp_job_target={state['temp_job_target']}"
         )
     return state
 
@@ -612,6 +630,14 @@ def is_valid_need_type(input_text: str) -> bool:
     return safe_str(input_text) in NEED_TYPE_V1
 
 
+def is_valid_urgency_level(input_text: str) -> bool:
+    return safe_str(input_text) in URGENCY_LEVEL_V1
+
+
+def is_valid_job_target(input_text: str) -> bool:
+    return safe_str(input_text) in JOB_TARGET_V1
+
+
 def build_worker_need_menu_text() -> str:
     return (
         "📋 YÊU CẦU HỖ TRỢ\n"
@@ -641,6 +667,44 @@ def build_urgency_menu_text() -> str:
     )
 
 
+def build_job_target_menu_text() -> str:
+    return (
+        "🧭 LOẠI NHU CẦU TÌM VIỆC\n"
+        "Vui lòng chọn đúng 1 mã dưới đây:\n\n"
+        "1. job_for_overseas = Tìm đơn cho người đang ở nước sở tại sang Đài Loan\n"
+        "2. job_in_taiwan = Tìm việc cho người hiện đang ở Đài Loan\n\n"
+        "Ví dụ gửi: job_for_overseas"
+    )
+
+
+def build_request_residence_card_text() -> str:
+    return (
+        "🪪 VUI LÒNG GỬI ẢNH THẺ CƯ TRÚ / ARC\n"
+        "Hãy gửi ảnh rõ mặt trước của thẻ cư trú.\n\n"
+        "Lưu ý:\n"
+        "- Ảnh rõ nét\n"
+        "- Không che thông tin\n"
+        "- Không chụp quá mờ"
+    )
+
+
+def build_request_cv_form_text() -> str:
+    return (
+        "📄 VUI LÒNG GỬI FORM / CV SƠ YẾU LÝ LỊCH\n"
+        "Chỉ cần các thông tin chính sau:\n\n"
+        "- Họ tên\n"
+        "- Chiều cao\n"
+        "- Cân nặng\n"
+        "- Quê quán\n"
+        "- Trình độ học vấn\n"
+        "- Tình trạng kết hôn\n"
+        "- Số anh chị em\n"
+        "- Xếp thứ mấy trong gia đình\n"
+        "- Kinh nghiệm làm việc tại Việt Nam\n\n"
+        "Có thể gửi ảnh form hoặc nội dung text."
+    )
+
+
 def handle_worker_entry(
     user_id: str,
     scope_key: str,
@@ -653,6 +717,7 @@ def handle_worker_entry(
         current_state=STATE_AWAITING_NEED_TYPE,
         temp_need_type="",
         temp_urgency_level="",
+        temp_job_target="",
         temp_residence_card_image_url="",
         trace_id=trace_id,
     )
@@ -698,7 +763,8 @@ def handle_need_type_selection(
         scope_key=scope_key,
         current_state=STATE_AWAITING_URGENCY,
         temp_need_type=selected_need_type,
-        temp_urgency_level=existing_state.get("temp_urgency_level", ""),
+        temp_urgency_level="",
+        temp_job_target=existing_state.get("temp_job_target", ""),
         temp_residence_card_image_url=existing_state.get("temp_residence_card_image_url", ""),
         trace_id=trace_id,
     )
@@ -708,6 +774,109 @@ def handle_need_type_selection(
         f"next_state={STATE_AWAITING_URGENCY}"
     )
     return line_reply(reply_token, build_urgency_menu_text(), trace_id)
+
+
+def handle_urgency_selection(
+    user_id: str,
+    scope_key: str,
+    input_text: str,
+    reply_token: str,
+    trace_id: str,
+) -> Tuple[bool, int]:
+    selected_urgency = safe_str(input_text)
+
+    if not is_valid_urgency_level(selected_urgency):
+        logger.info(
+            f"[{trace_id}] URGENCY_INVALID input={json.dumps(selected_urgency, ensure_ascii=False)}"
+        )
+        text = (
+            "❌ Mã mức độ gấp không hợp lệ.\n"
+            "Vui lòng gửi đúng 1 mã:\n\n"
+            "- urgent\n"
+            "- soon\n"
+            "- normal"
+        )
+        return line_reply(reply_token, text, trace_id)
+
+    existing_state = get_runtime_state(user_id, scope_key, trace_id)
+    current_need_type = safe_str(existing_state.get("temp_need_type"))
+
+    if current_need_type == "taiwan_job":
+        next_state = STATE_AWAITING_JOB_TARGET
+        reply_text = build_job_target_menu_text()
+    elif current_need_type in DIRECT_ARC_NEED_TYPES:
+        next_state = STATE_AWAITING_RESIDENCE_CARD
+        reply_text = build_request_residence_card_text()
+    else:
+        next_state = STATE_AWAITING_RESIDENCE_CARD
+        reply_text = build_request_residence_card_text()
+
+    set_runtime_state(
+        user_id=user_id,
+        scope_key=scope_key,
+        current_state=next_state,
+        temp_need_type=current_need_type,
+        temp_urgency_level=selected_urgency,
+        temp_job_target=existing_state.get("temp_job_target", ""),
+        temp_residence_card_image_url=existing_state.get("temp_residence_card_image_url", ""),
+        trace_id=trace_id,
+    )
+
+    logger.info(
+        f"[{trace_id}] URGENCY_ACCEPTED selected={selected_urgency} "
+        f"need_type={current_need_type} next_state={next_state}"
+    )
+    return line_reply(reply_token, reply_text, trace_id)
+
+
+def handle_job_target_selection(
+    user_id: str,
+    scope_key: str,
+    input_text: str,
+    reply_token: str,
+    trace_id: str,
+) -> Tuple[bool, int]:
+    selected_job_target = safe_str(input_text)
+
+    if not is_valid_job_target(selected_job_target):
+        logger.info(
+            f"[{trace_id}] JOB_TARGET_INVALID input={json.dumps(selected_job_target, ensure_ascii=False)}"
+        )
+        text = (
+            "❌ Mã loại nhu cầu tìm việc không hợp lệ.\n"
+            "Vui lòng gửi đúng 1 mã:\n\n"
+            "- job_for_overseas\n"
+            "- job_in_taiwan"
+        )
+        return line_reply(reply_token, text, trace_id)
+
+    existing_state = get_runtime_state(user_id, scope_key, trace_id)
+    current_need_type = safe_str(existing_state.get("temp_need_type"))
+    current_urgency = safe_str(existing_state.get("temp_urgency_level"))
+
+    if selected_job_target == "job_for_overseas":
+        next_state = STATE_AWAITING_CV_FORM
+        reply_text = build_request_cv_form_text()
+    else:
+        next_state = STATE_AWAITING_RESIDENCE_CARD
+        reply_text = build_request_residence_card_text()
+
+    set_runtime_state(
+        user_id=user_id,
+        scope_key=scope_key,
+        current_state=next_state,
+        temp_need_type=current_need_type,
+        temp_urgency_level=current_urgency,
+        temp_job_target=selected_job_target,
+        temp_residence_card_image_url=existing_state.get("temp_residence_card_image_url", ""),
+        trace_id=trace_id,
+    )
+
+    logger.info(
+        f"[{trace_id}] JOB_TARGET_ACCEPTED selected={selected_job_target} "
+        f"need_type={current_need_type} next_state={next_state}"
+    )
+    return line_reply(reply_token, reply_text, trace_id)
 
 # =========================================================
 # COMMAND HELPERS
@@ -733,7 +902,7 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-need-type-selection",
+        "service": "line-bot-render-phase1-job-branching",
         "app_version": APP_VERSION,
         "time": now_tw_iso(),
         "ready": ready,
@@ -751,7 +920,8 @@ def health():
             "worker_entry_command": WORKER_ENTRY_COMMAND,
             "worker_entry_enabled": True,
             "need_type_selection_enabled": True,
-            "urgency_menu_enabled": True,
+            "urgency_selection_enabled": True,
+            "job_target_selection_enabled": True,
         }
     }), 200 if ready else 503
 
@@ -858,9 +1028,46 @@ def callback():
 
     if message_type == "image":
         logger.info(f"[{trace_id}] IMAGE_INPUT current_state={current_state}")
+
+        if current_state == STATE_AWAITING_RESIDENCE_CARD:
+            text = (
+                "✅ Đã nhận tín hiệu ảnh thẻ cư trú.\n"
+                "Bước lưu ảnh vào hệ thống sẽ được bật ở pha kế tiếp.\n"
+                "Hiện tại anh/chị chờ hướng dẫn tiếp theo."
+            )
+            reply_ok, reply_ms = line_reply(reply_token, text, trace_id)
+            logger.info(f"[{trace_id}] RESIDENCE_CARD_IMAGE_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="residence_card_image_placeholder",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
+
+        if current_state == STATE_AWAITING_CV_FORM:
+            text = (
+                "✅ Đã nhận tín hiệu form/CV.\n"
+                "Bước lưu form vào hệ thống sẽ được bật ở pha kế tiếp.\n"
+                "Hiện tại anh/chị chờ hướng dẫn tiếp theo."
+            )
+            reply_ok, reply_ms = line_reply(reply_token, text, trace_id)
+            logger.info(f"[{trace_id}] CV_FORM_IMAGE_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="cv_form_image_placeholder",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
+
         reply_ok, reply_ms = line_reply(
             reply_token,
-            "Bước này chưa bật nhận ảnh hoàn chỉnh. Hiện tại hãy dùng /worker rồi chọn nhu cầu trước.",
+            "Bước này chưa bật nhận ảnh hoàn chỉnh. Hiện tại hãy dùng /worker rồi làm theo từng bước.",
             trace_id,
         )
         logger.info(f"[{trace_id}] IMAGE_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
@@ -1083,6 +1290,78 @@ def callback():
         log_total_latency(
             trace_id=trace_id,
             route_name="need_type_selection",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    if current_state == STATE_AWAITING_URGENCY:
+        reply_ok, reply_ms = handle_urgency_selection(
+            user_id=user_id,
+            scope_key=scope_key,
+            input_text=input_text,
+            reply_token=reply_token,
+            trace_id=trace_id,
+        )
+        logger.info(f"[{trace_id}] URGENCY_SELECTION_REPLY reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="urgency_selection",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    if current_state == STATE_AWAITING_JOB_TARGET:
+        reply_ok, reply_ms = handle_job_target_selection(
+            user_id=user_id,
+            scope_key=scope_key,
+            input_text=input_text,
+            reply_token=reply_token,
+            trace_id=trace_id,
+        )
+        logger.info(f"[{trace_id}] JOB_TARGET_SELECTION_REPLY reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="job_target_selection",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    if current_state == STATE_AWAITING_CV_FORM:
+        reply_ok, reply_ms = line_reply(
+            reply_token,
+            "Hệ thống đang chờ form/CV. Anh/chị có thể gửi ảnh form hoặc nội dung text theo mẫu đã hướng dẫn.",
+            trace_id,
+        )
+        logger.info(f"[{trace_id}] AWAITING_CV_FORM_TEXT_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="awaiting_cv_form_text_placeholder",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    if current_state == STATE_AWAITING_RESIDENCE_CARD:
+        reply_ok, reply_ms = line_reply(
+            reply_token,
+            "Hệ thống đang chờ ảnh thẻ cư trú / ARC. Vui lòng gửi ảnh rõ mặt trước.",
+            trace_id,
+        )
+        logger.info(f"[{trace_id}] AWAITING_RESIDENCE_CARD_TEXT_PLACEHOLDER reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="awaiting_residence_card_text_placeholder",
             total_ms=ms_since(total_started),
             source_type=source_type,
             group_id=group_id,
