@@ -37,31 +37,27 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 
-# Giữ env này để sẵn cho phase sau, nhưng KHÔNG đọc Sheet trong hot path /callback
+# Giữ env này cho phase sau, KHÔNG đọc Sheet trong hot path /callback
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
 USER_STATE_SHEET_NAME = "user_state"
 
-# ADMIN
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").strip()
 ADMIN_LIST = [x.strip() for x in ADMIN_IDS.split(",") if x.strip()]
 
-# ANTI-ABUSE FOR !ALL
 ALL_COOLDOWN_SECONDS = int(os.getenv("ALL_COOLDOWN_SECONDS", "15").strip() or "15")
 MAX_ALL_CHARS = int(os.getenv("MAX_ALL_CHARS", "500").strip() or "500")
 
-# RUNTIME STATE
 RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 
-# I18N / LANGUAGE
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__I18N_JOB_BRANCHING_V6"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__ROOTCAUSE_PATCHED_V7"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -78,7 +74,6 @@ LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 
 WORKER_ENTRY_COMMAND = "/worker"
-
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 
 # =========================================================
@@ -185,6 +180,7 @@ I18N = {
         "cv.siblings_count": "- Số anh chị em",
         "cv.birth_order": "- Xếp thứ mấy trong gia đình",
         "cv.phone_overseas": "- Số điện thoại của người ứng tuyển",
+        "cv.job_preference": "- Nguyện vọng đơn hàng (vị trí nhà máy, ngành nghề, tăng ca nhiều hay ít)",
         "cv.work_exp_vn": "- Kinh nghiệm làm việc tại Việt Nam",
         "cv.send_hint": "Có thể gửi ảnh form hoặc nội dung text.",
         "invalid_need_type": "❌ Mã nhu cầu không hợp lệ.\nVui lòng gửi đúng 1 mã trong danh sách dưới đây:",
@@ -195,6 +191,7 @@ I18N = {
         "cv_form_image_received": "✅ Đã nhận tín hiệu form/CV.\nBước lưu form vào hệ thống sẽ được bật ở pha kế tiếp.\nHiện tại anh/chị chờ hướng dẫn tiếp theo.",
         "arc_image_received": "✅ Đã nhận tín hiệu ảnh thẻ cư trú.\nBước lưu ảnh vào hệ thống sẽ được bật ở pha kế tiếp.\nHiện tại anh/chị chờ hướng dẫn tiếp theo.",
         "generic_image_placeholder": "Bước này chưa bật nhận ảnh hoàn chỉnh. Hiện tại hãy dùng /worker rồi làm theo từng bước.",
+        "resume_flow_prompt": "⚠️ Hệ thống chưa ở đúng bước hiện tại.\nVui lòng bắt đầu lại bằng /worker rồi làm theo từng bước.",
         "not_authorized": "❌ Không có quyền",
         "all_need_content": "⚠️ !all cần nội dung",
         "all_too_long": "⚠️ !all tối đa {max_chars} ký tự",
@@ -240,6 +237,7 @@ I18N = {
         "cv.siblings_count": "- Jumlah saudara",
         "cv.birth_order": "- Anak ke berapa",
         "cv.phone_overseas": "- Nomor telepon pelamar",
+        "cv.job_preference": "- Preferensi lowongan (posisi pabrik, bidang kerja, lembur banyak atau sedikit)",
         "cv.work_exp_vn": "- Pengalaman kerja di Vietnam / negara asal",
         "cv.send_hint": "Bisa kirim foto form atau isi dalam bentuk teks.",
         "invalid_need_type": "❌ Kode kebutuhan tidak valid.\nSilakan kirim 1 kode yang benar dari daftar berikut:",
@@ -250,6 +248,7 @@ I18N = {
         "cv_form_image_received": "✅ Sinyal form/CV sudah diterima.\nLangkah penyimpanan form akan diaktifkan di fase berikutnya.\nSaat ini silakan tunggu instruksi berikutnya.",
         "arc_image_received": "✅ Sinyal foto kartu ARC sudah diterima.\nLangkah penyimpanan gambar akan diaktifkan di fase berikutnya.\nSaat ini silakan tunggu instruksi berikutnya.",
         "generic_image_placeholder": "Fitur penerimaan gambar penuh belum diaktifkan. Saat ini silakan gunakan /worker lalu ikuti langkah demi langkah.",
+        "resume_flow_prompt": "⚠️ Sistem belum berada di langkah yang benar.\nSilakan mulai lagi dengan /worker lalu ikuti langkah demi langkah.",
         "not_authorized": "❌ Tidak punya izin",
         "all_need_content": "⚠️ !all harus ada isi",
         "all_too_long": "⚠️ !all maksimal {max_chars} karakter",
@@ -295,6 +294,7 @@ I18N = {
         "cv.siblings_count": "- จำนวนพี่น้อง",
         "cv.birth_order": "- เป็นลูกคนที่เท่าไร",
         "cv.phone_overseas": "- หมายเลขโทรศัพท์ของผู้สมัคร",
+        "cv.job_preference": "- ความต้องการงาน (ตำแหน่งโรงงาน, สายงาน, ล่วงเวลามากหรือน้อย)",
         "cv.work_exp_vn": "- ประสบการณ์ทำงานในเวียดนาม / ประเทศต้นทาง",
         "cv.send_hint": "สามารถส่งเป็นรูปแบบฟอร์มหรือข้อความก็ได้",
         "invalid_need_type": "❌ รหัสความต้องการไม่ถูกต้อง\nกรุณาส่ง 1 รหัสที่ถูกต้องจากรายการด้านล่าง:",
@@ -305,6 +305,7 @@ I18N = {
         "cv_form_image_received": "✅ ได้รับสัญญาณ form/CV แล้ว\nขั้นตอนบันทึกฟอร์มจะเปิดในเฟสถัดไป\nขณะนี้กรุณารอคำแนะนำต่อไป",
         "arc_image_received": "✅ ได้รับสัญญาณรูปบัตรพำนักแล้ว\nขั้นตอนบันทึกรูปจะเปิดในเฟสถัดไป\nขณะนี้กรุณารอคำแนะนำต่อไป",
         "generic_image_placeholder": "ขั้นตอนนี้ยังไม่เปิดรับรูปแบบสมบูรณ์ ขณะนี้กรุณาใช้ /worker แล้วทำตามทีละขั้นตอน",
+        "resume_flow_prompt": "⚠️ ระบบยังไม่อยู่ในขั้นตอนที่ถูกต้อง\nกรุณาเริ่มใหม่ด้วย /worker แล้วทำตามทีละขั้นตอน",
         "not_authorized": "❌ ไม่มีสิทธิ์",
         "all_need_content": "⚠️ !all ต้องมีเนื้อหา",
         "all_too_long": "⚠️ !all ได้สูงสุด {max_chars} ตัวอักษร",
@@ -321,7 +322,7 @@ RUNTIME_USER_STATE: Dict[str, Dict[str, str]] = {}
 USER_LANGUAGE_MAP: Dict[str, str] = {}
 
 # =========================================================
-# STARTUP VALIDATION
+# STARTUP / VALIDATION
 # =========================================================
 def load_user_language_map() -> Dict[str, str]:
     if not USER_LANGUAGE_MAP_JSON:
@@ -352,6 +353,14 @@ def normalize_language_group(value: str) -> str:
         return lang
     fallback = DEFAULT_LANGUAGE_GROUP if DEFAULT_LANGUAGE_GROUP in SUPPORTED_LANGUAGE_GROUPS else "vi"
     return fallback
+
+
+def is_runtime_ready() -> bool:
+    return all([
+        bool(LINE_CHANNEL_ACCESS_TOKEN),
+        bool(LINE_CHANNEL_SECRET),
+        bool(GOOGLE_API_KEY),
+    ])
 
 
 def validate_startup_config() -> None:
@@ -947,6 +956,7 @@ def build_request_cv_form_text(language_group: str) -> str:
         i18n_text(language_group, "cv.siblings_count"),
         i18n_text(language_group, "cv.birth_order"),
         i18n_text(language_group, "cv.phone_overseas"),
+        i18n_text(language_group, "cv.job_preference"),
         i18n_text(language_group, "cv.work_exp_vn"),
         "",
         i18n_text(language_group, "cv.send_hint"),
@@ -987,6 +997,17 @@ def build_invalid_job_target_text(language_group: str) -> str:
         "- job_for_overseas",
         "- job_in_taiwan",
     ])
+
+
+def is_midflow_code_without_context(input_text: str) -> bool:
+    raw = safe_str(input_text)
+    if raw in NEED_TYPE_V1:
+        return True
+    if normalize_urgency_input(raw) in URGENCY_LEVEL_V1:
+        return True
+    if raw in JOB_TARGET_V1:
+        return True
+    return False
 
 
 def handle_worker_entry(
@@ -1158,7 +1179,7 @@ def health():
     ready = is_runtime_ready()
     return jsonify({
         "ok": ready,
-        "service": "line-bot-render-phase1-i18n-job-branching",
+        "service": "line-bot-render-phase1-rootcause-patched",
         "app_version": APP_VERSION,
         "time": now_tw_iso(),
         "ready": ready,
@@ -1180,19 +1201,12 @@ def health():
             "urgency_numeric_alias_enabled": True,
             "job_target_selection_enabled": True,
             "language_personalization_enabled": True,
+            "midflow_idle_guard_enabled": True,
             "supported_language_groups": sorted(list(SUPPORTED_LANGUAGE_GROUPS)),
             "default_language_group": normalize_language_group(DEFAULT_LANGUAGE_GROUP),
             "user_language_map_size": len(USER_LANGUAGE_MAP),
         }
     }), 200 if ready else 503
-
-
-def is_runtime_ready() -> bool:
-    return all([
-        bool(LINE_CHANNEL_ACCESS_TOKEN),
-        bool(LINE_CHANNEL_SECRET),
-        bool(GOOGLE_API_KEY),
-    ])
 
 # =========================================================
 # WEBHOOK
@@ -1526,7 +1540,7 @@ def callback():
         return "OK", 200
 
     # =====================================================
-    # PHASE 1: WORKER ENTRY
+    # PHASE 1 FLOW
     # =====================================================
     if is_worker_entry_command(input_text):
         reply_ok, reply_ms = handle_worker_entry(
@@ -1634,6 +1648,28 @@ def callback():
         log_total_latency(
             trace_id=trace_id,
             route_name="awaiting_residence_card_text_placeholder",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    # =====================================================
+    # ROOT-CAUSE PATCH:
+    # Nếu user gửi mã giữa chừng khi state đã rơi về idle
+    # thì không dịch thường; bắt quay lại /worker
+    # =====================================================
+    if current_state == STATE_IDLE and is_midflow_code_without_context(input_text):
+        reply_ok, reply_ms = line_reply(
+            reply_token,
+            i18n_text(language_group, "resume_flow_prompt"),
+            trace_id,
+        )
+        logger.info(f"[{trace_id}] IDLE_MIDFLOW_GUARD reply_ok={reply_ok} reply_ms={reply_ms}")
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="idle_midflow_guard",
             total_ms=ms_since(total_started),
             source_type=source_type,
             group_id=group_id,
