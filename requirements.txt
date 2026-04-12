@@ -1,5 +1,5 @@
 flask
 line-bot-sdk==3.1.0
 gspread
-oauth2client
+google-auth
 gunicorn
