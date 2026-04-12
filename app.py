@@ -8,9 +8,11 @@ import time
 import uuid
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, List
 
 import requests
+import gspread
+from google.oauth2.service_account import Credentials
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
@@ -57,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__ROOTCAUSE_PATCHED_V7"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__ADS_ENTRY_V1_PATCHED_V8"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -74,7 +76,27 @@ LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 
 WORKER_ENTRY_COMMAND = "/worker"
+ADS_ENTRY_COMMAND = "/ads"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
+
+ADS_CATALOG_SHEET_NAME = "ads_catalog"
+ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
+ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
+
+ADS_TYPE_JOB_OPENING = "job_opening"
+ADS_TYPE_SERVICE_OFFER = "service_offer"
+
+VISIBILITY_SAME_LANGUAGE_ONLY = "same_language_only"
+VISIBILITY_CROSS_LANGUAGE_ALLOWED = "cross_language_allowed"
+VISIBILITY_VIEWER_LOCALIZED = "viewer_localized"
+
+ACTIVE_AD_STATUSES = {"active"}
+SUPPORTED_AD_TYPES = {ADS_TYPE_JOB_OPENING, ADS_TYPE_SERVICE_OFFER}
+SUPPORTED_VISIBILITY_POLICIES = {
+    VISIBILITY_SAME_LANGUAGE_ONLY,
+    VISIBILITY_CROSS_LANGUAGE_ALLOWED,
+    VISIBILITY_VIEWER_LOCALIZED,
+}
 
 # =========================================================
 # PHASE 1 STATE MACHINE
@@ -1156,6 +1178,253 @@ def handle_job_target_selection(
     return line_reply(reply_token, reply_text, trace_id)
 
 # =========================================================
+# ADS SHEET HELPERS
+# =========================================================
+_GSPREAD_CLIENT = None
+_ADS_CATALOG_CACHE = {
+    "rows": [],
+    "loaded_at_ts": 0,
+}
+
+
+def is_sheet_env_ready() -> bool:
+    return bool(GOOGLE_SERVICE_ACCOUNT_JSON) and bool(PHASE1_SPREADSHEET_NAME)
+
+
+def get_google_credentials(trace_id: str):
+    if not GOOGLE_SERVICE_ACCOUNT_JSON:
+        logger.error(f"[{trace_id}] GSHEET_CREDENTIALS_MISSING")
+        return None
+
+    try:
+        info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+        scopes = [
+            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/drive.readonly",
+        ]
+        return Credentials.from_service_account_info(info, scopes=scopes)
+    except Exception as e:
+        logger.exception(f"[{trace_id}] GSHEET_CREDENTIALS_INVALID exception={type(e).__name__}:{e}")
+        return None
+
+
+def get_gspread_client(trace_id: str):
+    global _GSPREAD_CLIENT
+
+    if _GSPREAD_CLIENT is not None:
+        return _GSPREAD_CLIENT
+
+    credentials = get_google_credentials(trace_id)
+    if not credentials:
+        return None
+
+    try:
+        _GSPREAD_CLIENT = gspread.authorize(credentials)
+        logger.info(f"[{trace_id}] GSHEET_CLIENT_READY")
+        return _GSPREAD_CLIENT
+    except Exception as e:
+        logger.exception(f"[{trace_id}] GSHEET_CLIENT_INIT_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
+def open_ads_catalog_worksheet(trace_id: str):
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        worksheet = spreadsheet.worksheet(ADS_CATALOG_SHEET_NAME)
+        return worksheet
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
+def normalize_ad_type(value: str) -> str:
+    value = safe_str(value).lower()
+    if value in SUPPORTED_AD_TYPES:
+        return value
+    return ""
+
+
+def normalize_visibility_policy(value: str) -> str:
+    value = safe_str(value).lower()
+    if value in SUPPORTED_VISIBILITY_POLICIES:
+        return value
+    return VISIBILITY_SAME_LANGUAGE_ONLY
+
+
+def normalize_ad_status(value: str) -> str:
+    return safe_str(value).lower()
+
+
+def parse_priority(value: str) -> int:
+    raw = safe_str(value)
+    if not raw:
+        return 0
+
+    try:
+        return int(float(raw))
+    except Exception:
+        return 0
+
+
+def parse_sortable_time(value: str) -> str:
+    return safe_str(value) or "9999-12-31T23:59:59+08:00"
+
+
+def is_worker_flow_active(current_state: str) -> bool:
+    return normalize_state_value(current_state) in {
+        STATE_AWAITING_NEED_TYPE,
+        STATE_AWAITING_URGENCY,
+        STATE_AWAITING_JOB_TARGET,
+        STATE_AWAITING_CV_FORM,
+        STATE_AWAITING_RESIDENCE_CARD,
+        STATE_AWAITING_PHONE_NUMBER,
+    }
+
+
+def is_ads_entry_command(input_text: str) -> bool:
+    return safe_str(input_text).lower() == ADS_ENTRY_COMMAND
+
+
+def load_ads_catalog_rows(trace_id: str) -> List[dict]:
+    now_ts = get_now_ts()
+
+    if (
+        _ADS_CATALOG_CACHE["rows"]
+        and now_ts - int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) < ADS_CACHE_TTL_SECONDS
+    ):
+        logger.info(f"[{trace_id}] ADS_CACHE_HIT rows={len(_ADS_CATALOG_CACHE['rows'])}")
+        return _ADS_CATALOG_CACHE["rows"]
+
+    ws = open_ads_catalog_worksheet(trace_id)
+    if not ws:
+        return []
+
+    try:
+        records = ws.get_all_records()
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_SHEET_READ_FAILED exception={type(e).__name__}:{e}")
+        return []
+
+    rows = []
+    for raw in records:
+        row = {
+            "ad_id": safe_str(raw.get("ad_id")),
+            "owner_user_id": safe_str(raw.get("owner_user_id")),
+            "owner_contact_name": safe_str(raw.get("owner_contact_name")),
+            "owner_line_id": safe_str(raw.get("owner_line_id")),
+            "ad_type": normalize_ad_type(raw.get("ad_type")),
+            "author_language_group": normalize_language_group(raw.get("author_language_group")),
+            "visibility_policy": normalize_visibility_policy(raw.get("visibility_policy")),
+            "direct_contact_enabled": safe_str(raw.get("direct_contact_enabled")).lower() == "true",
+            "title_source": safe_str(raw.get("title_source")),
+            "body_source": safe_str(raw.get("body_source")),
+            "status": normalize_ad_status(raw.get("status")),
+            "priority": parse_priority(raw.get("priority")),
+            "start_at": safe_str(raw.get("start_at")),
+            "end_at": safe_str(raw.get("end_at")),
+            "created_at": safe_str(raw.get("created_at")),
+            "updated_at": safe_str(raw.get("updated_at")),
+        }
+
+        if not row["ad_id"]:
+            continue
+        if row["ad_type"] not in SUPPORTED_AD_TYPES:
+            continue
+        if row["status"] not in ACTIVE_AD_STATUSES:
+            continue
+        if not row["title_source"]:
+            continue
+
+        rows.append(row)
+
+    rows.sort(
+        key=lambda item: (
+            -item["priority"],
+            parse_sortable_time(item["start_at"]),
+            parse_sortable_time(item["created_at"]),
+            item["ad_id"],
+        )
+    )
+
+    _ADS_CATALOG_CACHE["rows"] = rows
+    _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
+    logger.info(f"[{trace_id}] ADS_CACHE_REFRESH rows={len(rows)}")
+    return rows
+
+
+def is_ad_visible_to_viewer(ad: dict, viewer_language_group: str) -> bool:
+    ad_type = ad.get("ad_type", "")
+    author_language_group = normalize_language_group(ad.get("author_language_group", ""))
+    visibility_policy = normalize_visibility_policy(ad.get("visibility_policy", ""))
+
+    if ad_type == ADS_TYPE_JOB_OPENING:
+        return viewer_language_group == author_language_group
+
+    if ad_type == ADS_TYPE_SERVICE_OFFER:
+        if visibility_policy == VISIBILITY_SAME_LANGUAGE_ONLY:
+            return viewer_language_group == author_language_group
+        if visibility_policy in {
+            VISIBILITY_CROSS_LANGUAGE_ALLOWED,
+            VISIBILITY_VIEWER_LOCALIZED,
+        }:
+            return True
+
+    return False
+
+
+def get_visible_ads_for_viewer(viewer_language_group: str, trace_id: str) -> List[dict]:
+    all_ads = load_ads_catalog_rows(trace_id)
+    visible_ads = [ad for ad in all_ads if is_ad_visible_to_viewer(ad, viewer_language_group)]
+    logger.info(
+        f"[{trace_id}] ADS_FILTER_DONE viewer_language_group={viewer_language_group} visible_count={len(visible_ads)}"
+    )
+    return visible_ads[:ADS_LIST_LIMIT]
+
+
+def build_ads_entry_text(ads: List[dict], viewer_language_group: str) -> str:
+    if not ads:
+        return (
+            "📢 DANH SÁCH TIN\n"
+            f"Ngôn ngữ hiện tại: {viewer_language_group}\n\n"
+            "Hiện chưa có tin phù hợp.\n"
+            "Vui lòng thử lại sau."
+        )
+
+    service_offer_lines = []
+    job_opening_lines = []
+
+    for idx, ad in enumerate(ads, start=1):
+        line = f"{idx}. [{ad['ad_type']}] {ad['title_source']}"
+        if ad["ad_type"] == ADS_TYPE_SERVICE_OFFER:
+            service_offer_lines.append(line)
+        elif ad["ad_type"] == ADS_TYPE_JOB_OPENING:
+            job_opening_lines.append(line)
+
+    lines = [
+        "📢 DANH SÁCH TIN",
+        f"Ngôn ngữ hiện tại: {viewer_language_group}",
+        "",
+    ]
+
+    if service_offer_lines:
+        lines.append("Dịch vụ / Service Offer:")
+        lines.extend(service_offer_lines)
+        lines.append("")
+
+    if job_opening_lines:
+        lines.append("Việc làm / Job Opening:")
+        lines.extend(job_opening_lines)
+        lines.append("")
+
+    lines.append("Gõ /ads để xem lại danh sách.")
+    return "\n".join(lines).strip()
+
+
+# =========================================================
 # COMMAND HELPERS
 # =========================================================
 def parse_all_command(input_text: str) -> Tuple[bool, str]:
@@ -1195,6 +1464,9 @@ def health():
             "runtime_state_enabled": True,
             "runtime_state_ttl_seconds": RUNTIME_STATE_TTL_SECONDS,
             "worker_entry_command": WORKER_ENTRY_COMMAND,
+            "ads_entry_command": ADS_ENTRY_COMMAND,
+            "ads_catalog_sheet": ADS_CATALOG_SHEET_NAME,
+            "ads_entry_enabled": True,
             "worker_entry_enabled": True,
             "need_type_selection_enabled": True,
             "urgency_selection_enabled": True,
@@ -1204,6 +1476,7 @@ def health():
             "midflow_idle_guard_enabled": True,
             "supported_language_groups": sorted(list(SUPPORTED_LANGUAGE_GROUPS)),
             "default_language_group": normalize_language_group(DEFAULT_LANGUAGE_GROUP),
+            "sheet_env_ready_for_ads": is_sheet_env_ready(),
             "user_language_map_size": len(USER_LANGUAGE_MAP),
         }
     }), 200 if ready else 503
@@ -1388,6 +1661,68 @@ def callback():
         log_total_latency(
             trace_id=trace_id,
             route_name="skip_empty_text",
+            total_ms=ms_since(total_started),
+            source_type=source_type,
+            group_id=group_id,
+            room_id=room_id
+        )
+        return "OK", 200
+
+    # =====================================================
+    # /ADS ENTRY V1
+    # =====================================================
+    if is_ads_entry_command(input_text):
+        if is_worker_flow_active(current_state):
+            reply_ok, reply_ms = line_reply(
+                reply_token,
+                "Bạn đang ở giữa luồng /worker. Hãy hoàn tất hoặc quay lại /worker trước khi xem /ads.",
+                trace_id,
+            )
+            logger.info(
+                f"[{trace_id}] ADS_ENTRY_BLOCKED_BY_WORKER current_state={current_state} "
+                f"reply_ok={reply_ok} reply_ms={reply_ms}"
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="ads_entry_blocked_by_worker",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
+
+        if not is_sheet_env_ready():
+            reply_ok, reply_ms = line_reply(
+                reply_token,
+                "Tạm thời chưa bật dữ liệu quảng cáo. Thiếu kết nối Google Sheets.",
+                trace_id,
+            )
+            logger.info(
+                f"[{trace_id}] ADS_ENTRY_SHEET_ENV_NOT_READY reply_ok={reply_ok} reply_ms={reply_ms}"
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="ads_entry_sheet_env_not_ready",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
+
+        viewer_language_group = language_group
+        visible_ads = get_visible_ads_for_viewer(viewer_language_group, trace_id)
+        ads_text = build_ads_entry_text(visible_ads, viewer_language_group)
+
+        reply_ok, reply_ms = line_reply(reply_token, ads_text, trace_id)
+        logger.info(
+            f"[{trace_id}] ADS_ENTRY_OK viewer_language_group={viewer_language_group} "
+            f"ads_count={len(visible_ads)} reply_ok={reply_ok} reply_ms={reply_ms}"
+        )
+        log_total_latency(
+            trace_id=trace_id,
+            route_name="ads_entry_ok",
             total_ms=ms_since(total_started),
             source_type=source_type,
             group_id=group_id,
