@@ -59,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_CONTACT_OPTIONS_FIXED_V16"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_CLICK_LOG_V17"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -965,6 +965,72 @@ def log_total_latency(trace_id: str, route_name: str, total_ms: int, source_type
         f"group_id={group_id} "
         f"room_id={room_id}"
     )
+
+
+# =========================================================
+# ADS CLICK LOG HELPERS
+# =========================================================
+_ADS_CLICK_LOG_WS = None
+
+
+def open_ads_click_log_worksheet(trace_id: str):
+    global _ADS_CLICK_LOG_WS
+
+    if _ADS_CLICK_LOG_WS is not None:
+        return _ADS_CLICK_LOG_WS
+
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        _ADS_CLICK_LOG_WS = spreadsheet.worksheet("ads_click_log")
+        logger.info(f"[{trace_id}] ADS_CLICK_LOG_SHEET_READY")
+        return _ADS_CLICK_LOG_WS
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_CLICK_LOG_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
+def make_click_id() -> str:
+    return f"clk_{uuid.uuid4().hex[:12]}"
+
+
+def append_ads_click_log(
+    ad_id: str,
+    viewer_user_id: str,
+    owner_user_id: str,
+    action_type: str,
+    language_group: str,
+    trace_id: str,
+) -> bool:
+    ws = open_ads_click_log_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] ADS_CLICK_LOG_APPEND_SKIPPED reason=worksheet_unavailable")
+        return False
+
+    row = [
+        make_click_id(),
+        safe_str(ad_id),
+        safe_str(viewer_user_id),
+        safe_str(owner_user_id),
+        safe_str(action_type),
+        normalize_language_group(language_group),
+        now_tw_iso(),
+    ]
+
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        logger.info(
+            f"[{trace_id}] ADS_CLICK_LOG_APPEND_OK "
+            f"ad_id={ad_id} viewer_user_id={viewer_user_id} "
+            f"owner_user_id={owner_user_id} action_type={action_type}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_CLICK_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
 
 # =========================================================
 # PHASE 1 WORKER FLOW HELPERS
@@ -2038,6 +2104,16 @@ def callback():
             ads_text = "Tạm thời chưa đọc được dữ liệu quảng cáo. Vui lòng thử lại sau."
 
         reply_ok, reply_ms = line_reply(reply_token, ads_text, trace_id)
+        if reply_ok and ads_read_ok:
+            for ad in visible_ads:
+                append_ads_click_log(
+                    ad_id=safe_str(ad.get("ad_id")),
+                    viewer_user_id=user_id,
+                    owner_user_id=safe_str(ad.get("owner_user_id")),
+                    action_type="ads_list_view",
+                    language_group=viewer_language_group,
+                    trace_id=trace_id,
+                )
         logger.info(
             f"[{trace_id}] ADS_ENTRY_OK viewer_language_group={viewer_language_group} "
             f"ads_count={len(visible_ads)} ads_read_ok={ads_read_ok} reply_ok={reply_ok} reply_ms={reply_ms}"
@@ -2110,6 +2186,15 @@ def callback():
                     i18n_text(language_group, "ads_leave_phone_prompt"),
                     trace_id,
                 )
+                if reply_ok:
+                    append_ads_click_log(
+                        ad_id=safe_str(selected_ad.get("ad_id")),
+                        viewer_user_id=user_id,
+                        owner_user_id=safe_str(selected_ad.get("owner_user_id")),
+                        action_type="contact_phone_request",
+                        language_group=language_group,
+                        trace_id=trace_id,
+                    )
                 logger.info(
                     f"[{trace_id}] ADS_CONTACT_OPTION_PHONE ad_id={safe_str(selected_ad.get('ad_id'))} "
                     f"reply_ok={reply_ok} reply_ms={reply_ms}"
@@ -2132,6 +2217,15 @@ def callback():
                             f"LINE ID: {safe_str(selected_ad.get('owner_line_id'))}"
                         )
                         reply_ok, reply_ms = line_reply(reply_token, reply_text, trace_id)
+                        if reply_ok:
+                            append_ads_click_log(
+                                ad_id=safe_str(selected_ad.get("ad_id")),
+                                viewer_user_id=user_id,
+                                owner_user_id=safe_str(selected_ad.get("owner_user_id")),
+                                action_type="contact_direct_open",
+                                language_group=language_group,
+                                trace_id=trace_id,
+                            )
                         logger.info(
                             f"[{trace_id}] ADS_CONTACT_OPTION_DIRECT_OK ad_id={safe_str(selected_ad.get('ad_id'))} "
                             f"reply_ok={reply_ok} reply_ms={reply_ms}"
@@ -2243,6 +2337,15 @@ def callback():
                 set_ads_detail_cache(scope_key, selected_ad, viewer_language_group, trace_id)
                 detail_text = build_ads_detail_text(selected_ad, viewer_language_group)
                 reply_ok, reply_ms = line_reply(reply_token, detail_text, trace_id)
+                if reply_ok:
+                    append_ads_click_log(
+                        ad_id=safe_str(selected_ad.get("ad_id")),
+                        viewer_user_id=user_id,
+                        owner_user_id=safe_str(selected_ad.get("owner_user_id")),
+                        action_type="ads_detail_view",
+                        language_group=viewer_language_group,
+                        trace_id=trace_id,
+                    )
                 logger.info(
                     f"[{trace_id}] ADS_DETAIL_OK selection={input_text} ad_id={selected_ad.get('ad_id','')} "
                     f"reply_ok={reply_ok} reply_ms={reply_ms}"
