@@ -1984,6 +1984,185 @@ def callback():
         return "OK", 200
 
     # =====================================================
+    # ADS CONTACT OPTIONS V1
+    # =====================================================
+    if current_state in {STATE_IDLE, STATE_CASE_COMPLETED}:
+        cached_ads_detail = get_ads_detail_cache(scope_key, trace_id)
+        if cached_ads_detail and cached_ads_detail.get("awaiting_phone"):
+            set_ads_detail_awaiting_phone(scope_key, False, trace_id)
+            reply_ok, reply_ms = line_reply(
+                reply_token,
+                i18n_text(language_group, "ads_phone_received"),
+                trace_id,
+            )
+            logger.info(
+                f"[{trace_id}] ADS_CONTACT_PHONE_RECEIVED ad_id={safe_str(cached_ads_detail.get('ad_id'))} "
+                f"reply_ok={reply_ok} reply_ms={reply_ms}"
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="ads_contact_phone_received",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
+
+        if cached_ads_detail and is_contact_option_input(input_text):
+            selected_ad = get_ad_by_id(safe_str(cached_ads_detail.get("ad_id")), trace_id)
+            if not selected_ad:
+                clear_ads_detail_cache(scope_key, trace_id)
+                reply_ok, reply_ms = line_reply(
+                    reply_token,
+                    "Không tìm thấy tin tương ứng. Gõ /ads để xem lại danh sách.",
+                    trace_id,
+                )
+                logger.info(
+                    f"[{trace_id}] ADS_CONTACT_CONTEXT_INVALID ad_id={safe_str(cached_ads_detail.get('ad_id'))} "
+                    f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_contact_context_invalid",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            ad_type = safe_str(selected_ad.get("ad_type"))
+
+            if input_text == "1":
+                set_ads_detail_awaiting_phone(scope_key, True, trace_id)
+                reply_ok, reply_ms = line_reply(
+                    reply_token,
+                    i18n_text(language_group, "ads_leave_phone_prompt"),
+                    trace_id,
+                )
+                logger.info(
+                    f"[{trace_id}] ADS_CONTACT_OPTION_PHONE ad_id={safe_str(selected_ad.get('ad_id'))} "
+                    f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_contact_option_phone",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            if input_text == "2":
+                if ad_type == ADS_TYPE_SERVICE_OFFER:
+                    if bool(selected_ad.get("direct_contact_enabled")) and safe_str(selected_ad.get("owner_line_id")):
+                        reply_text = (
+                            "Liên hệ trực tiếp người đăng tin:\n"
+                            f"LINE ID: {safe_str(selected_ad.get('owner_line_id'))}"
+                        )
+                        reply_ok, reply_ms = line_reply(reply_token, reply_text, trace_id)
+                        logger.info(
+                            f"[{trace_id}] ADS_CONTACT_OPTION_DIRECT_OK ad_id={safe_str(selected_ad.get('ad_id'))} "
+                            f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                        )
+                        log_total_latency(
+                            trace_id=trace_id,
+                            route_name="ads_contact_option_direct_ok",
+                            total_ms=ms_since(total_started),
+                            source_type=source_type,
+                            group_id=group_id,
+                            room_id=room_id
+                        )
+                        return "OK", 200
+
+                    reply_ok, reply_ms = line_reply(
+                        reply_token,
+                        i18n_text(language_group, "ads_direct_contact_unavailable"),
+                        trace_id,
+                    )
+                    logger.info(
+                        f"[{trace_id}] ADS_CONTACT_OPTION_DIRECT_UNAVAILABLE ad_id={safe_str(selected_ad.get('ad_id'))} "
+                        f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                    )
+                    log_total_latency(
+                        trace_id=trace_id,
+                        route_name="ads_contact_option_direct_unavailable",
+                        total_ms=ms_since(total_started),
+                        source_type=source_type,
+                        group_id=group_id,
+                        room_id=room_id
+                    )
+                    return "OK", 200
+
+                visible_ads, ads_read_ok = get_visible_ads_for_viewer(language_group, trace_id)
+                if ads_read_ok:
+                    clear_ads_detail_cache(scope_key, trace_id)
+                    set_ads_view_cache(scope_key, language_group, visible_ads, trace_id)
+                    reply_text = build_ads_entry_text(visible_ads, language_group)
+                else:
+                    reply_text = "Tạm thời chưa đọc được dữ liệu quảng cáo. Vui lòng thử lại sau."
+
+                reply_ok, reply_ms = line_reply(reply_token, reply_text, trace_id)
+                logger.info(
+                    f"[{trace_id}] ADS_CONTACT_OPTION_LIST_FROM_JOB ad_id={safe_str(selected_ad.get('ad_id'))} "
+                    f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_contact_option_list_from_job",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            if input_text == "3":
+                visible_ads, ads_read_ok = get_visible_ads_for_viewer(language_group, trace_id)
+                if ads_read_ok:
+                    clear_ads_detail_cache(scope_key, trace_id)
+                    set_ads_view_cache(scope_key, language_group, visible_ads, trace_id)
+                    reply_text = build_ads_entry_text(visible_ads, language_group)
+                else:
+                    reply_text = "Tạm thời chưa đọc được dữ liệu quảng cáo. Vui lòng thử lại sau."
+
+                reply_ok, reply_ms = line_reply(reply_token, reply_text, trace_id)
+                logger.info(
+                    f"[{trace_id}] ADS_CONTACT_OPTION_LIST ad_id={safe_str(selected_ad.get('ad_id'))} "
+                    f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_contact_option_list",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            reply_ok, reply_ms = line_reply(
+                reply_token,
+                i18n_text(language_group, "ads_option_invalid"),
+                trace_id,
+            )
+            logger.info(
+                f"[{trace_id}] ADS_CONTACT_OPTION_INVALID input={json.dumps(input_text, ensure_ascii=False)} "
+                f"reply_ok={reply_ok} reply_ms={reply_ms}"
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="ads_contact_option_invalid",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
+
+    # =====================================================
     # ADS DETAIL V1
     # =====================================================
     if current_state in {STATE_IDLE, STATE_CASE_COMPLETED} and is_ads_numeric_selection(input_text):
@@ -1992,6 +2171,7 @@ def callback():
             selected_ad, resolve_status = resolve_selected_ad_from_cache(scope_key, input_text, trace_id)
             if selected_ad:
                 viewer_language_group = language_group
+                set_ads_detail_cache(scope_key, selected_ad, viewer_language_group, trace_id)
                 detail_text = build_ads_detail_text(selected_ad, viewer_language_group)
                 reply_ok, reply_ms = line_reply(reply_token, detail_text, trace_id)
                 logger.info(
@@ -2292,7 +2472,7 @@ def callback():
     # Nếu user gửi mã giữa chừng khi state đã rơi về idle
     # thì không dịch thường; bắt quay lại /worker
     # =====================================================
-    if current_state == STATE_IDLE and is_midflow_code_without_context(input_text) and not get_ads_view_cache(scope_key, trace_id):
+    if current_state == STATE_IDLE and is_midflow_code_without_context(input_text) and not get_ads_view_cache(scope_key, trace_id) and not get_ads_detail_cache(scope_key, trace_id):
         reply_ok, reply_ms = line_reply(
             reply_token,
             i18n_text(language_group, "resume_flow_prompt"),
