@@ -59,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__ADS_ENTRY_V1_PATCHED_V8"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_MENU_NUMERIC_ALIAS_PATCHED_V11"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -82,6 +82,7 @@ SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 ADS_CATALOG_SHEET_NAME = "ads_catalog"
 ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
 ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
+ADS_VIEW_TTL_SECONDS = int(os.getenv("ADS_VIEW_TTL_SECONDS", "300").strip() or "300")
 
 ADS_TYPE_JOB_OPENING = "job_opening"
 ADS_TYPE_SERVICE_OFFER = "service_offer"
@@ -127,11 +128,75 @@ NEED_TYPE_V1 = {
     "taiwan_job": "taiwan_job",
     "overseas_referral": "overseas_referral",
     "passport": "passport",
-    "arc": "arc",
     "driver_license": "driver_license",
     "airport_taxi": "airport_taxi",
     "motorcycle": "motorcycle",
+    "sim_card": "sim_card",
+    "device_trade": "device_trade",
     "other_service": "other_service",
+    "chinese_course": "chinese_course",
+    "driver_license_course": "driver_license_course",
+    "forklift_course": "forklift_course",
+    "weekend_tour": "weekend_tour",
+    "room_rental": "room_rental",
+    # legacy hidden compatibility
+    "arc": "arc",
+}
+
+NEED_TYPE_MENU_ITEMS = [
+    "transfer_job",
+    "part_time",
+    "taiwan_job",
+    "overseas_referral",
+    "passport",
+    "driver_license",
+    "airport_taxi",
+    "motorcycle",
+    "sim_card",
+    "device_trade",
+    "other_service",
+    "chinese_course",
+    "driver_license_course",
+    "forklift_course",
+    "weekend_tour",
+    "room_rental",
+]
+
+NEED_TYPE_ALIAS_MAP = {
+    "1": "transfer_job",
+    "2": "part_time",
+    "3": "taiwan_job",
+    "4": "overseas_referral",
+    "5": "passport",
+    "6": "driver_license",
+    "7": "airport_taxi",
+    "8": "motorcycle",
+    "9": "sim_card",
+    "10": "device_trade",
+    "11": "other_service",
+    "12": "chinese_course",
+    "13": "driver_license_course",
+    "14": "forklift_course",
+    "15": "weekend_tour",
+    "16": "room_rental",
+    "transfer_job": "transfer_job",
+    "part_time": "part_time",
+    "taiwan_job": "taiwan_job",
+    "overseas_referral": "overseas_referral",
+    "passport": "passport",
+    "driver_license": "driver_license",
+    "airport_taxi": "airport_taxi",
+    "motorcycle": "motorcycle",
+    "sim_card": "sim_card",
+    "device_trade": "device_trade",
+    "other_service": "other_service",
+    "chinese_course": "chinese_course",
+    "driver_license_course": "driver_license_course",
+    "forklift_course": "forklift_course",
+    "weekend_tour": "weekend_tour",
+    "room_rental": "room_rental",
+    # legacy hidden compatibility
+    "arc": "arc",
 }
 
 URGENCY_LEVEL_V1 = {
@@ -165,17 +230,24 @@ DIRECT_ARC_NEED_TYPES = {
 I18N = {
     "vi": {
         "worker_need_title": "📋 YÊU CẦU HỖ TRỢ",
-        "worker_need_intro": "Vui lòng chọn 1 nhu cầu bằng cách gửi đúng mã dưới đây:",
+        "worker_need_intro": "Vui lòng chọn 1 nhu cầu bằng cách gửi đúng mã hoặc số dưới đây:",
         "need.transfer_job": "Chuyển chủ / đổi việc",
         "need.part_time": "Việc làm thêm",
-        "need.taiwan_job": "Việc làm tại Đài Loan",
-        "need.overseas_referral": "Giới thiệu người thân sang Đài",
-        "need.passport": "Hộ chiếu",
+        "need.taiwan_job": "Đơn hàng tại Đài Loan",
+        "need.overseas_referral": "Có bạn, người nhà tìm đơn hàng",
+        "need.passport": "Đổi Hộ chiếu",
         "need.arc": "Thẻ cư trú / ARC",
-        "need.driver_license": "Bằng lái xe",
-        "need.airport_taxi": "Taxi / sân bay",
-        "need.motorcycle": "Xe máy",
+        "need.driver_license": "Đổi Bằng lái xe",
+        "need.airport_taxi": "Dịch vụ Taxi / sân bay",
+        "need.motorcycle": "Bán Xe máy",
         "need.other_service": "Dịch vụ khác",
+        "need.sim_card": "Sim thẻ lên mạng",
+        "need.device_trade": "Mua bán điện thoại + laptop",
+        "need.chinese_course": "Học tiếng Trung giao tiếp",
+        "need.driver_license_course": "Học thi bằng lái xe",
+        "need.forklift_course": "Học thi lái xe nâng",
+        "need.weekend_tour": "Tour du lịch cuối tuần",
+        "need.room_rental": "Thuê phòng trọ",
         "example_send": "Ví dụ gửi:",
         "urgency_title": "⏱️ MỨC ĐỘ GẤP",
         "urgency_intro": "Vui lòng chọn 1 mức độ bằng cách gửi đúng mã hoặc số dưới đây:",
@@ -222,17 +294,24 @@ I18N = {
     },
     "id": {
         "worker_need_title": "📋 PERMINTAAN BANTUAN",
-        "worker_need_intro": "Silakan pilih 1 kebutuhan dengan mengirim kode yang benar di bawah ini:",
+        "worker_need_intro": "Silakan pilih 1 kebutuhan dengan mengirim kode atau nomor yang benar di bawah ini:",
         "need.transfer_job": "Pindah majikan / ganti pekerjaan",
         "need.part_time": "Kerja paruh waktu",
-        "need.taiwan_job": "Pekerjaan di Taiwan",
-        "need.overseas_referral": "Membantu keluarga ke Taiwan",
-        "need.passport": "Paspor",
+        "need.taiwan_job": "Lowongan kerja di Taiwan",
+        "need.overseas_referral": "Ada teman / keluarga yang mencari lowongan",
+        "need.passport": "Ganti paspor",
         "need.arc": "Kartu ARC / izin tinggal",
-        "need.driver_license": "SIM",
-        "need.airport_taxi": "Taksi / bandara",
-        "need.motorcycle": "Sepeda motor",
+        "need.driver_license": "Ganti SIM",
+        "need.airport_taxi": "Layanan taksi / bandara",
+        "need.motorcycle": "Jual sepeda motor",
         "need.other_service": "Layanan lainnya",
+        "need.sim_card": "Kartu SIM internet",
+        "need.device_trade": "Jual beli HP + laptop",
+        "need.chinese_course": "Belajar Mandarin komunikasi",
+        "need.driver_license_course": "Belajar ujian SIM",
+        "need.forklift_course": "Belajar ujian forklift",
+        "need.weekend_tour": "Tur akhir pekan",
+        "need.room_rental": "Sewa kamar",
         "example_send": "Contoh kirim:",
         "urgency_title": "⏱️ TINGKAT KEPENTINGAN",
         "urgency_intro": "Silakan pilih 1 tingkat dengan mengirim kode atau angka yang benar di bawah ini:",
@@ -279,17 +358,24 @@ I18N = {
     },
     "th": {
         "worker_need_title": "📋 คำขอความช่วยเหลือ",
-        "worker_need_intro": "กรุณาเลือก 1 ความต้องการโดยส่งรหัสที่ถูกต้องด้านล่าง:",
+        "worker_need_intro": "กรุณาเลือก 1 ความต้องการโดยส่งรหัสหรือหมายเลขที่ถูกต้องด้านล่าง:",
         "need.transfer_job": "ย้ายนายจ้าง / เปลี่ยนงาน",
         "need.part_time": "งานพาร์ตไทม์",
         "need.taiwan_job": "งานในไต้หวัน",
-        "need.overseas_referral": "แนะนำญาติให้มาทำงานไต้หวัน",
-        "need.passport": "หนังสือเดินทาง",
+        "need.overseas_referral": "มีเพื่อนหรือคนในครอบครัวหางาน",
+        "need.passport": "เปลี่ยนหนังสือเดินทาง",
         "need.arc": "บัตร ARC / บัตรพำนัก",
-        "need.driver_license": "ใบขับขี่",
-        "need.airport_taxi": "แท็กซี่ / สนามบิน",
-        "need.motorcycle": "มอเตอร์ไซค์",
+        "need.driver_license": "เปลี่ยนใบขับขี่",
+        "need.airport_taxi": "บริการแท็กซี่ / สนามบิน",
+        "need.motorcycle": "ขายมอเตอร์ไซค์",
         "need.other_service": "บริการอื่น ๆ",
+        "need.sim_card": "ซิมการ์ดอินเทอร์เน็ต",
+        "need.device_trade": "ซื้อขายโทรศัพท์ + แล็ปท็อป",
+        "need.chinese_course": "เรียนภาษาจีนเพื่อสื่อสาร",
+        "need.driver_license_course": "เรียนสอบใบขับขี่",
+        "need.forklift_course": "เรียนสอบรถยก",
+        "need.weekend_tour": "ทัวร์สุดสัปดาห์",
+        "need.room_rental": "เช่าห้องพัก",
         "example_send": "ตัวอย่างส่ง:",
         "urgency_title": "⏱️ ระดับความเร่งด่วน",
         "urgency_intro": "กรุณาเลือก 1 ระดับโดยส่งรหัสหรือหมายเลขที่ถูกต้องด้านล่าง:",
@@ -436,6 +522,10 @@ validate_startup_config()
 # =========================================================
 def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
+
+
+def now_tw_dt() -> datetime:
+    return datetime.now(TW_TZ)
 
 
 def make_trace_id() -> str:
@@ -882,8 +972,13 @@ def is_worker_entry_command(input_text: str) -> bool:
     return safe_str(input_text).lower() == WORKER_ENTRY_COMMAND
 
 
+def normalize_need_type_input(input_text: str) -> str:
+    raw = safe_str(input_text).lower()
+    return NEED_TYPE_ALIAS_MAP.get(raw, raw)
+
+
 def is_valid_need_type(input_text: str) -> bool:
-    return safe_str(input_text) in NEED_TYPE_V1
+    return normalize_need_type_input(input_text) in NEED_TYPE_V1
 
 
 def is_valid_urgency_level(input_text: str) -> bool:
@@ -895,28 +990,17 @@ def is_valid_job_target(input_text: str) -> bool:
 
 
 def build_worker_need_menu_text(language_group: str) -> str:
-    items = [
-        "transfer_job",
-        "part_time",
-        "taiwan_job",
-        "overseas_referral",
-        "passport",
-        "arc",
-        "driver_license",
-        "airport_taxi",
-        "motorcycle",
-        "other_service",
-    ]
     lines = [
         i18n_text(language_group, "worker_need_title"),
         i18n_text(language_group, "worker_need_intro"),
         ""
     ]
-    for idx, code in enumerate(items, start=1):
+    for idx, code in enumerate(NEED_TYPE_MENU_ITEMS, start=1):
         lines.append(f"{idx}. {code} = {i18n_text(language_group, f'need.{code}')}")
     lines.extend([
         "",
-        f"{i18n_text(language_group, 'example_send')} transfer_job"
+        f"{i18n_text(language_group, 'example_send')} transfer_job hoặc số (1)",
+        "Gửi taiwan_job hoặc có thể gửi bằng số (3)",
     ])
     return "\n".join(lines)
 
@@ -986,20 +1070,13 @@ def build_request_cv_form_text(language_group: str) -> str:
 
 
 def build_invalid_need_type_text(language_group: str) -> str:
-    return "\n".join([
+    lines = [
         i18n_text(language_group, "invalid_need_type"),
         "",
-        "- transfer_job",
-        "- part_time",
-        "- taiwan_job",
-        "- overseas_referral",
-        "- passport",
-        "- arc",
-        "- driver_license",
-        "- airport_taxi",
-        "- motorcycle",
-        "- other_service",
-    ])
+    ]
+    for idx, code in enumerate(NEED_TYPE_MENU_ITEMS, start=1):
+        lines.append(f"- {code} / {idx}")
+    return "\n".join(lines)
 
 
 def build_invalid_urgency_text(language_group: str) -> str:
@@ -1023,7 +1100,7 @@ def build_invalid_job_target_text(language_group: str) -> str:
 
 def is_midflow_code_without_context(input_text: str) -> bool:
     raw = safe_str(input_text)
-    if raw in NEED_TYPE_V1:
+    if normalize_need_type_input(raw) in NEED_TYPE_V1:
         return True
     if normalize_urgency_input(raw) in URGENCY_LEVEL_V1:
         return True
@@ -1064,10 +1141,10 @@ def handle_need_type_selection(
     trace_id: str,
     language_group: str,
 ) -> Tuple[bool, int]:
-    selected_need_type = safe_str(input_text)
+    selected_need_type = normalize_need_type_input(input_text)
 
     if not is_valid_need_type(selected_need_type):
-        logger.info(f"[{trace_id}] NEED_TYPE_INVALID input={json.dumps(selected_need_type, ensure_ascii=False)}")
+        logger.info(f"[{trace_id}] NEED_TYPE_INVALID input={json.dumps(input_text, ensure_ascii=False)}")
         return line_reply(reply_token, build_invalid_need_type_text(language_group), trace_id)
 
     existing_state = get_runtime_state(user_id, scope_key, trace_id)
@@ -1184,11 +1261,96 @@ _GSPREAD_CLIENT = None
 _ADS_CATALOG_CACHE = {
     "rows": [],
     "loaded_at_ts": 0,
+    "last_read_ok": False,
 }
+
+_ADS_VIEW_CACHE: Dict[str, dict] = {}
+
+
+def cleanup_ads_view_cache(now_ts: int) -> None:
+    expired_before = now_ts - max(ADS_VIEW_TTL_SECONDS, 60)
+    stale_keys = [
+        k for k, v in _ADS_VIEW_CACHE.items()
+        if int(v.get("loaded_at_ts", 0) or 0) < expired_before
+    ]
+    for k in stale_keys:
+        _ADS_VIEW_CACHE.pop(k, None)
+
+    if stale_keys:
+        logger.info(f"[ADS_VIEW_CACHE] cleanup removed={len(stale_keys)} remaining={len(_ADS_VIEW_CACHE)}")
+
+
+def clear_ads_view_cache(scope_key: str, trace_id: str = "") -> None:
+    _ADS_VIEW_CACHE.pop(safe_str(scope_key), None)
+    if trace_id:
+        logger.info(f"[{trace_id}] ADS_VIEW_CACHE_CLEAR scope_key={scope_key}")
+
+
+def set_ads_view_cache(scope_key: str, viewer_language_group: str, ads: List[dict], trace_id: str) -> None:
+    now_ts = get_now_ts()
+    cleanup_ads_view_cache(now_ts)
+    _ADS_VIEW_CACHE[safe_str(scope_key)] = {
+        "scope_key": safe_str(scope_key),
+        "viewer_language_group": normalize_language_group(viewer_language_group),
+        "ad_ids": [safe_str(ad.get("ad_id")) for ad in ads if safe_str(ad.get("ad_id"))],
+        "loaded_at_ts": now_ts,
+    }
+    logger.info(
+        f"[{trace_id}] ADS_VIEW_CACHE_SET scope_key={scope_key} "
+        f"viewer_language_group={viewer_language_group} ad_count={len(_ADS_VIEW_CACHE[safe_str(scope_key)]['ad_ids'])}"
+    )
+
+
+def get_ads_view_cache(scope_key: str, trace_id: str) -> Optional[dict]:
+    now_ts = get_now_ts()
+    cleanup_ads_view_cache(now_ts)
+
+    cached = _ADS_VIEW_CACHE.get(safe_str(scope_key))
+    if not cached:
+        logger.info(f"[{trace_id}] ADS_VIEW_CACHE_GET status=MISS scope_key={scope_key}")
+        return None
+
+    logger.info(
+        f"[{trace_id}] ADS_VIEW_CACHE_GET status=HIT scope_key={scope_key} "
+        f"ad_count={len(cached.get('ad_ids', []))}"
+    )
+    return cached
 
 
 def is_sheet_env_ready() -> bool:
     return bool(GOOGLE_SERVICE_ACCOUNT_JSON) and bool(PHASE1_SPREADSHEET_NAME)
+
+
+def parse_bool_flag(value) -> bool:
+    return safe_str(value).lower() in {"true", "1", "yes", "y", "on"}
+
+
+def parse_iso_datetime(value: str) -> Optional[datetime]:
+    raw = safe_str(value)
+    if not raw:
+        return None
+
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(normalized)
+    except Exception:
+        return None
+
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=TW_TZ)
+    return dt.astimezone(TW_TZ)
+
+
+def is_ad_active_in_time_window(start_at: str, end_at: str) -> bool:
+    now_dt = now_tw_dt()
+    start_dt = parse_iso_datetime(start_at)
+    end_dt = parse_iso_datetime(end_at)
+
+    if start_dt and now_dt < start_dt:
+        return False
+    if end_dt and now_dt > end_dt:
+        return False
+    return True
 
 
 def get_google_credentials(trace_id: str):
@@ -1289,27 +1451,37 @@ def is_ads_entry_command(input_text: str) -> bool:
     return safe_str(input_text).lower() == ADS_ENTRY_COMMAND
 
 
-def load_ads_catalog_rows(trace_id: str) -> List[dict]:
+def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
     now_ts = get_now_ts()
 
     if (
-        _ADS_CATALOG_CACHE["rows"]
+        int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) > 0
         and now_ts - int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) < ADS_CACHE_TTL_SECONDS
     ):
-        logger.info(f"[{trace_id}] ADS_CACHE_HIT rows={len(_ADS_CATALOG_CACHE['rows'])}")
-        return _ADS_CATALOG_CACHE["rows"]
+        logger.info(
+            f"[{trace_id}] ADS_CACHE_HIT rows={len(_ADS_CATALOG_CACHE['rows'])} "
+            f"last_read_ok={_ADS_CATALOG_CACHE['last_read_ok']}"
+        )
+        return _ADS_CATALOG_CACHE["rows"], bool(_ADS_CATALOG_CACHE["last_read_ok"])
 
     ws = open_ads_catalog_worksheet(trace_id)
     if not ws:
-        return []
+        _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
+        _ADS_CATALOG_CACHE["rows"] = []
+        _ADS_CATALOG_CACHE["last_read_ok"] = False
+        return [], False
 
     try:
         records = ws.get_all_records()
     except Exception as e:
         logger.exception(f"[{trace_id}] ADS_SHEET_READ_FAILED exception={type(e).__name__}:{e}")
-        return []
+        _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
+        _ADS_CATALOG_CACHE["rows"] = []
+        _ADS_CATALOG_CACHE["last_read_ok"] = False
+        return [], False
 
     rows = []
+    skipped_inactive_time = 0
     for raw in records:
         row = {
             "ad_id": safe_str(raw.get("ad_id")),
@@ -1319,7 +1491,7 @@ def load_ads_catalog_rows(trace_id: str) -> List[dict]:
             "ad_type": normalize_ad_type(raw.get("ad_type")),
             "author_language_group": normalize_language_group(raw.get("author_language_group")),
             "visibility_policy": normalize_visibility_policy(raw.get("visibility_policy")),
-            "direct_contact_enabled": safe_str(raw.get("direct_contact_enabled")).lower() == "true",
+            "direct_contact_enabled": parse_bool_flag(raw.get("direct_contact_enabled")),
             "title_source": safe_str(raw.get("title_source")),
             "body_source": safe_str(raw.get("body_source")),
             "status": normalize_ad_status(raw.get("status")),
@@ -1338,6 +1510,9 @@ def load_ads_catalog_rows(trace_id: str) -> List[dict]:
             continue
         if not row["title_source"]:
             continue
+        if not is_ad_active_in_time_window(row["start_at"], row["end_at"]):
+            skipped_inactive_time += 1
+            continue
 
         rows.append(row)
 
@@ -1352,8 +1527,11 @@ def load_ads_catalog_rows(trace_id: str) -> List[dict]:
 
     _ADS_CATALOG_CACHE["rows"] = rows
     _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
-    logger.info(f"[{trace_id}] ADS_CACHE_REFRESH rows={len(rows)}")
-    return rows
+    _ADS_CATALOG_CACHE["last_read_ok"] = True
+    logger.info(
+        f"[{trace_id}] ADS_CACHE_REFRESH rows={len(rows)} skipped_inactive_time={skipped_inactive_time}"
+    )
+    return rows, True
 
 
 def is_ad_visible_to_viewer(ad: dict, viewer_language_group: str) -> bool:
@@ -1376,13 +1554,14 @@ def is_ad_visible_to_viewer(ad: dict, viewer_language_group: str) -> bool:
     return False
 
 
-def get_visible_ads_for_viewer(viewer_language_group: str, trace_id: str) -> List[dict]:
-    all_ads = load_ads_catalog_rows(trace_id)
+def get_visible_ads_for_viewer(viewer_language_group: str, trace_id: str) -> Tuple[List[dict], bool]:
+    all_ads, read_ok = load_ads_catalog_rows(trace_id)
     visible_ads = [ad for ad in all_ads if is_ad_visible_to_viewer(ad, viewer_language_group)]
     logger.info(
-        f"[{trace_id}] ADS_FILTER_DONE viewer_language_group={viewer_language_group} visible_count={len(visible_ads)}"
+        f"[{trace_id}] ADS_FILTER_DONE viewer_language_group={viewer_language_group} "
+        f"visible_count={len(visible_ads)} read_ok={read_ok}"
     )
-    return visible_ads[:ADS_LIST_LIMIT]
+    return visible_ads[:ADS_LIST_LIMIT], read_ok
 
 
 def build_ads_entry_text(ads: List[dict], viewer_language_group: str) -> str:
@@ -1422,8 +1601,6 @@ def build_ads_entry_text(ads: List[dict], viewer_language_group: str) -> str:
 
     lines.append("Gõ /ads để xem lại danh sách.")
     return "\n".join(lines).strip()
-
-
 # =========================================================
 # COMMAND HELPERS
 # =========================================================
@@ -1467,6 +1644,7 @@ def health():
             "ads_entry_command": ADS_ENTRY_COMMAND,
             "ads_catalog_sheet": ADS_CATALOG_SHEET_NAME,
             "ads_entry_enabled": True,
+            "ads_detail_enabled": True,
             "worker_entry_enabled": True,
             "need_type_selection_enabled": True,
             "urgency_selection_enabled": True,
@@ -1477,6 +1655,8 @@ def health():
             "supported_language_groups": sorted(list(SUPPORTED_LANGUAGE_GROUPS)),
             "default_language_group": normalize_language_group(DEFAULT_LANGUAGE_GROUP),
             "sheet_env_ready_for_ads": is_sheet_env_ready(),
+            "ads_cache_ttl_seconds": ADS_CACHE_TTL_SECONDS,
+            "ads_view_ttl_seconds": ADS_VIEW_TTL_SECONDS,
             "user_language_map_size": len(USER_LANGUAGE_MAP),
         }
     }), 200 if ready else 503
@@ -1712,13 +1892,17 @@ def callback():
             return "OK", 200
 
         viewer_language_group = language_group
-        visible_ads = get_visible_ads_for_viewer(viewer_language_group, trace_id)
-        ads_text = build_ads_entry_text(visible_ads, viewer_language_group)
+        visible_ads, ads_read_ok = get_visible_ads_for_viewer(viewer_language_group, trace_id)
+
+        if ads_read_ok:
+            ads_text = build_ads_entry_text(visible_ads, viewer_language_group)
+        else:
+            ads_text = "Tạm thời chưa đọc được dữ liệu quảng cáo. Vui lòng thử lại sau."
 
         reply_ok, reply_ms = line_reply(reply_token, ads_text, trace_id)
         logger.info(
             f"[{trace_id}] ADS_ENTRY_OK viewer_language_group={viewer_language_group} "
-            f"ads_count={len(visible_ads)} reply_ok={reply_ok} reply_ms={reply_ms}"
+            f"ads_count={len(visible_ads)} ads_read_ok={ads_read_ok} reply_ok={reply_ok} reply_ms={reply_ms}"
         )
         log_total_latency(
             trace_id=trace_id,
