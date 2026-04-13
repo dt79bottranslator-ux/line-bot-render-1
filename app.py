@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import html
 import hmac
@@ -59,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_CLICK_LOG_SCOPE_FIXED_V18"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW_FIXED_V19"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -80,6 +81,7 @@ ADS_ENTRY_COMMAND = "/ads"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 
 ADS_CATALOG_SHEET_NAME = "ads_catalog"
+ADS_PHONE_LEADS_SHEET_NAME = "ads_phone_leads"
 ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
 ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
 ADS_VIEW_TTL_SECONDS = int(os.getenv("ADS_VIEW_TTL_SECONDS", "300").strip() or "300")
@@ -1032,6 +1034,95 @@ def append_ads_click_log(
         logger.exception(f"[{trace_id}] ADS_CLICK_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
+
+_ADS_PHONE_LEADS_WS = None
+PHONE_INPUT_REGEX = re.compile(r"^\+?[0-9][0-9\-\s]{7,14}$")
+
+
+def open_ads_phone_leads_worksheet(trace_id: str):
+    global _ADS_PHONE_LEADS_WS
+
+    if _ADS_PHONE_LEADS_WS is not None:
+        return _ADS_PHONE_LEADS_WS
+
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        _ADS_PHONE_LEADS_WS = spreadsheet.worksheet(ADS_PHONE_LEADS_SHEET_NAME)
+        logger.info(f"[{trace_id}] ADS_PHONE_LEADS_SHEET_READY")
+        return _ADS_PHONE_LEADS_WS
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_PHONE_LEADS_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
+def normalize_phone_number(phone_raw: str) -> str:
+    raw = safe_str(phone_raw)
+    if not raw:
+        return ""
+    if raw.startswith("+"):
+        return "+" + re.sub(r"\D", "", raw[1:])
+    return re.sub(r"\D", "", raw)
+
+
+def is_valid_phone_input(phone_raw: str) -> bool:
+    text = safe_str(phone_raw)
+    if not text:
+        return False
+    if not PHONE_INPUT_REGEX.match(text):
+        return False
+
+    normalized = normalize_phone_number(text)
+    digits_only = re.sub(r"\D", "", normalized)
+    return 8 <= len(digits_only) <= 15
+
+
+def make_lead_id() -> str:
+    return f"lead_{uuid.uuid4().hex[:12]}"
+
+
+def append_ads_phone_lead(
+    ad_id: str,
+    viewer_user_id: str,
+    owner_user_id: str,
+    phone_raw: str,
+    phone_normalized: str,
+    language_group: str,
+    source: str,
+    trace_id: str,
+) -> bool:
+    ws = open_ads_phone_leads_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] ADS_PHONE_LEAD_APPEND_SKIPPED reason=worksheet_unavailable")
+        return False
+
+    row = [
+        make_lead_id(),
+        safe_str(ad_id),
+        safe_str(viewer_user_id),
+        safe_str(owner_user_id),
+        safe_str(phone_raw),
+        safe_str(phone_normalized),
+        normalize_language_group(language_group),
+        safe_str(source) or "ads_phone_submit",
+        now_tw_iso(),
+    ]
+
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        logger.info(
+            f"[{trace_id}] ADS_PHONE_LEAD_APPEND_OK "
+            f"ad_id={ad_id} viewer_user_id={viewer_user_id} owner_user_id={owner_user_id}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_PHONE_LEAD_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+
 # =========================================================
 # PHASE 1 WORKER FLOW HELPERS
 # =========================================================
@@ -1357,6 +1448,7 @@ def set_ads_detail_cache(scope_key: str, ad: dict, viewer_language_group: str, t
     _ADS_DETAIL_CACHE[safe_str(scope_key)] = {
         "scope_key": safe_str(scope_key),
         "ad_id": safe_str(ad.get("ad_id")),
+        "owner_user_id": safe_str(ad.get("owner_user_id")),
         "viewer_language_group": normalize_language_group(viewer_language_group),
         "awaiting_phone": False,
         "loaded_at_ts": now_ts,
@@ -1842,6 +1934,7 @@ def health():
             "worker_entry_command": WORKER_ENTRY_COMMAND,
             "ads_entry_command": ADS_ENTRY_COMMAND,
             "ads_catalog_sheet": ADS_CATALOG_SHEET_NAME,
+            "ads_phone_leads_sheet": ADS_PHONE_LEADS_SHEET_NAME,
             "ads_entry_enabled": True,
             "ads_detail_enabled": True,
             "ads_detail_enabled": True,
@@ -2134,19 +2227,89 @@ def callback():
     if current_state in {STATE_IDLE, STATE_CASE_COMPLETED}:
         cached_ads_detail = get_ads_detail_cache(scope_key, trace_id)
         if cached_ads_detail and cached_ads_detail.get("awaiting_phone"):
+            current_ad_id = safe_str(cached_ads_detail.get("ad_id"))
+            current_owner_user_id = safe_str(cached_ads_detail.get("owner_user_id"))
+            selected_ad = get_ad_by_id(current_ad_id, trace_id)
+
+            if selected_ad:
+                current_owner_user_id = safe_str(selected_ad.get("owner_user_id"))
+
+            if not is_valid_phone_input(input_text):
+                reply_ok, reply_ms = line_reply(
+                    reply_token,
+                    "Số điện thoại chưa đúng định dạng. Vui lòng nhập lại. Ví dụ: 0912345678 hoặc +886912345678",
+                    trace_id,
+                )
+                logger.info(
+                    f"[{trace_id}] ADS_PHONE_VALIDATE_FAIL ad_id={current_ad_id} "
+                    f"input={json.dumps(input_text, ensure_ascii=False)} reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_phone_validate_fail",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            phone_raw = safe_str(input_text)
+            phone_normalized = normalize_phone_number(phone_raw)
+
+            lead_ok = append_ads_phone_lead(
+                ad_id=current_ad_id,
+                viewer_user_id=user_id,
+                owner_user_id=current_owner_user_id,
+                phone_raw=phone_raw,
+                phone_normalized=phone_normalized,
+                language_group=language_group,
+                source="ads_phone_submit",
+                trace_id=trace_id,
+            )
+
+            if not lead_ok:
+                reply_ok, reply_ms = line_reply(
+                    reply_token,
+                    "Hệ thống đang bận, chưa lưu được số điện thoại. Vui lòng thử lại sau.",
+                    trace_id,
+                )
+                logger.info(
+                    f"[{trace_id}] ADS_PHONE_SUBMIT_FAIL ad_id={current_ad_id} "
+                    f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_phone_submit_fail",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            append_ads_click_log(
+                ad_id=current_ad_id,
+                viewer_user_id=user_id,
+                owner_user_id=current_owner_user_id,
+                action_type="contact_phone_submit",
+                language_group=language_group,
+                trace_id=trace_id,
+            )
             set_ads_detail_awaiting_phone(scope_key, False, trace_id)
+
             reply_ok, reply_ms = line_reply(
                 reply_token,
-                i18n_text(language_group, "ads_phone_received"),
+                "Đã nhận số điện thoại của bạn. Bên đăng tin sẽ liên hệ sớm.",
                 trace_id,
             )
             logger.info(
-                f"[{trace_id}] ADS_CONTACT_PHONE_RECEIVED ad_id={safe_str(cached_ads_detail.get('ad_id'))} "
-                f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                f"[{trace_id}] ADS_CONTACT_PHONE_SUBMIT_OK ad_id={current_ad_id} "
+                f"phone_normalized={phone_normalized} reply_ok={reply_ok} reply_ms={reply_ms}"
             )
             log_total_latency(
                 trace_id=trace_id,
-                route_name="ads_contact_phone_received",
+                route_name="ads_contact_phone_submit_ok",
                 total_ms=ms_since(total_started),
                 source_type=source_type,
                 group_id=group_id,
@@ -2183,7 +2346,7 @@ def callback():
                 set_ads_detail_awaiting_phone(scope_key, True, trace_id)
                 reply_ok, reply_ms = line_reply(
                     reply_token,
-                    i18n_text(language_group, "ads_leave_phone_prompt"),
+                    "Vui lòng nhập số điện thoại của bạn. Ví dụ: 0912345678 hoặc +886912345678",
                     trace_id,
                 )
                 if reply_ok:
@@ -2242,7 +2405,7 @@ def callback():
 
                     reply_ok, reply_ms = line_reply(
                         reply_token,
-                        i18n_text(language_group, "ads_direct_contact_unavailable"),
+                        "Tin này hiện chưa bật liên hệ trực tiếp. Vui lòng chọn 1 hoặc 3.",
                         trace_id,
                     )
                     logger.info(
@@ -2308,7 +2471,7 @@ def callback():
 
             reply_ok, reply_ms = line_reply(
                 reply_token,
-                i18n_text(language_group, "ads_option_invalid"),
+                "Tùy chọn không hợp lệ. Vui lòng nhập 1, 2 hoặc 3.",
                 trace_id,
             )
             logger.info(
