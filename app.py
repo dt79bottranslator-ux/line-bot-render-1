@@ -59,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_CLICK_LOG_V17"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_CLICK_LOG_SCOPE_FIXED_V18"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1483,7 +1483,7 @@ def get_google_credentials(trace_id: str):
     try:
         info = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
         scopes = [
-            "https://www.googleapis.com/auth/spreadsheets.readonly",
+            "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive.readonly",
         ]
         return Credentials.from_service_account_info(info, scopes=scopes)
