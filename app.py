@@ -59,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_DETAIL_ROUTING_FIXED_V14"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_CONTACT_OPTIONS_FIXED_V16"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -83,6 +83,7 @@ ADS_CATALOG_SHEET_NAME = "ads_catalog"
 ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
 ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
 ADS_VIEW_TTL_SECONDS = int(os.getenv("ADS_VIEW_TTL_SECONDS", "300").strip() or "300")
+ADS_DETAIL_TTL_SECONDS = int(os.getenv("ADS_DETAIL_TTL_SECONDS", "300").strip() or "300")
 
 ADS_TYPE_JOB_OPENING = "job_opening"
 ADS_TYPE_SERVICE_OFFER = "service_offer"
@@ -1266,6 +1267,60 @@ _ADS_CATALOG_CACHE = {
 }
 
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
+_ADS_DETAIL_CACHE: Dict[str, dict] = {}
+
+
+def cleanup_ads_detail_cache(now_ts: int) -> None:
+    expired_before = now_ts - max(ADS_DETAIL_TTL_SECONDS, 60)
+    stale_keys = [k for k, v in _ADS_DETAIL_CACHE.items() if int(v.get("loaded_at_ts", 0) or 0) < expired_before]
+    for k in stale_keys:
+        _ADS_DETAIL_CACHE.pop(k, None)
+    if stale_keys:
+        logger.info(f"[ADS_DETAIL_CACHE] cleanup removed={len(stale_keys)} remaining={len(_ADS_DETAIL_CACHE)}")
+
+
+def clear_ads_detail_cache(scope_key: str, trace_id: str = "") -> None:
+    _ADS_DETAIL_CACHE.pop(safe_str(scope_key), None)
+    if trace_id:
+        logger.info(f"[{trace_id}] ADS_DETAIL_CACHE_CLEAR scope_key={scope_key}")
+
+
+def set_ads_detail_cache(scope_key: str, ad: dict, viewer_language_group: str, trace_id: str) -> None:
+    now_ts = get_now_ts()
+    cleanup_ads_detail_cache(now_ts)
+    _ADS_DETAIL_CACHE[safe_str(scope_key)] = {
+        "scope_key": safe_str(scope_key),
+        "ad_id": safe_str(ad.get("ad_id")),
+        "viewer_language_group": normalize_language_group(viewer_language_group),
+        "awaiting_phone": False,
+        "loaded_at_ts": now_ts,
+    }
+    logger.info(f"[{trace_id}] ADS_DETAIL_CACHE_SET scope_key={scope_key} ad_id={safe_str(ad.get('ad_id'))} viewer_language_group={viewer_language_group}")
+
+
+def set_ads_detail_awaiting_phone(scope_key: str, awaiting_phone: bool, trace_id: str) -> None:
+    now_ts = get_now_ts()
+    cleanup_ads_detail_cache(now_ts)
+    cached = _ADS_DETAIL_CACHE.get(safe_str(scope_key))
+    if not cached:
+        if trace_id:
+            logger.info(f"[{trace_id}] ADS_DETAIL_AWAITING_PHONE_SET status=MISS scope_key={scope_key}")
+        return
+    cached["awaiting_phone"] = bool(awaiting_phone)
+    cached["loaded_at_ts"] = now_ts
+    if trace_id:
+        logger.info(f"[{trace_id}] ADS_DETAIL_AWAITING_PHONE_SET status=HIT scope_key={scope_key} awaiting_phone={bool(awaiting_phone)}")
+
+
+def get_ads_detail_cache(scope_key: str, trace_id: str) -> Optional[dict]:
+    now_ts = get_now_ts()
+    cleanup_ads_detail_cache(now_ts)
+    cached = _ADS_DETAIL_CACHE.get(safe_str(scope_key))
+    if not cached:
+        logger.info(f"[{trace_id}] ADS_DETAIL_CACHE_GET status=MISS scope_key={scope_key}")
+        return None
+    logger.info(f"[{trace_id}] ADS_DETAIL_CACHE_GET status=HIT scope_key={scope_key} ad_id={safe_str(cached.get('ad_id'))} awaiting_phone={bool(cached.get('awaiting_phone'))}")
+    return cached
 
 
 def cleanup_ads_view_cache(now_ts: int) -> None:
@@ -1664,9 +1719,21 @@ def build_ads_detail_text(ad: dict, viewer_language_group: str) -> str:
         f"Mô tả: {body_source}",
         f"Người đăng: {owner_contact_name}",
         "",
-        "Gõ /ads để xem lại danh sách.",
     ]
+    if ad_type == ADS_TYPE_SERVICE_OFFER:
+        lines.extend([
+            "Tùy chọn liên hệ:",
+            "1 = Để lại số, bên em liên hệ",
+            "2 = Liên hệ trực tiếp người đăng tin",
+            "3 = Xem tin khác",
+            "",
+        ])
+    lines.append("Gõ /ads để xem lại danh sách.")
     return "\n".join(lines).strip()
+
+
+def is_contact_option_input(input_text: str) -> bool:
+    return safe_str(input_text) in {"1", "2", "3"}
 # =========================================================
 # COMMAND HELPERS
 # =========================================================
@@ -1724,6 +1791,7 @@ def health():
             "sheet_env_ready_for_ads": is_sheet_env_ready(),
             "ads_cache_ttl_seconds": ADS_CACHE_TTL_SECONDS,
             "ads_view_ttl_seconds": ADS_VIEW_TTL_SECONDS,
+            "ads_detail_ttl_seconds": ADS_DETAIL_TTL_SECONDS,
             "user_language_map_size": len(USER_LANGUAGE_MAP),
         }
     }), 200 if ready else 503
@@ -1962,6 +2030,7 @@ def callback():
         visible_ads, ads_read_ok = get_visible_ads_for_viewer(viewer_language_group, trace_id)
 
         if ads_read_ok:
+            clear_ads_detail_cache(scope_key, trace_id)
             set_ads_view_cache(scope_key, viewer_language_group, visible_ads, trace_id)
             ads_text = build_ads_entry_text(visible_ads, viewer_language_group)
         else:
