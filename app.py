@@ -59,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_MENU_NUMERIC_ALIAS_PATCHED_V11"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_MENU_LABEL_CLARIFIED_V12"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -234,7 +234,7 @@ I18N = {
         "need.transfer_job": "Chuyển chủ / đổi việc",
         "need.part_time": "Việc làm thêm",
         "need.taiwan_job": "Đơn hàng tại Đài Loan",
-        "need.overseas_referral": "Có bạn, người nhà tìm đơn hàng",
+        "need.overseas_referral": "Có bạn/người nhà ở nước ngoài muốn sang Đài làm việc",
         "need.passport": "Đổi Hộ chiếu",
         "need.arc": "Thẻ cư trú / ARC",
         "need.driver_license": "Đổi Bằng lái xe",
