@@ -59,7 +59,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_MENU_LABEL_CLARIFIED_V12"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_DETAIL_ROUTING_FIXED_V14"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1116,6 +1116,7 @@ def handle_worker_entry(
     trace_id: str,
     language_group: str,
 ) -> Tuple[bool, int]:
+    clear_ads_view_cache(scope_key, trace_id)
     set_runtime_state(
         user_id=user_id,
         scope_key=scope_key,
@@ -1599,7 +1600,72 @@ def build_ads_entry_text(ads: List[dict], viewer_language_group: str) -> str:
         lines.extend(job_opening_lines)
         lines.append("")
 
+    lines.append("Gõ số tương ứng để xem chi tiết tin.")
     lines.append("Gõ /ads để xem lại danh sách.")
+    return "\n".join(lines).strip()
+
+
+def is_ads_numeric_selection(input_text: str) -> bool:
+    raw = safe_str(input_text)
+    return raw.isdigit() and int(raw) >= 1
+
+
+def get_ad_by_id(ad_id: str, trace_id: str) -> Optional[dict]:
+    rows, read_ok = load_ads_catalog_rows(trace_id)
+    if not read_ok:
+        return None
+    for row in rows:
+        if safe_str(row.get("ad_id")) == safe_str(ad_id):
+            return row
+    return None
+
+
+def resolve_selected_ad_from_cache(scope_key: str, input_text: str, trace_id: str) -> Tuple[Optional[dict], str]:
+    cached = get_ads_view_cache(scope_key, trace_id)
+    if not cached:
+        return None, "cache_miss"
+
+    raw = safe_str(input_text)
+    if not raw.isdigit():
+        return None, "not_digit"
+
+    selection_index = int(raw)
+    ad_ids = cached.get("ad_ids", [])
+    if selection_index < 1 or selection_index > len(ad_ids):
+        return None, "index_out_of_range"
+
+    ad_id = safe_str(ad_ids[selection_index - 1])
+    if not ad_id:
+        return None, "empty_ad_id"
+
+    ad = get_ad_by_id(ad_id, trace_id)
+    if not ad:
+        return None, "ad_not_found"
+
+    viewer_language_group = normalize_language_group(cached.get("viewer_language_group", DEFAULT_LANGUAGE_GROUP))
+    if not is_ad_visible_to_viewer(ad, viewer_language_group):
+        return None, "ad_not_visible"
+
+    return ad, "ok"
+
+
+def build_ads_detail_text(ad: dict, viewer_language_group: str) -> str:
+    ad_type = safe_str(ad.get("ad_type"))
+    title_source = safe_str(ad.get("title_source")) or "(không có tiêu đề)"
+    body_source = safe_str(ad.get("body_source")) or "(không có mô tả)"
+    owner_contact_name = safe_str(ad.get("owner_contact_name")) or "Chưa có tên liên hệ"
+
+    lines = [
+        "📄 CHI TIẾT TIN",
+        f"Ngôn ngữ hiện tại: {viewer_language_group}",
+        f"Loại tin: {ad_type}",
+        "",
+        f"Tiêu đề: {title_source}",
+        f"Mô tả: {body_source}",
+        f"Người đăng: {owner_contact_name}",
+        "",
+        "Gõ /ads để xem lại danh sách.",
+    ]
     return "\n".join(lines).strip()
 # =========================================================
 # COMMAND HELPERS
@@ -1644,6 +1710,7 @@ def health():
             "ads_entry_command": ADS_ENTRY_COMMAND,
             "ads_catalog_sheet": ADS_CATALOG_SHEET_NAME,
             "ads_entry_enabled": True,
+            "ads_detail_enabled": True,
             "ads_detail_enabled": True,
             "worker_entry_enabled": True,
             "need_type_selection_enabled": True,
@@ -1895,8 +1962,10 @@ def callback():
         visible_ads, ads_read_ok = get_visible_ads_for_viewer(viewer_language_group, trace_id)
 
         if ads_read_ok:
+            set_ads_view_cache(scope_key, viewer_language_group, visible_ads, trace_id)
             ads_text = build_ads_entry_text(visible_ads, viewer_language_group)
         else:
+            clear_ads_view_cache(scope_key, trace_id)
             ads_text = "Tạm thời chưa đọc được dữ liệu quảng cáo. Vui lòng thử lại sau."
 
         reply_ok, reply_ms = line_reply(reply_token, ads_text, trace_id)
@@ -1913,6 +1982,50 @@ def callback():
             room_id=room_id
         )
         return "OK", 200
+
+    # =====================================================
+    # ADS DETAIL V1
+    # =====================================================
+    if current_state in {STATE_IDLE, STATE_CASE_COMPLETED} and is_ads_numeric_selection(input_text):
+        cached_ads_view = get_ads_view_cache(scope_key, trace_id)
+        if cached_ads_view:
+            selected_ad, resolve_status = resolve_selected_ad_from_cache(scope_key, input_text, trace_id)
+            if selected_ad:
+                viewer_language_group = language_group
+                detail_text = build_ads_detail_text(selected_ad, viewer_language_group)
+                reply_ok, reply_ms = line_reply(reply_token, detail_text, trace_id)
+                logger.info(
+                    f"[{trace_id}] ADS_DETAIL_OK selection={input_text} ad_id={selected_ad.get('ad_id','')} "
+                    f"reply_ok={reply_ok} reply_ms={reply_ms}"
+                )
+                log_total_latency(
+                    trace_id=trace_id,
+                    route_name="ads_detail_ok",
+                    total_ms=ms_since(total_started),
+                    source_type=source_type,
+                    group_id=group_id,
+                    room_id=room_id
+                )
+                return "OK", 200
+
+            reply_ok, reply_ms = line_reply(
+                reply_token,
+                "Không tìm thấy tin tương ứng. Gõ /ads để xem lại danh sách.",
+                trace_id,
+            )
+            logger.info(
+                f"[{trace_id}] ADS_DETAIL_INVALID selection={input_text} resolve_status={resolve_status} "
+                f"reply_ok={reply_ok} reply_ms={reply_ms}"
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="ads_detail_invalid",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
 
     # =====================================================
     # !ALL
@@ -2179,7 +2292,7 @@ def callback():
     # Nếu user gửi mã giữa chừng khi state đã rơi về idle
     # thì không dịch thường; bắt quay lại /worker
     # =====================================================
-    if current_state == STATE_IDLE and is_midflow_code_without_context(input_text):
+    if current_state == STATE_IDLE and is_midflow_code_without_context(input_text) and not get_ads_view_cache(scope_key, trace_id):
         reply_ok, reply_ms = line_reply(
             reply_token,
             i18n_text(language_group, "resume_flow_prompt"),
