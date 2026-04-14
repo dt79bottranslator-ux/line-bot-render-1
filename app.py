@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION_ENFORCED_V21"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION_CLEAN_LOG_V22"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1660,6 +1660,11 @@ def open_tenant_registry_worksheet(trace_id: str):
         worksheet = spreadsheet.worksheet(TENANT_REGISTRY_SHEET_NAME)
         logger.info(f"[{trace_id}] TENANT_REGISTRY_SHEET_READY")
         return worksheet
+    except gspread.WorksheetNotFound:
+        logger.error(
+            f"[{trace_id}] TENANT_REGISTRY_SHEET_NOT_FOUND worksheet_name={TENANT_REGISTRY_SHEET_NAME}"
+        )
+        return None
     except Exception as e:
         logger.exception(
             f"[{trace_id}] TENANT_REGISTRY_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}"
@@ -1677,6 +1682,11 @@ def open_system_meta_worksheet(trace_id: str):
         worksheet = spreadsheet.worksheet(SYSTEM_META_SHEET_NAME)
         logger.info(f"[{trace_id}] SYSTEM_META_SHEET_READY")
         return worksheet
+    except gspread.WorksheetNotFound:
+        logger.error(
+            f"[{trace_id}] SYSTEM_META_SHEET_NOT_FOUND worksheet_name={SYSTEM_META_SHEET_NAME}"
+        )
+        return None
     except Exception as e:
         logger.exception(
             f"[{trace_id}] SYSTEM_META_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}"
