@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION_V20"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION_ENFORCED_V21"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -88,6 +88,7 @@ ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
 ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
 ADS_VIEW_TTL_SECONDS = int(os.getenv("ADS_VIEW_TTL_SECONDS", "300").strip() or "300")
 ADS_DETAIL_TTL_SECONDS = int(os.getenv("ADS_DETAIL_TTL_SECONDS", "300").strip() or "300")
+WORKSPACE_VALIDATION_CACHE_TTL_SECONDS = int(os.getenv("WORKSPACE_VALIDATION_CACHE_TTL_SECONDS", "30").strip() or "30")
 
 ADS_TYPE_JOB_OPENING = "job_opening"
 ADS_TYPE_SERVICE_OFFER = "service_offer"
@@ -1615,7 +1616,7 @@ REQUIRED_SYSTEM_TABS_V1 = [
     "OWNER_SETTINGS",
     "ADS_CATALOG_V2",
     "ADS_LEADS",
-    "ADS_CLICK_LOG",
+    "ads_click_log",
     "SYSTEM_META",
 ]
 
@@ -1629,6 +1630,11 @@ WV_TENANT_REGISTRY_DUPLICATED = "WV_TENANT_REGISTRY_DUPLICATED"
 WV_OWNER_ID_MISMATCH = "WV_OWNER_ID_MISMATCH"
 WV_WORKSPACE_NAME_MISMATCH = "WV_WORKSPACE_NAME_MISMATCH"
 WV_TENANT_INACTIVE = "WV_TENANT_INACTIVE"
+
+_WORKSPACE_VALIDATION_CACHE = {
+    "result": None,
+    "loaded_at_ts": 0,
+}
 
 
 def make_workspace_validation_result() -> dict:
@@ -1751,8 +1757,15 @@ def validate_tenant_workspace(
     result = make_workspace_validation_result()
     result["checked_tabs"] = list(all_tab_names or [])
 
-    current_tabs = {safe_str(x) for x in (all_tab_names or [])}
-    missing_tabs = [tab for tab in REQUIRED_SYSTEM_TABS_V1 if tab not in current_tabs]
+    current_tabs_map = {
+        safe_str(x).lower(): safe_str(x)
+        for x in (all_tab_names or [])
+        if safe_str(x)
+    }
+    missing_tabs = [
+        tab for tab in REQUIRED_SYSTEM_TABS_V1
+        if safe_str(tab).lower() not in current_tabs_map
+    ]
     if missing_tabs:
         result["workspace_status"] = "invalid"
         result["error_code"] = WV_MISSING_REQUIRED_TAB
@@ -1844,6 +1857,74 @@ def run_workspace_validation(trace_id: str) -> dict:
         json.dumps(result.get("missing_tabs", []), ensure_ascii=False),
     )
     return result
+
+
+def run_workspace_validation_cached(trace_id: str) -> dict:
+    now_ts = get_now_ts()
+    cached = _WORKSPACE_VALIDATION_CACHE.get("result")
+    loaded_at_ts = int(_WORKSPACE_VALIDATION_CACHE.get("loaded_at_ts", 0) or 0)
+
+    if cached and loaded_at_ts > 0 and (now_ts - loaded_at_ts) < WORKSPACE_VALIDATION_CACHE_TTL_SECONDS:
+        logger.info(
+            f"[{trace_id}] WORKSPACE_VALIDATION_CACHE_HIT "
+            f"workspace_status={safe_str(cached.get('workspace_status'))} "
+            f"error_code={safe_str(cached.get('error_code'))}"
+        )
+        return cached
+
+    result = run_workspace_validation(trace_id)
+    _WORKSPACE_VALIDATION_CACHE["result"] = result
+    _WORKSPACE_VALIDATION_CACHE["loaded_at_ts"] = now_ts
+    logger.info(
+        f"[{trace_id}] WORKSPACE_VALIDATION_CACHE_SET "
+        f"workspace_status={safe_str(result.get('workspace_status'))} "
+        f"error_code={safe_str(result.get('error_code'))}"
+    )
+    return result
+
+
+def should_validate_workspace_for_request(
+    input_text: str,
+    current_state: str,
+    scope_key: str,
+    trace_id: str,
+) -> bool:
+    if is_ads_entry_command(input_text):
+        return True
+
+    if current_state not in {STATE_IDLE, STATE_CASE_COMPLETED}:
+        return False
+
+    if is_ads_numeric_selection(input_text):
+        return True
+
+    cached_ads_detail = get_ads_detail_cache(scope_key, trace_id)
+    if cached_ads_detail and cached_ads_detail.get("awaiting_phone"):
+        return True
+
+    if cached_ads_detail and is_contact_option_input(input_text):
+        return True
+
+    return False
+
+
+def reply_workspace_invalid(
+    reply_token: str,
+    trace_id: str,
+    validation_result: dict,
+) -> Tuple[bool, int]:
+    error_code = safe_str(validation_result.get("error_code"))
+    missing_tabs = validation_result.get("missing_tabs", []) or []
+
+    detail = f"Mã lỗi: {error_code}"
+    if missing_tabs:
+        detail += f" | Missing tabs: {', '.join([safe_str(x) for x in missing_tabs])}"
+
+    reply_text = (
+        "Workspace quảng cáo chưa hợp lệ. Vui lòng liên hệ chủ bot.\n"
+        f"{detail}"
+    )
+    return line_reply(reply_token, reply_text, trace_id)
 
 
 def open_ads_catalog_worksheet(trace_id: str):
@@ -2178,6 +2259,9 @@ def health():
             "ads_entry_command": ADS_ENTRY_COMMAND,
             "ads_catalog_sheet": ADS_CATALOG_SHEET_NAME,
             "ads_phone_leads_sheet": ADS_PHONE_LEADS_SHEET_NAME,
+            "tenant_registry_sheet": TENANT_REGISTRY_SHEET_NAME,
+            "system_meta_sheet": SYSTEM_META_SHEET_NAME,
+            "workspace_validation_enabled": True,
             "ads_entry_enabled": True,
             "ads_detail_enabled": True,
             "ads_detail_enabled": True,
@@ -2384,6 +2468,35 @@ def callback():
             room_id=room_id
         )
         return "OK", 200
+
+    workspace_validation_needed = should_validate_workspace_for_request(
+        input_text=input_text,
+        current_state=current_state,
+        scope_key=scope_key,
+        trace_id=trace_id,
+    )
+    if workspace_validation_needed:
+        validation_result = run_workspace_validation_cached(trace_id)
+        if safe_str(validation_result.get("workspace_status")) != "valid":
+            reply_ok, reply_ms = reply_workspace_invalid(
+                reply_token=reply_token,
+                trace_id=trace_id,
+                validation_result=validation_result,
+            )
+            logger.error(
+                f"[{trace_id}] WORKSPACE_VALIDATION_BLOCKED "
+                f"error_code={safe_str(validation_result.get('error_code'))} "
+                f"reply_ok={reply_ok} reply_ms={reply_ms}"
+            )
+            log_total_latency(
+                trace_id=trace_id,
+                route_name="workspace_validation_blocked",
+                total_ms=ms_since(total_started),
+                source_type=source_type,
+                group_id=group_id,
+                room_id=room_id
+            )
+            return "OK", 200
 
     # =====================================================
     # /ADS ENTRY V1
