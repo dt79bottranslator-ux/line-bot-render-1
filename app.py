@@ -1,5 +1,12 @@
-# ========================= REPLACE CONSTANTS =========================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V23"
+# ========================= SAFE PATCH BLOCK: PUBLISH SYNC V24 =========================
+# Dán block này vào app.py.
+# Thay đúng các phần constants / get_google_credentials / ADS catalog helpers / publish sync / route nội bộ.
+
+# ---------- IMPORT SAFETY ----------
+from datetime import datetime, timezone, timedelta
+
+# ---------- CONSTANTS ----------
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V24"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -19,7 +26,6 @@ WORKER_ENTRY_COMMAND = "/worker"
 ADS_ENTRY_COMMAND = "/ads"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 
-# ADS / WORKSPACE SHEET CONSTANTS
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
 OWNER_ADS_INPUT_SHEET_NAME = "OWNER_ADS_INPUT"
 OWNER_SETTINGS_SHEET_NAME = "OWNER_SETTINGS"
@@ -42,7 +48,9 @@ VISIBILITY_SAME_LANGUAGE_ONLY = "same_language_only"
 VISIBILITY_CROSS_LANGUAGE_ALLOWED = "cross_language_allowed"
 VISIBILITY_VIEWER_LOCALIZED = "viewer_localized"
 
-ACTIVE_AD_STATUSES = {"active", "draft"}
+# Chỉ tin active mới được hiện ở /ads
+ACTIVE_AD_STATUSES = {"active"}
+
 SUPPORTED_AD_TYPES = {ADS_TYPE_JOB_OPENING, ADS_TYPE_SERVICE_OFFER}
 SUPPORTED_VISIBILITY_POLICIES = {
     VISIBILITY_SAME_LANGUAGE_ONLY,
@@ -50,7 +58,7 @@ SUPPORTED_VISIBILITY_POLICIES = {
     VISIBILITY_VIEWER_LOCALIZED,
 }
 
-# ========================= REPLACE get_google_credentials =========================
+# ---------- GOOGLE CREDENTIALS ----------
 def get_google_credentials(trace_id: str):
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         logger.error(f"[{trace_id}] GSHEET_CREDENTIALS_MISSING")
@@ -73,7 +81,7 @@ def get_google_credentials(trace_id: str):
         logger.exception(f"[{trace_id}] GSHEET_CREDENTIALS_INVALID exception={type(e).__name__}:{e}")
         return None
 
-# ========================= ADD AFTER get_gspread_client =========================
+# ---------- SHEET HEADER / ROW HELPERS ----------
 def normalize_header_key(value: str) -> str:
     return safe_str(value).strip().lower()
 
@@ -85,17 +93,6 @@ def build_header_index_map(headers: List[str]) -> Dict[str, int]:
         if key and key not in result:
             result[key] = idx
     return result
-
-
-def row_to_dict_by_headers(headers: List[str], row: List[str]) -> dict:
-    data = {}
-    max_len = max(len(headers), len(row))
-    for i in range(max_len):
-        header = safe_str(headers[i]) if i < len(headers) else ""
-        value = safe_str(row[i]) if i < len(row) else ""
-        if header:
-            data[header] = value
-    return data
 
 
 def get_worksheet_by_name(trace_id: str, worksheet_name: str):
@@ -113,8 +110,7 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
         return None
     except Exception as e:
         logger.exception(
-            f"[{trace_id}] WORKSHEET_OPEN_FAILED worksheet_name={worksheet_name} "
-            f"exception={type(e).__name__}:{e}"
+            f"[{trace_id}] WORKSHEET_OPEN_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}"
         )
         return None
 
@@ -122,14 +118,11 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
 def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str]]:
     try:
         values = ws.get_all_values()
-        logger.info(
-            f"[{trace_id}] WORKSHEET_READ_OK worksheet_name={worksheet_name} row_count={len(values)}"
-        )
+        logger.info(f"[{trace_id}] WORKSHEET_READ_OK worksheet_name={worksheet_name} row_count={len(values)}")
         return values
     except Exception as e:
         logger.exception(
-            f"[{trace_id}] WORKSHEET_READ_FAILED worksheet_name={worksheet_name} "
-            f"exception={type(e).__name__}:{e}"
+            f"[{trace_id}] WORKSHEET_READ_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}"
         )
         return []
 
@@ -137,14 +130,11 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
 def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
     try:
         records = ws.get_all_records()
-        logger.info(
-            f"[{trace_id}] WORKSHEET_RECORDS_OK worksheet_name={worksheet_name} count={len(records)}"
-        )
+        logger.info(f"[{trace_id}] WORKSHEET_RECORDS_OK worksheet_name={worksheet_name} count={len(records)}")
         return records
     except Exception as e:
         logger.exception(
-            f"[{trace_id}] WORKSHEET_RECORDS_FAILED worksheet_name={worksheet_name} "
-            f"exception={type(e).__name__}:{e}"
+            f"[{trace_id}] WORKSHEET_RECORDS_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}"
         )
         return []
 
@@ -164,9 +154,7 @@ def find_first_row_index_by_column_value(
     header_map = build_header_index_map(headers)
     target_idx = header_map.get(normalize_header_key(column_name))
     if target_idx is None:
-        logger.error(
-            f"[{trace_id}] FIND_ROW_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}"
-        )
+        logger.error(f"[{trace_id}] FIND_ROW_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
         return 0
 
     expected = safe_str(expected_value)
@@ -202,17 +190,14 @@ def update_cell_by_header(
     header_map = build_header_index_map(headers)
     col_idx = header_map.get(normalize_header_key(column_name))
     if col_idx is None:
-        logger.error(
-            f"[{trace_id}] UPDATE_CELL_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}"
-        )
+        logger.error(f"[{trace_id}] UPDATE_CELL_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
         return False
 
     try:
         ws.update_cell(row_index, col_idx + 1, safe_str(value))
         logger.info(
             f"[{trace_id}] UPDATE_CELL_OK worksheet_name={worksheet_name} "
-            f"row_index={row_index} column_name={column_name} "
-            f"value={json.dumps(safe_str(value), ensure_ascii=False)}"
+            f"row_index={row_index} column_name={column_name} value={json.dumps(safe_str(value), ensure_ascii=False)}"
         )
         return True
     except Exception as e:
@@ -222,7 +207,7 @@ def update_cell_by_header(
         )
         return False
 
-# ========================= REPLACE ADS CATALOG OPEN/LOAD HELPERS =========================
+# ---------- ADS CATALOG HELPERS ----------
 def normalize_ad_status(value: str) -> str:
     raw = safe_str(value).lower()
     return raw if raw else "draft"
@@ -306,15 +291,16 @@ def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
     rows = []
     skipped_inactive_time = 0
     for raw in records:
+        owner_line_id = safe_str(raw.get("owner_line_id"))
         row = {
             "ad_id": safe_str(raw.get("ad_id")),
             "source_draft_id": safe_str(raw.get("source_draft_id")),
             "tenant_id": safe_str(raw.get("tenant_id")),
             "owner_id": safe_str(raw.get("owner_id")),
-            "owner_user_id": safe_str(raw.get("owner_id")),
+            "owner_user_id": owner_line_id,
             "owner_contact_name": safe_str(raw.get("owner_contact_name")),
-            "owner_line_id": safe_str(raw.get("owner_line_id")),
-            "ad_type": normalize_ad_type(raw.get("ad_type")),
+            "owner_line_id": owner_line_id,
+            "ad_type": normalize_ad_type(raw.get("ad_type") or raw.get("category_code")),
             "category_code": safe_str(raw.get("category_code")),
             "author_language_group": normalize_language_group(raw.get("author_language_group")),
             "visibility_policy": normalize_visibility_policy(raw.get("visibility_policy")),
@@ -356,16 +342,14 @@ def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
     _ADS_CATALOG_CACHE["rows"] = rows
     _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
     _ADS_CATALOG_CACHE["last_read_ok"] = True
-    logger.info(
-        f"[{trace_id}] ADS_CACHE_REFRESH_OK rows={len(rows)} skipped_inactive_time={skipped_inactive_time}"
-    )
+    logger.info(f"[{trace_id}] ADS_CACHE_REFRESH_OK rows={len(rows)} skipped_inactive_time={skipped_inactive_time}")
     return rows, True
 
-# ========================= ADD ALIAS IF FILE DOES NOT HAVE IT =========================
+# ---------- WORKSPACE VALIDATION ALIAS ----------
 def get_workspace_validation_result(trace_id: str) -> dict:
     return run_workspace_validation_cached(trace_id)
 
-# ========================= ADD PUBLISH SYNC BLOCK =========================
+# ---------- PUBLISH SYNC ----------
 PUBLISH_REQUEST_YES_VALUES = {"yes", "y", "true", "1", "on"}
 PUBLISHABLE_INPUT_STATUSES = {"draft"}
 PUBLISHED_INPUT_STATUS = "published"
@@ -479,11 +463,7 @@ def is_publishable_owner_ads_input_row(row: dict) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def build_ads_catalog_v2_row(
-    owner_ads_input_row: dict,
-    owner_settings_row: dict,
-    workspace_meta: dict,
-) -> List[str]:
+def build_ads_catalog_v2_row(owner_ads_input_row: dict, owner_settings_row: dict, workspace_meta: dict) -> List[str]:
     draft_id = safe_str(owner_ads_input_row.get("draft_id"))
     owner_id = safe_str(owner_ads_input_row.get("owner_id"))
     category_code = safe_str(owner_ads_input_row.get("category_code"))
@@ -520,6 +500,15 @@ def build_ads_catalog_v2_row(
     ]
 
 
+def reset_ads_runtime_caches(trace_id: str) -> None:
+    _ADS_CATALOG_CACHE["loaded_at_ts"] = 0
+    _ADS_CATALOG_CACHE["rows"] = []
+    _ADS_CATALOG_CACHE["last_read_ok"] = False
+    _ADS_VIEW_CACHE.clear()
+    _ADS_DETAIL_CACHE.clear()
+    logger.info(f"[{trace_id}] ADS_RUNTIME_CACHES_RESET")
+
+
 def append_ads_catalog_v2_row(row: List[str], trace_id: str) -> bool:
     ws = open_ads_catalog_v2_worksheet(trace_id)
     if not ws:
@@ -528,12 +517,8 @@ def append_ads_catalog_v2_row(row: List[str], trace_id: str) -> bool:
 
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info(
-            f"[{trace_id}] ADS_CATALOG_V2_APPEND_OK ad_id={safe_str(row[0])} source_draft_id={safe_str(row[1])}"
-        )
-        _ADS_CATALOG_CACHE["loaded_at_ts"] = 0
-        _ADS_CATALOG_CACHE["rows"] = []
-        _ADS_CATALOG_CACHE["last_read_ok"] = False
+        logger.info(f"[{trace_id}] ADS_CATALOG_V2_APPEND_OK ad_id={safe_str(row[0])} source_draft_id={safe_str(row[1])}")
+        reset_ads_runtime_caches(trace_id)
         return True
     except Exception as e:
         logger.exception(f"[{trace_id}] ADS_CATALOG_V2_APPEND_FAILED exception={type(e).__name__}:{e}")
@@ -591,12 +576,7 @@ def sync_single_owner_ads_input_to_catalog(
     draft_id = safe_str(owner_ads_input_row.get("draft_id"))
     owner_id = safe_str(owner_ads_input_row.get("owner_id"))
 
-    result = {
-        "draft_id": draft_id,
-        "status": "skipped",
-        "reason": "",
-        "ad_id": "",
-    }
+    result = {"draft_id": draft_id, "status": "skipped", "reason": "", "ad_id": ""}
 
     is_publishable, gate_reason = is_publishable_owner_ads_input_row(owner_ads_input_row)
     if not is_publishable:
@@ -607,11 +587,7 @@ def sync_single_owner_ads_input_to_catalog(
     existing_catalog_row = find_catalog_row_by_source_draft_id(catalog_rows, draft_id)
     if existing_catalog_row:
         existing_ad_id = safe_str(existing_catalog_row.get("ad_id"))
-        update_owner_ads_input_status(
-            draft_id=draft_id,
-            new_status=PUBLISHED_INPUT_STATUS,
-            trace_id=trace_id,
-        )
+        update_owner_ads_input_status(draft_id=draft_id, new_status=PUBLISHED_INPUT_STATUS, trace_id=trace_id)
         result["status"] = "already_exists"
         result["reason"] = "idempotent_hit"
         result["ad_id"] = existing_ad_id
@@ -622,11 +598,7 @@ def sync_single_owner_ads_input_to_catalog(
     if not owner_settings_row:
         result["reason"] = "owner_settings_not_found"
         logger.error(f"[{trace_id}] PUBLISH_SYNC_OWNER_SETTINGS_NOT_FOUND draft_id={draft_id} owner_id={owner_id}")
-        update_owner_ads_input_status(
-            draft_id=draft_id,
-            new_status=FAILED_INPUT_STATUS,
-            trace_id=trace_id,
-        )
+        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
         return result
 
     workspace_owner_id = safe_str(workspace_meta.get("owner_id"))
@@ -634,11 +606,7 @@ def sync_single_owner_ads_input_to_catalog(
     if not tenant_id:
         result["reason"] = "missing_workspace_tenant_id"
         logger.error(f"[{trace_id}] PUBLISH_SYNC_WORKSPACE_TENANT_ID_MISSING draft_id={draft_id}")
-        update_owner_ads_input_status(
-            draft_id=draft_id,
-            new_status=FAILED_INPUT_STATUS,
-            trace_id=trace_id,
-        )
+        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
         return result
 
     if workspace_owner_id and workspace_owner_id != owner_id:
@@ -647,11 +615,7 @@ def sync_single_owner_ads_input_to_catalog(
             f"[{trace_id}] PUBLISH_SYNC_OWNER_ID_MISMATCH draft_id={draft_id} "
             f"workspace_owner_id={workspace_owner_id} owner_id={owner_id}"
         )
-        update_owner_ads_input_status(
-            draft_id=draft_id,
-            new_status=FAILED_INPUT_STATUS,
-            trace_id=trace_id,
-        )
+        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
         return result
 
     catalog_append_row = build_ads_catalog_v2_row(
@@ -663,25 +627,15 @@ def sync_single_owner_ads_input_to_catalog(
     append_ok = append_ads_catalog_v2_row(catalog_append_row, trace_id)
     if not append_ok:
         result["reason"] = "catalog_append_failed"
-        update_owner_ads_input_status(
-            draft_id=draft_id,
-            new_status=FAILED_INPUT_STATUS,
-            trace_id=trace_id,
-        )
+        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
         return result
 
-    update_ok = update_owner_ads_input_status(
-        draft_id=draft_id,
-        new_status=PUBLISHED_INPUT_STATUS,
-        trace_id=trace_id,
-    )
+    update_ok = update_owner_ads_input_status(draft_id=draft_id, new_status=PUBLISHED_INPUT_STATUS, trace_id=trace_id)
     if not update_ok:
         result["reason"] = "source_status_update_failed"
         result["status"] = "partial_success"
         result["ad_id"] = safe_str(catalog_append_row[0])
-        logger.error(
-            f"[{trace_id}] PUBLISH_SYNC_PARTIAL_SUCCESS draft_id={draft_id} ad_id={safe_str(catalog_append_row[0])}"
-        )
+        logger.error(f"[{trace_id}] PUBLISH_SYNC_PARTIAL_SUCCESS draft_id={draft_id} ad_id={safe_str(catalog_append_row[0])}")
         return result
 
     result["status"] = "published"
@@ -712,7 +666,6 @@ def run_publish_sync_once(trace_id: str) -> dict:
     result["workspace_status"] = safe_str(workspace_validation.get("workspace_status"))
 
     if workspace_validation.get("workspace_status") != "valid":
-        result["ok"] = False
         logger.error(
             f"[{trace_id}] PUBLISH_SYNC_ABORTED reason=workspace_invalid "
             f"error_code={safe_str(workspace_validation.get('error_code'))}"
@@ -744,10 +697,7 @@ def run_publish_sync_once(trace_id: str) -> dict:
         status = safe_str(sync_result.get("status"))
         if status == "published":
             result["published"] += 1
-            catalog_rows.append({
-                "ad_id": sync_result.get("ad_id", ""),
-                "source_draft_id": sync_result.get("draft_id", ""),
-            })
+            catalog_rows.append({"ad_id": sync_result.get("ad_id", ""), "source_draft_id": sync_result.get("draft_id", "")})
         elif status == "already_exists":
             result["already_exists"] += 1
         elif status == "partial_success":
@@ -765,7 +715,7 @@ def run_publish_sync_once(trace_id: str) -> dict:
     )
     return result
 
-# ========================= ADD ROUTE BEFORE /callback =========================
+# ---------- INTERNAL ROUTE ----------
 @app.route("/internal/publish-sync", methods=["POST"])
 def internal_publish_sync():
     trace_id = make_trace_id()
@@ -783,8 +733,9 @@ def internal_publish_sync():
     }
     return jsonify(payload), status_code
 
-# ========================= REPLACE HEALTH ads_catalog_sheet FIELD =========================
+# ---------- HEALTH NOTE ----------
 # Trong hàm health(), đổi:
 # "ads_catalog_sheet": ADS_CATALOG_SHEET_NAME,
 # thành:
 # "ads_catalog_sheet": ADS_CATALOG_V2_SHEET_NAME,
+# và đảm bảo không còn biến ADS_CATALOG_SHEET_NAME cũ.
