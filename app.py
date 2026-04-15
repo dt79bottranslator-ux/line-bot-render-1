@@ -503,22 +503,41 @@ def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
 
 
 # =========================================================
+# =========================================================
 # WORKSPACE VALIDATION
 # =========================================================
-def run_workspace_validation_cached(trace_id: str) -> dict:
-    # Placeholder an toàn nếu phần validation gốc nằm dưới file.
-    # Nếu file gốc đã có hàm này ở dưới, hãy xóa block placeholder này.
-    return {"workspace_status": "valid", "error_code": "WV_OK"}
-
-
 def get_workspace_validation_result(trace_id: str) -> dict:
-    return run_workspace_validation_cached(trace_id)
+    validation_fn = globals().get("run_workspace_validation_cached")
+
+    if callable(validation_fn):
+        try:
+            result = validation_fn(trace_id)
+            if isinstance(result, dict):
+                return result
+            logger.error(f"[{trace_id}] WORKSPACE_VALIDATION_INVALID_RESULT_TYPE type={type(result).__name__}")
+            return {
+                "workspace_status": "invalid",
+                "error_code": "WV_INVALID_RESULT_TYPE",
+            }
+        except Exception as e:
+            logger.exception(f"[{trace_id}] WORKSPACE_VALIDATION_CALL_FAILED exception={type(e).__name__}:{e}")
+            return {
+                "workspace_status": "invalid",
+                "error_code": "WV_CALL_FAILED",
+            }
+
+    logger.error(f"[{trace_id}] WORKSPACE_VALIDATION_FN_MISSING")
+    return {
+        "workspace_status": "invalid",
+        "error_code": "WV_VALIDATION_FN_MISSING",
+    }
 
 
 def read_system_meta_row(trace_id: str) -> dict:
     ws = get_worksheet_by_name(trace_id, SYSTEM_META_SHEET_NAME)
     if not ws:
         return {}
+
     records = get_records_safe(ws, trace_id, SYSTEM_META_SHEET_NAME)
     return records[0] if records else {}
 
@@ -601,6 +620,7 @@ def get_current_workspace_meta(trace_id: str) -> dict:
     system_meta_row = read_system_meta_row(trace_id)
     if not system_meta_row:
         return {}
+
     return {
         "tenant_id": safe_str(system_meta_row.get("tenant_id")),
         "owner_id": safe_str(system_meta_row.get("owner_id")),
@@ -655,23 +675,23 @@ def build_ads_catalog_v2_row(owner_ads_input_row: dict, owner_settings_row: dict
     ad_type = normalize_ad_type(category_code)
 
     return [
-        ad_id,
-        draft_id,
-        tenant_id,
-        owner_id,
-        owner_contact_name,
-        owner_line_id,
-        category_code,
-        ad_type,
-        DEFAULT_AUTHOR_LANGUAGE_GROUP,
-        DEFAULT_VISIBILITY_POLICY,
-        contact_mode,
-        title,
-        body_text,
-        "draft",
-        DEFAULT_PUBLISH_PRIORITY,
-        now_iso,
-        now_iso,
+        ad_id,                              # ad_id
+        draft_id,                           # source_draft_id
+        tenant_id,                          # tenant_id
+        owner_id,                           # owner_id
+        owner_contact_name,                 # owner_contact_name
+        owner_line_id,                      # owner_line_id
+        category_code,                      # category_code
+        ad_type,                            # ad_type
+        DEFAULT_AUTHOR_LANGUAGE_GROUP,      # author_language_group
+        DEFAULT_VISIBILITY_POLICY,          # visibility_policy
+        contact_mode,                       # contact_mode
+        title,                              # title_source
+        body_text,                          # body_source
+        "draft",                            # status
+        DEFAULT_PUBLISH_PRIORITY,           # priority
+        now_iso,                            # created_at
+        now_iso,                            # updated_at
     ]
 
 
@@ -683,7 +703,10 @@ def append_ads_catalog_v2_row(row: List[str], trace_id: str) -> bool:
 
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info(f"[{trace_id}] ADS_CATALOG_V2_APPEND_OK ad_id={safe_str(row[0])} source_draft_id={safe_str(row[1])}")
+        logger.info(
+            f"[{trace_id}] ADS_CATALOG_V2_APPEND_OK "
+            f"ad_id={safe_str(row[0])} source_draft_id={safe_str(row[1])}"
+        )
         reset_ads_runtime_caches(trace_id)
         return True
     except Exception as e:
@@ -742,29 +765,56 @@ def sync_single_owner_ads_input_to_catalog(
     draft_id = safe_str(owner_ads_input_row.get("draft_id"))
     owner_id = safe_str(owner_ads_input_row.get("owner_id"))
 
-    result = {"draft_id": draft_id, "status": "skipped", "reason": "", "ad_id": ""}
+    result = {
+        "draft_id": draft_id,
+        "status": "skipped",
+        "reason": "",
+        "ad_id": "",
+    }
 
-    is_publishable, gate_reason = is_publishable_owner_ads_input_row(owner_ads_input_row)
-    if not is_publishable:
-        result["reason"] = gate_reason
-        logger.info(f"[{trace_id}] PUBLISH_SYNC_GATE_BLOCKED draft_id={draft_id} reason={gate_reason}")
-        return result
-
+    # 1) IDEMPOTENCY CHECK TRƯỚC
     existing_catalog_row = find_catalog_row_by_source_draft_id(catalog_rows, draft_id)
     if existing_catalog_row:
         existing_ad_id = safe_str(existing_catalog_row.get("ad_id"))
-        update_owner_ads_input_status(draft_id=draft_id, new_status=PUBLISHED_INPUT_STATUS, trace_id=trace_id)
+
+        update_owner_ads_input_status(
+            draft_id=draft_id,
+            new_status=PUBLISHED_INPUT_STATUS,
+            trace_id=trace_id,
+        )
+
         result["status"] = "already_exists"
         result["reason"] = "idempotent_hit"
         result["ad_id"] = existing_ad_id
-        logger.info(f"[{trace_id}] PUBLISH_SYNC_IDEMPOTENT_HIT draft_id={draft_id} ad_id={existing_ad_id}")
+
+        logger.info(
+            f"[{trace_id}] PUBLISH_SYNC_IDEMPOTENT_HIT "
+            f"draft_id={draft_id} ad_id={existing_ad_id}"
+        )
+        return result
+
+    # 2) PUBLISH GATE SAU
+    is_publishable, gate_reason = is_publishable_owner_ads_input_row(owner_ads_input_row)
+    if not is_publishable:
+        result["reason"] = gate_reason
+        logger.info(
+            f"[{trace_id}] PUBLISH_SYNC_GATE_BLOCKED "
+            f"draft_id={draft_id} reason={gate_reason}"
+        )
         return result
 
     owner_settings_row = find_owner_settings_by_owner_id(owner_settings_rows, owner_id)
     if not owner_settings_row:
         result["reason"] = "owner_settings_not_found"
-        logger.error(f"[{trace_id}] PUBLISH_SYNC_OWNER_SETTINGS_NOT_FOUND draft_id={draft_id} owner_id={owner_id}")
-        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
+        logger.error(
+            f"[{trace_id}] PUBLISH_SYNC_OWNER_SETTINGS_NOT_FOUND "
+            f"draft_id={draft_id} owner_id={owner_id}"
+        )
+        update_owner_ads_input_status(
+            draft_id=draft_id,
+            new_status=FAILED_INPUT_STATUS,
+            trace_id=trace_id,
+        )
         return result
 
     workspace_owner_id = safe_str(workspace_meta.get("owner_id"))
@@ -772,16 +822,24 @@ def sync_single_owner_ads_input_to_catalog(
     if not tenant_id:
         result["reason"] = "missing_workspace_tenant_id"
         logger.error(f"[{trace_id}] PUBLISH_SYNC_WORKSPACE_TENANT_ID_MISSING draft_id={draft_id}")
-        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
+        update_owner_ads_input_status(
+            draft_id=draft_id,
+            new_status=FAILED_INPUT_STATUS,
+            trace_id=trace_id,
+        )
         return result
 
     if workspace_owner_id and workspace_owner_id != owner_id:
         result["reason"] = "workspace_owner_id_mismatch"
         logger.error(
-            f"[{trace_id}] PUBLISH_SYNC_OWNER_ID_MISMATCH draft_id={draft_id} "
-            f"workspace_owner_id={workspace_owner_id} owner_id={owner_id}"
+            f"[{trace_id}] PUBLISH_SYNC_OWNER_ID_MISMATCH "
+            f"draft_id={draft_id} workspace_owner_id={workspace_owner_id} owner_id={owner_id}"
         )
-        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
+        update_owner_ads_input_status(
+            draft_id=draft_id,
+            new_status=FAILED_INPUT_STATUS,
+            trace_id=trace_id,
+        )
         return result
 
     catalog_append_row = build_ads_catalog_v2_row(
@@ -793,15 +851,26 @@ def sync_single_owner_ads_input_to_catalog(
     append_ok = append_ads_catalog_v2_row(catalog_append_row, trace_id)
     if not append_ok:
         result["reason"] = "catalog_append_failed"
-        update_owner_ads_input_status(draft_id=draft_id, new_status=FAILED_INPUT_STATUS, trace_id=trace_id)
+        update_owner_ads_input_status(
+            draft_id=draft_id,
+            new_status=FAILED_INPUT_STATUS,
+            trace_id=trace_id,
+        )
         return result
 
-    update_ok = update_owner_ads_input_status(draft_id=draft_id, new_status=PUBLISHED_INPUT_STATUS, trace_id=trace_id)
+    update_ok = update_owner_ads_input_status(
+        draft_id=draft_id,
+        new_status=PUBLISHED_INPUT_STATUS,
+        trace_id=trace_id,
+    )
     if not update_ok:
         result["reason"] = "source_status_update_failed"
         result["status"] = "partial_success"
         result["ad_id"] = safe_str(catalog_append_row[0])
-        logger.error(f"[{trace_id}] PUBLISH_SYNC_PARTIAL_SUCCESS draft_id={draft_id} ad_id={safe_str(catalog_append_row[0])}")
+        logger.error(
+            f"[{trace_id}] PUBLISH_SYNC_PARTIAL_SUCCESS "
+            f"draft_id={draft_id} ad_id={safe_str(catalog_append_row[0])}"
+        )
         return result
 
     result["status"] = "published"
@@ -809,8 +878,9 @@ def sync_single_owner_ads_input_to_catalog(
     result["ad_id"] = safe_str(catalog_append_row[0])
 
     logger.info(
-        f"[{trace_id}] PUBLISH_SYNC_OK draft_id={draft_id} "
-        f"ad_id={safe_str(catalog_append_row[0])} tenant_id={tenant_id} owner_id={owner_id}"
+        f"[{trace_id}] PUBLISH_SYNC_OK "
+        f"draft_id={draft_id} ad_id={safe_str(catalog_append_row[0])} "
+        f"tenant_id={tenant_id} owner_id={owner_id}"
     )
     return result
 
@@ -863,7 +933,10 @@ def run_publish_sync_once(trace_id: str) -> dict:
         status = safe_str(sync_result.get("status"))
         if status == "published":
             result["published"] += 1
-            catalog_rows.append({"ad_id": sync_result.get("ad_id", ""), "source_draft_id": sync_result.get("draft_id", "")})
+            catalog_rows.append({
+                "ad_id": sync_result.get("ad_id", ""),
+                "source_draft_id": sync_result.get("draft_id", ""),
+            })
         elif status == "already_exists":
             result["already_exists"] += 1
         elif status == "partial_success":
@@ -888,6 +961,19 @@ def run_publish_sync_once(trace_id: str) -> dict:
 @app.route("/internal/publish-sync", methods=["POST"])
 def internal_publish_sync():
     trace_id = make_trace_id()
+    started = time.perf_counter()
+
+    sync_result = run_publish_sync_once(trace_id)
+
+    status_code = 200 if sync_result.get("ok") else 409
+    payload = {
+        "ok": bool(sync_result.get("ok")),
+        "app_version": APP_VERSION,
+        "trace_id": trace_id,
+        "latency_ms": ms_since(started),
+        "result": sync_result,
+    }
+    return jsonify(payload), status_code    trace_id = make_trace_id()
     started = time.perf_counter()
 
     sync_result = run_publish_sync_once(trace_id)
