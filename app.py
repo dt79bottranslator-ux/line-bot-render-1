@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V26"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V27"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -503,8 +503,7 @@ def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
 
 
 # =========================================================
-# =========================================================
-# WORKSPACE VALIDATION
+# WORKSPACE VALIDATION WRAPPER
 # =========================================================
 def get_workspace_validation_result(trace_id: str) -> dict:
     validation_fn = globals().get("run_workspace_validation_cached")
@@ -514,13 +513,19 @@ def get_workspace_validation_result(trace_id: str) -> dict:
             result = validation_fn(trace_id)
             if isinstance(result, dict):
                 return result
-            logger.error(f"[{trace_id}] WORKSPACE_VALIDATION_INVALID_RESULT_TYPE type={type(result).__name__}")
+            logger.error(
+                f"[{trace_id}] WORKSPACE_VALIDATION_INVALID_RESULT_TYPE "
+                f"type={type(result).__name__}"
+            )
             return {
                 "workspace_status": "invalid",
                 "error_code": "WV_INVALID_RESULT_TYPE",
             }
         except Exception as e:
-            logger.exception(f"[{trace_id}] WORKSPACE_VALIDATION_CALL_FAILED exception={type(e).__name__}:{e}")
+            logger.exception(
+                f"[{trace_id}] WORKSPACE_VALIDATION_CALL_FAILED "
+                f"exception={type(e).__name__}:{e}"
+            )
             return {
                 "workspace_status": "invalid",
                 "error_code": "WV_CALL_FAILED",
@@ -675,23 +680,23 @@ def build_ads_catalog_v2_row(owner_ads_input_row: dict, owner_settings_row: dict
     ad_type = normalize_ad_type(category_code)
 
     return [
-        ad_id,                              # ad_id
-        draft_id,                           # source_draft_id
-        tenant_id,                          # tenant_id
-        owner_id,                           # owner_id
-        owner_contact_name,                 # owner_contact_name
-        owner_line_id,                      # owner_line_id
-        category_code,                      # category_code
-        ad_type,                            # ad_type
-        DEFAULT_AUTHOR_LANGUAGE_GROUP,      # author_language_group
-        DEFAULT_VISIBILITY_POLICY,          # visibility_policy
-        contact_mode,                       # contact_mode
-        title,                              # title_source
-        body_text,                          # body_source
-        "draft",                            # status
-        DEFAULT_PUBLISH_PRIORITY,           # priority
-        now_iso,                            # created_at
-        now_iso,                            # updated_at
+        ad_id,
+        draft_id,
+        tenant_id,
+        owner_id,
+        owner_contact_name,
+        owner_line_id,
+        category_code,
+        ad_type,
+        DEFAULT_AUTHOR_LANGUAGE_GROUP,
+        DEFAULT_VISIBILITY_POLICY,
+        contact_mode,
+        title,
+        body_text,
+        "draft",
+        DEFAULT_PUBLISH_PRIORITY,
+        now_iso,
+        now_iso,
     ]
 
 
@@ -772,7 +777,7 @@ def sync_single_owner_ads_input_to_catalog(
         "ad_id": "",
     }
 
-    # 1) IDEMPOTENCY CHECK TRƯỚC
+    # IDEMPOTENCY CHECK PHẢI ĐỨNG TRƯỚC PUBLISH GATE
     existing_catalog_row = find_catalog_row_by_source_draft_id(catalog_rows, draft_id)
     if existing_catalog_row:
         existing_ad_id = safe_str(existing_catalog_row.get("ad_id"))
@@ -793,7 +798,6 @@ def sync_single_owner_ads_input_to_catalog(
         )
         return result
 
-    # 2) PUBLISH GATE SAU
     is_publishable, gate_reason = is_publishable_owner_ads_input_row(owner_ads_input_row)
     if not is_publishable:
         result["reason"] = gate_reason
@@ -961,19 +965,6 @@ def run_publish_sync_once(trace_id: str) -> dict:
 @app.route("/internal/publish-sync", methods=["POST"])
 def internal_publish_sync():
     trace_id = make_trace_id()
-    started = time.perf_counter()
-
-    sync_result = run_publish_sync_once(trace_id)
-
-    status_code = 200 if sync_result.get("ok") else 409
-    payload = {
-        "ok": bool(sync_result.get("ok")),
-        "app_version": APP_VERSION,
-        "trace_id": trace_id,
-        "latency_ms": ms_since(started),
-        "result": sync_result,
-    }
-    return jsonify(payload), status_code    trace_id = make_trace_id()
     started = time.perf_counter()
 
     sync_result = run_publish_sync_once(trace_id)
