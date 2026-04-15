@@ -1040,7 +1040,6 @@ def sync_single_owner_ads_input_to_catalog(
         "ad_id": "",
     }
 
-    # IDEMPOTENCY CHECK PHẢI ĐỨNG TRƯỚC PUBLISH GATE
     existing_catalog_row = find_catalog_row_by_source_draft_id(catalog_rows, draft_id)
     if existing_catalog_row:
         existing_ad_id = safe_str(existing_catalog_row.get("ad_id"))
