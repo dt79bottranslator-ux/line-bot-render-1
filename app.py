@@ -817,6 +817,12 @@ PUBLISH_REQUEST_YES_VALUES = {"yes", "y", "true", "1", "on"}
 PUBLISHABLE_INPUT_STATUSES = {"draft"}
 PUBLISHED_INPUT_STATUS = "published"
 FAILED_INPUT_STATUS = "publish_error"
+PUBLISHED_CATALOG_STATUS = "active"
+SYNC_STATUS_PUBLISHED = "published"
+SYNC_STATUS_ALREADY_EXISTS = "already_exists"
+SYNC_STATUS_PARTIAL_SUCCESS = "partial_success"
+SYNC_STATUS_SKIPPED = "skipped"
+SYNC_STATUS_FAILED = "failed"
 DEFAULT_AUTHOR_LANGUAGE_GROUP = "vi"
 DEFAULT_VISIBILITY_POLICY = VISIBILITY_SAME_LANGUAGE_ONLY
 DEFAULT_PUBLISH_PRIORITY = "10"
@@ -956,7 +962,7 @@ def build_ads_catalog_v2_row(owner_ads_input_row: dict, owner_settings_row: dict
         contact_mode,
         title,
         body_text,
-        "draft",
+        PUBLISHED_CATALOG_STATUS,
         DEFAULT_PUBLISH_PRIORITY,
         now_iso,
         now_iso,
@@ -1035,7 +1041,7 @@ def sync_single_owner_ads_input_to_catalog(
 
     result = {
         "draft_id": draft_id,
-        "status": "skipped",
+        "status": SYNC_STATUS_FAILED,
         "reason": "",
         "ad_id": "",
     }
@@ -1050,7 +1056,7 @@ def sync_single_owner_ads_input_to_catalog(
             trace_id=trace_id,
         )
         if not update_ok:
-            result["status"] = "partial_success"
+            result["status"] = SYNC_STATUS_PARTIAL_SUCCESS
             result["reason"] = "idempotent_hit_source_status_update_failed"
             result["ad_id"] = existing_ad_id
             logger.error(
@@ -1059,7 +1065,7 @@ def sync_single_owner_ads_input_to_catalog(
             )
             return result
 
-        result["status"] = "already_exists"
+        result["status"] = SYNC_STATUS_ALREADY_EXISTS
         result["reason"] = "idempotent_hit"
         result["ad_id"] = existing_ad_id
 
@@ -1071,6 +1077,7 @@ def sync_single_owner_ads_input_to_catalog(
 
     is_publishable, gate_reason = is_publishable_owner_ads_input_row(owner_ads_input_row)
     if not is_publishable:
+        result["status"] = SYNC_STATUS_SKIPPED
         result["reason"] = gate_reason
         logger.info(
             f"[{trace_id}] PUBLISH_SYNC_GATE_BLOCKED "
@@ -1148,7 +1155,7 @@ def sync_single_owner_ads_input_to_catalog(
         )
         return result
 
-    result["status"] = "published"
+    result["status"] = SYNC_STATUS_PUBLISHED
     result["reason"] = "ok"
     result["ad_id"] = safe_str(catalog_append_row[0])
 
@@ -1206,17 +1213,17 @@ def run_publish_sync_once(trace_id: str) -> dict:
         result["items"].append(sync_result)
 
         status = safe_str(sync_result.get("status"))
-        if status == "published":
+        if status == SYNC_STATUS_PUBLISHED:
             result["published"] += 1
             catalog_rows.append({
                 "ad_id": sync_result.get("ad_id", ""),
                 "source_draft_id": sync_result.get("draft_id", ""),
             })
-        elif status == "already_exists":
+        elif status == SYNC_STATUS_ALREADY_EXISTS:
             result["already_exists"] += 1
-        elif status == "partial_success":
+        elif status == SYNC_STATUS_PARTIAL_SUCCESS:
             result["partial_success"] += 1
-        elif status == "skipped":
+        elif status == SYNC_STATUS_SKIPPED:
             result["skipped"] += 1
         else:
             result["failed"] += 1
