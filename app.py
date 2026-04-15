@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V28"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V29"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1045,11 +1045,20 @@ def sync_single_owner_ads_input_to_catalog(
     if existing_catalog_row:
         existing_ad_id = safe_str(existing_catalog_row.get("ad_id"))
 
-        update_owner_ads_input_status(
+        update_ok = update_owner_ads_input_status(
             draft_id=draft_id,
             new_status=PUBLISHED_INPUT_STATUS,
             trace_id=trace_id,
         )
+        if not update_ok:
+            result["status"] = "partial_success"
+            result["reason"] = "idempotent_hit_source_status_update_failed"
+            result["ad_id"] = existing_ad_id
+            logger.error(
+                f"[{trace_id}] PUBLISH_SYNC_IDEMPOTENT_PARTIAL "
+                f"draft_id={draft_id} ad_id={existing_ad_id}"
+            )
+            return result
 
         result["status"] = "already_exists"
         result["reason"] = "idempotent_hit"
@@ -1213,13 +1222,29 @@ def run_publish_sync_once(trace_id: str) -> dict:
         else:
             result["failed"] += 1
 
-    result["ok"] = True
+    result["ok"] = (result["failed"] == 0 and result["partial_success"] == 0)
     logger.info(
         f"[{trace_id}] PUBLISH_SYNC_SUMMARY processed={result['processed']} "
         f"published={result['published']} already_exists={result['already_exists']} "
-        f"partial_success={result['partial_success']} skipped={result['skipped']} failed={result['failed']}"
+        f"partial_success={result['partial_success']} skipped={result['skipped']} failed={result['failed']} "
+        f"ok={result['ok']}"
     )
     return result
+
+
+def resolve_publish_sync_status_code(sync_result: dict) -> int:
+    workspace_status = safe_str(sync_result.get("workspace_status"))
+    failed = int(sync_result.get("failed", 0) or 0)
+    partial_success = int(sync_result.get("partial_success", 0) or 0)
+    ok = bool(sync_result.get("ok"))
+
+    if ok:
+        return 200
+    if workspace_status != "valid":
+        return 409
+    if failed > 0 or partial_success > 0:
+        return 500
+    return 409
 
 
 # =========================================================
@@ -1232,7 +1257,7 @@ def internal_publish_sync():
 
     sync_result = run_publish_sync_once(trace_id)
 
-    status_code = 200 if sync_result.get("ok") else 409
+    status_code = resolve_publish_sync_status_code(sync_result)
     payload = {
         "ok": bool(sync_result.get("ok")),
         "app_version": APP_VERSION,
