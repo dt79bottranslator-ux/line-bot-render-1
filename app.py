@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V27"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V28"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -350,6 +350,7 @@ def update_cell_by_header(
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
 _ADS_DETAIL_CACHE: Dict[str, dict] = {}
+_WORKSPACE_VALIDATION_CACHE = {"result": None, "loaded_at_ts": 0}
 
 
 def reset_ads_runtime_caches(trace_id: str) -> None:
@@ -503,6 +504,277 @@ def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
 
 
 # =========================================================
+# TENANT WORKSPACE VALIDATION HELPERS
+# =========================================================
+REQUIRED_SYSTEM_TABS_V1 = [
+    "READ_ME",
+    "OWNER_ADS_INPUT",
+    "OWNER_LEAD_VIEW",
+    "OWNER_SETTINGS",
+    "ADS_CATALOG_V2",
+    "ADS_LEADS",
+    "ads_click_log",
+    "SYSTEM_META",
+]
+
+WV_OK = "WV_OK"
+WV_MISSING_REQUIRED_TAB = "WV_MISSING_REQUIRED_TAB"
+WV_EMPTY_TENANT_ID = "WV_EMPTY_TENANT_ID"
+WV_EMPTY_OWNER_ID = "WV_EMPTY_OWNER_ID"
+WV_EMPTY_WORKSPACE_VERSION = "WV_EMPTY_WORKSPACE_VERSION"
+WV_TENANT_REGISTRY_NOT_FOUND = "WV_TENANT_REGISTRY_NOT_FOUND"
+WV_TENANT_REGISTRY_DUPLICATED = "WV_TENANT_REGISTRY_DUPLICATED"
+WV_OWNER_ID_MISMATCH = "WV_OWNER_ID_MISMATCH"
+WV_WORKSPACE_NAME_MISMATCH = "WV_WORKSPACE_NAME_MISMATCH"
+WV_TENANT_INACTIVE = "WV_TENANT_INACTIVE"
+
+
+def make_workspace_validation_result() -> dict:
+    return {
+        "workspace_status": "invalid",
+        "error_code": "",
+        "error_detail": "",
+        "tenant_id": "",
+        "owner_id": "",
+        "workspace_version": "",
+        "checked_tabs": [],
+        "missing_tabs": [],
+    }
+
+
+def open_tenant_registry_worksheet(trace_id: str):
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        worksheet = spreadsheet.worksheet(TENANT_REGISTRY_SHEET_NAME)
+        logger.info(f"[{trace_id}] TENANT_REGISTRY_SHEET_READY")
+        return worksheet
+    except gspread.WorksheetNotFound:
+        logger.error(f"[{trace_id}] TENANT_REGISTRY_SHEET_NOT_FOUND worksheet_name={TENANT_REGISTRY_SHEET_NAME}")
+        return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] TENANT_REGISTRY_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
+def open_system_meta_worksheet(trace_id: str):
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        worksheet = spreadsheet.worksheet(SYSTEM_META_SHEET_NAME)
+        logger.info(f"[{trace_id}] SYSTEM_META_SHEET_READY")
+        return worksheet
+    except gspread.WorksheetNotFound:
+        logger.error(f"[{trace_id}] SYSTEM_META_SHEET_NOT_FOUND worksheet_name={SYSTEM_META_SHEET_NAME}")
+        return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] SYSTEM_META_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
+def get_current_workspace_name(trace_id: str) -> str:
+    workspace_name = safe_str(PHASE1_SPREADSHEET_NAME)
+    logger.info(f"[{trace_id}] WORKSPACE_NAME_RESOLVED name={workspace_name}")
+    return workspace_name
+
+
+def get_all_workspace_tab_names(trace_id: str) -> List[str]:
+    client = get_gspread_client(trace_id)
+    if not client:
+        return []
+
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        tab_names = [safe_str(ws.title) for ws in spreadsheet.worksheets()]
+        logger.info(
+            f"[{trace_id}] WORKSPACE_TAB_LIST_OK count={len(tab_names)} tabs={json.dumps(tab_names, ensure_ascii=False)}"
+        )
+        return tab_names
+    except Exception as e:
+        logger.exception(f"[{trace_id}] WORKSPACE_TAB_LIST_FAILED exception={type(e).__name__}:{e}")
+        return []
+
+
+def read_system_meta_row(trace_id: str) -> dict:
+    ws = open_system_meta_worksheet(trace_id)
+    if not ws:
+        return {}
+
+    try:
+        records = ws.get_all_records()
+        if not records:
+            logger.error(f"[{trace_id}] SYSTEM_META_ROW2_EMPTY")
+            return {}
+
+        row = records[0]
+        logger.info(
+            f"[{trace_id}] SYSTEM_META_ROW2_OK tenant_id={safe_str(row.get('tenant_id'))} "
+            f"owner_id={safe_str(row.get('owner_id'))} "
+            f"workspace_version={safe_str(row.get('workspace_version'))}"
+        )
+        return row
+    except Exception as e:
+        logger.exception(f"[{trace_id}] SYSTEM_META_READ_FAILED exception={type(e).__name__}:{e}")
+        return {}
+
+
+def read_tenant_registry_rows(trace_id: str) -> List[dict]:
+    ws = open_tenant_registry_worksheet(trace_id)
+    if not ws:
+        return []
+
+    try:
+        rows = ws.get_all_records()
+        logger.info(f"[{trace_id}] TENANT_REGISTRY_READ_OK count={len(rows)}")
+        return rows
+    except Exception as e:
+        logger.exception(f"[{trace_id}] TENANT_REGISTRY_READ_FAILED exception={type(e).__name__}:{e}")
+        return []
+
+
+def validate_tenant_workspace(
+    spreadsheet_name: str,
+    all_tab_names: List[str],
+    system_meta_row: dict,
+    tenant_registry_rows: List[dict],
+) -> dict:
+    result = make_workspace_validation_result()
+    result["checked_tabs"] = list(all_tab_names or [])
+
+    current_tabs_map = {
+        safe_str(x).lower(): safe_str(x)
+        for x in (all_tab_names or [])
+        if safe_str(x)
+    }
+    missing_tabs = [
+        tab for tab in REQUIRED_SYSTEM_TABS_V1
+        if safe_str(tab).lower() not in current_tabs_map
+    ]
+    if missing_tabs:
+        result["workspace_status"] = "invalid"
+        result["error_code"] = WV_MISSING_REQUIRED_TAB
+        result["error_detail"] = "Missing required system tab(s)"
+        result["missing_tabs"] = missing_tabs
+        return result
+
+    tenant_id = safe_str(system_meta_row.get("tenant_id"))
+    owner_id = safe_str(system_meta_row.get("owner_id"))
+    workspace_version = safe_str(system_meta_row.get("workspace_version"))
+
+    result["tenant_id"] = tenant_id
+    result["owner_id"] = owner_id
+    result["workspace_version"] = workspace_version
+
+    if not tenant_id:
+        result["error_code"] = WV_EMPTY_TENANT_ID
+        result["error_detail"] = "SYSTEM_META.tenant_id is empty"
+        return result
+
+    if not owner_id:
+        result["error_code"] = WV_EMPTY_OWNER_ID
+        result["error_detail"] = "SYSTEM_META.owner_id is empty"
+        return result
+
+    if not workspace_version:
+        result["error_code"] = WV_EMPTY_WORKSPACE_VERSION
+        result["error_detail"] = "SYSTEM_META.workspace_version is empty"
+        return result
+
+    matched_rows = [
+        row for row in (tenant_registry_rows or [])
+        if safe_str(row.get("tenant_id")) == tenant_id
+    ]
+
+    if not matched_rows:
+        result["error_code"] = WV_TENANT_REGISTRY_NOT_FOUND
+        result["error_detail"] = "tenant_id not found in TENANT_REGISTRY"
+        return result
+
+    if len(matched_rows) > 1:
+        result["error_code"] = WV_TENANT_REGISTRY_DUPLICATED
+        result["error_detail"] = "duplicated tenant_id in TENANT_REGISTRY"
+        return result
+
+    tenant_row = matched_rows[0]
+
+    if safe_str(tenant_row.get("owner_id")) != owner_id:
+        result["error_code"] = WV_OWNER_ID_MISMATCH
+        result["error_detail"] = "owner_id mismatch between SYSTEM_META and TENANT_REGISTRY"
+        return result
+
+    if safe_str(tenant_row.get("workspace_sheet_name")) != safe_str(spreadsheet_name):
+        result["error_code"] = WV_WORKSPACE_NAME_MISMATCH
+        result["error_detail"] = "workspace_sheet_name mismatch"
+        return result
+
+    if safe_str(tenant_row.get("tenant_status")).lower() != "active":
+        result["error_code"] = WV_TENANT_INACTIVE
+        result["error_detail"] = "tenant_status is not active"
+        return result
+
+    result["workspace_status"] = "valid"
+    result["error_code"] = WV_OK
+    result["error_detail"] = ""
+    return result
+
+
+def run_workspace_validation(trace_id: str) -> dict:
+    spreadsheet_name = get_current_workspace_name(trace_id)
+    all_tab_names = get_all_workspace_tab_names(trace_id)
+    system_meta_row = read_system_meta_row(trace_id)
+    tenant_registry_rows = read_tenant_registry_rows(trace_id)
+
+    result = validate_tenant_workspace(
+        spreadsheet_name=spreadsheet_name,
+        all_tab_names=all_tab_names,
+        system_meta_row=system_meta_row,
+        tenant_registry_rows=tenant_registry_rows,
+    )
+
+    logger.info(
+        "[%s] WORKSPACE_VALIDATION_RESULT workspace_status=%s error_code=%s tenant_id=%s owner_id=%s workspace_version=%s missing_tabs=%s",
+        trace_id,
+        safe_str(result.get("workspace_status")),
+        safe_str(result.get("error_code")),
+        safe_str(result.get("tenant_id")),
+        safe_str(result.get("owner_id")),
+        safe_str(result.get("workspace_version")),
+        json.dumps(result.get("missing_tabs", []), ensure_ascii=False),
+    )
+    return result
+
+
+def run_workspace_validation_cached(trace_id: str) -> dict:
+    now_ts = get_now_ts()
+    cached = _WORKSPACE_VALIDATION_CACHE.get("result")
+    loaded_at_ts = int(_WORKSPACE_VALIDATION_CACHE.get("loaded_at_ts", 0) or 0)
+
+    if cached and loaded_at_ts > 0 and (now_ts - loaded_at_ts) < WORKSPACE_VALIDATION_CACHE_TTL_SECONDS:
+        logger.info(
+            f"[{trace_id}] WORKSPACE_VALIDATION_CACHE_HIT "
+            f"workspace_status={safe_str(cached.get('workspace_status'))} "
+            f"error_code={safe_str(cached.get('error_code'))}"
+        )
+        return cached
+
+    result = run_workspace_validation(trace_id)
+    _WORKSPACE_VALIDATION_CACHE["result"] = result
+    _WORKSPACE_VALIDATION_CACHE["loaded_at_ts"] = now_ts
+    logger.info(
+        f"[{trace_id}] WORKSPACE_VALIDATION_CACHE_SET "
+        f"workspace_status={safe_str(result.get('workspace_status'))} "
+        f"error_code={safe_str(result.get('error_code'))}"
+    )
+    return result
+
+
+# =========================================================
 # WORKSPACE VALIDATION WRAPPER
 # =========================================================
 def get_workspace_validation_result(trace_id: str) -> dict:
@@ -536,15 +808,6 @@ def get_workspace_validation_result(trace_id: str) -> dict:
         "workspace_status": "invalid",
         "error_code": "WV_VALIDATION_FN_MISSING",
     }
-
-
-def read_system_meta_row(trace_id: str) -> dict:
-    ws = get_worksheet_by_name(trace_id, SYSTEM_META_SHEET_NAME)
-    if not ws:
-        return {}
-
-    records = get_records_safe(ws, trace_id, SYSTEM_META_SHEET_NAME)
-    return records[0] if records else {}
 
 
 # =========================================================
