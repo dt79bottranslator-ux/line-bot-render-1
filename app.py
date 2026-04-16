@@ -1272,8 +1272,6 @@ def internal_publish_sync():
         "result": sync_result,
     }
     return jsonify(payload), status_code
-
-
 # =========================================================
 # LINE WEBHOOK / CALLBACK [GIẢ ĐỊNH]
 # =========================================================
