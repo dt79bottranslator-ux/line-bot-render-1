@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKER_STATE_V33"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__PERSISTENT_STATE_V34"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -181,6 +181,19 @@ def get_gspread_client(trace_id: str):
         logger.exception(f"[{trace_id}] GSHEET_CLIENT_INIT_FAILED exception={type(e).__name__}:{e}")
         return None
 
+def open_spreadsheet(trace_id: str):
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        logger.info(f"[{trace_id}] SPREADSHEET_READY name={PHASE1_SPREADSHEET_NAME}")
+        return spreadsheet
+    except Exception as e:
+        logger.exception(f"[{trace_id}] SPREADSHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+
 def normalize_header_key(value: str) -> str:
     return safe_str(value).strip().lower()
 
@@ -193,11 +206,10 @@ def build_header_index_map(headers: List[str]) -> Dict[str, int]:
     return result
 
 def get_worksheet_by_name(trace_id: str, worksheet_name: str):
-    client = get_gspread_client(trace_id)
-    if not client:
+    spreadsheet = open_spreadsheet(trace_id)
+    if not spreadsheet:
         return None
     try:
-        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
         ws = spreadsheet.worksheet(worksheet_name)
         logger.info(f"[{trace_id}] WORKSHEET_READY worksheet_name={worksheet_name}")
         return ws
@@ -268,6 +280,112 @@ _ADS_VIEW_CACHE: Dict[str, dict] = {}
 _ADS_DETAIL_CACHE: Dict[str, dict] = {}
 _WORKSPACE_VALIDATION_CACHE = {"result": None, "loaded_at_ts": 0}
 _USER_FLOW_STATE: Dict[str, dict] = {}
+
+
+USER_STATE_HEADERS = ["user_id", "flow", "updated_at"]
+
+
+def ensure_user_state_worksheet(trace_id: str):
+    spreadsheet = open_spreadsheet(trace_id)
+    if not spreadsheet:
+        return None
+    try:
+        ws = spreadsheet.worksheet(USER_STATE_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        try:
+            ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=3)
+            ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] USER_STATE_SHEET_CREATED worksheet_name={USER_STATE_SHEET_NAME}")
+            return ws
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_STATE_SHEET_CREATE_FAILED exception={type(e).__name__}:{e}")
+            return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_STATE_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+    values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    if not values:
+        try:
+            ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] USER_STATE_HEADERS_INIT_OK")
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_STATE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
+            return None
+    return ws
+
+
+def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        return ""
+    ws = ensure_user_state_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_READ_SKIPPED reason=worksheet_unavailable")
+        return ""
+    records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    for row in records:
+        if safe_str(row.get("user_id")) == normalized_user_id:
+            flow = safe_str(row.get("flow"))
+            logger.info(f"[{trace_id}] USER_STATE_PERSIST_HIT user_id={normalized_user_id} flow={flow}")
+            return flow
+    logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_id={normalized_user_id}")
+    return ""
+
+
+def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    normalized_flow = safe_str(flow)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_SET_SKIPPED reason=missing_user_id")
+        return False
+    ws = ensure_user_state_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_SET_SKIPPED reason=worksheet_unavailable")
+        return False
+
+    row_index = find_first_row_index_by_column_value(
+        ws=ws,
+        column_name="user_id",
+        expected_value=normalized_user_id,
+        trace_id=trace_id,
+        worksheet_name=USER_STATE_SHEET_NAME,
+    )
+    now_iso = now_tw_iso()
+
+    if row_index:
+        ok_flow = update_cell_by_header(ws, row_index, "flow", normalized_flow, trace_id, USER_STATE_SHEET_NAME)
+        ok_updated_at = update_cell_by_header(ws, row_index, "updated_at", now_iso, trace_id, USER_STATE_SHEET_NAME)
+        ok = bool(ok_flow and ok_updated_at)
+        if ok:
+            logger.info(f"[{trace_id}] USER_STATE_PERSIST_UPDATE_OK user_id={normalized_user_id} flow={normalized_flow}")
+        return ok
+
+    try:
+        ws.append_row([normalized_user_id, normalized_flow, now_iso], value_input_option="USER_ENTERED")
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_APPEND_OK user_id={normalized_user_id} flow={normalized_flow}")
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_STATE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+
+def resolve_user_flow(user_id: str, trace_id: str) -> str:
+    runtime_flow = get_runtime_user_flow(user_id, trace_id)
+    if runtime_flow:
+        return runtime_flow
+    persistent_flow = get_persistent_user_flow(user_id, trace_id)
+    if persistent_flow:
+        set_runtime_user_flow(user_id, persistent_flow, trace_id)
+        logger.info(f"[{trace_id}] USER_STATE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} flow={persistent_flow}")
+        return persistent_flow
+    return ""
+
+
+def persist_user_flow(user_id: str, flow: str, trace_id: str) -> None:
+    set_runtime_user_flow(user_id, flow, trace_id)
+    persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
+    logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
 
 def reset_ads_runtime_caches(trace_id: str) -> None:
     _ADS_CATALOG_CACHE["loaded_at_ts"] = 0
@@ -948,14 +1066,14 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     reply_token = get_reply_token(event)
     text = get_message_text(event)
     normalized = text.strip().lower()
-    current_flow = get_runtime_user_flow(user_id, trace_id)
+    current_flow = resolve_user_flow(user_id, trace_id)
     logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} current_flow={current_flow}")
     if normalized == WORKER_ENTRY_COMMAND:
-        set_runtime_user_flow(user_id, FLOW_WORKER, trace_id)
+        persist_user_flow(user_id, FLOW_WORKER, trace_id)
         reply_text = handle_worker_entry()
         flow_used = FLOW_WORKER
     elif normalized == ADS_ENTRY_COMMAND:
-        set_runtime_user_flow(user_id, FLOW_ADS, trace_id)
+        persist_user_flow(user_id, FLOW_ADS, trace_id)
         reply_text = handle_ads_entry()
         flow_used = FLOW_ADS
     elif current_flow == FLOW_WORKER:
