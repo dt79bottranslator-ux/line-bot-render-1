@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__PERSISTENT_STATE_V34"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__PERSISTENT_STATE_V34B"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -312,6 +312,23 @@ def ensure_user_state_worksheet(trace_id: str):
         except Exception as e:
             logger.exception(f"[{trace_id}] USER_STATE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
             return None
+        return ws
+
+    first_row = [safe_str(x) for x in values[0]]
+    normalized_headers = [normalize_header_key(x) for x in first_row]
+    required_headers = [normalize_header_key(x) for x in USER_STATE_HEADERS]
+
+    if not all(header in normalized_headers for header in required_headers):
+        try:
+            ws.insert_row(USER_STATE_HEADERS, index=1, value_input_option="USER_ENTERED")
+            logger.info(
+                f"[{trace_id}] USER_STATE_HEADERS_REPAIRED "
+                f"old_headers={json.dumps(first_row, ensure_ascii=False)}"
+            )
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_STATE_HEADERS_REPAIR_FAILED exception={type(e).__name__}:{e}")
+            return None
+
     return ws
 
 
