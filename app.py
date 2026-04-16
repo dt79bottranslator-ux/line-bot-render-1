@@ -1273,6 +1273,7 @@ def internal_publish_sync():
     }
     return jsonify(payload), status_code
 
+
 # =========================================================
 # LINE WEBHOOK / CALLBACK [GIẢ ĐỊNH]
 # =========================================================
@@ -1304,11 +1305,8 @@ def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> boo
 def parse_line_webhook_payload(raw_body: bytes, trace_id: str) -> dict:
     try:
         payload = json.loads(raw_body.decode("utf-8"))
-        if not isinstance(payload, dict):
-            logger.error(f"[{trace_id}] LINE_PAYLOAD_NOT_DICT")
-            return {}
         logger.info(f"[{trace_id}] LINE_PAYLOAD_PARSED keys={list(payload.keys())}")
-        return payload
+        return payload if isinstance(payload, dict) else {}
     except Exception as e:
         logger.exception(f"[{trace_id}] LINE_PAYLOAD_PARSE_FAILED exception={type(e).__name__}:{e}")
         return {}
@@ -1339,11 +1337,11 @@ def get_reply_token(event: dict) -> str:
 
 def reply_line_text(reply_token: str, text: str, trace_id: str) -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN:
-        logger.error(f"[{trace_id}] LINE_REPLY_MISSING_ACCESS_TOKEN")
+        logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_ACCESS_TOKEN")
         return False
 
     if not reply_token:
-        logger.error(f"[{trace_id}] LINE_REPLY_MISSING_REPLY_TOKEN")
+        logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_REPLY_TOKEN")
         return False
 
     text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or FALLBACK_REPLY_TEXT
@@ -1495,7 +1493,3 @@ def callback():
         "event_count": len(events),
         "results": results,
     }), 200
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
