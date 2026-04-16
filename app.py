@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__FLOW_HELP_V37"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__FLOW_LANG_V38"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -69,6 +69,7 @@ RESET_ENTRY_COMMAND = "/reset"
 EXIT_ENTRY_COMMAND = "/exit"
 STATUS_ENTRY_COMMAND = "/status"
 HELP_ENTRY_COMMAND = "/help"
+LANG_COMMAND_PREFIX = "/lang"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
@@ -287,6 +288,179 @@ _USER_FLOW_STATE: Dict[str, dict] = {}
 
 
 USER_STATE_HEADERS = ["user_id", "flow", "updated_at"]
+
+
+_USER_LANGUAGE_STATE: Dict[str, dict] = {}
+USER_LANGUAGE_HEADERS = ["user_id", "language_group", "updated_at"]
+
+
+def prune_runtime_user_language_state(trace_id: str) -> None:
+    now_ts = get_now_ts()
+    expired_keys = []
+    for user_id, item in list(_USER_LANGUAGE_STATE.items()):
+        updated_at_ts = int(item.get("updated_at_ts", 0) or 0)
+        if updated_at_ts <= 0 or (now_ts - updated_at_ts) > RUNTIME_STATE_TTL_SECONDS:
+            expired_keys.append(user_id)
+    for user_id in expired_keys:
+        _USER_LANGUAGE_STATE.pop(user_id, None)
+    while len(_USER_LANGUAGE_STATE) > RUNTIME_STATE_MAX_KEYS:
+        oldest_key = min(_USER_LANGUAGE_STATE.keys(), key=lambda x: int(_USER_LANGUAGE_STATE[x].get("updated_at_ts", 0) or 0))
+        _USER_LANGUAGE_STATE.pop(oldest_key, None)
+    if expired_keys:
+        logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_PRUNED removed={len(expired_keys)}")
+
+
+def get_runtime_user_language(user_id: str, trace_id: str) -> str:
+    prune_runtime_user_language_state(trace_id)
+    item = _USER_LANGUAGE_STATE.get(safe_str(user_id))
+    if not item:
+        logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_MISS user_id={user_id}")
+        return ""
+    language_group = safe_str(item.get("language_group"))
+    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_HIT user_id={user_id} language_group={language_group}")
+    return language_group
+
+
+def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) -> None:
+    normalized_user_id = safe_str(user_id)
+    normalized_language = normalize_language_group(language_group)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_STATE_SET_SKIPPED reason=missing_user_id")
+        return
+    prune_runtime_user_language_state(trace_id)
+    _USER_LANGUAGE_STATE[normalized_user_id] = {"language_group": normalized_language, "updated_at_ts": get_now_ts()}
+    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_SET user_id={normalized_user_id} language_group={normalized_language}")
+
+
+def ensure_user_language_worksheet(trace_id: str):
+    spreadsheet = open_spreadsheet(trace_id)
+    if not spreadsheet:
+        return None
+    try:
+        ws = spreadsheet.worksheet(USER_STATE_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        try:
+            ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=6)
+            ws.append_row(USER_STATE_HEADERS + USER_LANGUAGE_HEADERS[1:], value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] USER_LANGUAGE_SHEET_CREATED worksheet_name={USER_STATE_SHEET_NAME}")
+            return ws
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_LANGUAGE_SHEET_CREATE_FAILED exception={type(e).__name__}:{e}")
+            return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_LANGUAGE_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+    values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    if not values:
+        try:
+            ws.append_row(USER_STATE_HEADERS + USER_LANGUAGE_HEADERS[1:], value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] USER_LANGUAGE_HEADERS_INIT_OK")
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_LANGUAGE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
+            return None
+        return ws
+
+    headers = values[0]
+    required_headers = ["user_id", "flow", "updated_at", "language_group"]
+    header_map = build_header_index_map(headers)
+    if any(h not in header_map for h in required_headers):
+        repaired_headers = ["user_id", "flow", "updated_at", "language_group"]
+        try:
+            ws.update(f"A1:D1", [repaired_headers])
+            logger.info(f"[{trace_id}] USER_LANGUAGE_HEADERS_REPAIRED old_headers={json.dumps(headers, ensure_ascii=False)}")
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_LANGUAGE_HEADERS_REPAIR_FAILED exception={type(e).__name__}:{e}")
+            return None
+    return ws
+
+
+def get_persistent_user_language(user_id: str, trace_id: str) -> str:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        return ""
+    ws = ensure_user_language_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_READ_SKIPPED reason=worksheet_unavailable")
+        return ""
+    records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    for row in records:
+        if safe_str(row.get("user_id")) == normalized_user_id:
+            language_group = normalize_language_group(row.get("language_group"))
+            logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_HIT user_id={normalized_user_id} language_group={language_group}")
+            return language_group
+    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_MISS user_id={normalized_user_id}")
+    return ""
+
+
+def set_persistent_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    normalized_language = normalize_language_group(language_group)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_SET_SKIPPED reason=missing_user_id")
+        return False
+
+    ws = ensure_user_language_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_SET_SKIPPED reason=worksheet_unavailable")
+        return False
+
+    row_index = find_first_row_index_by_column_value(
+        ws=ws,
+        column_name="user_id",
+        expected_value=normalized_user_id,
+        trace_id=trace_id,
+        worksheet_name=USER_STATE_SHEET_NAME,
+    )
+    now_iso = now_tw_iso()
+
+    if row_index:
+        ok_language = update_cell_by_header(ws, row_index, "language_group", normalized_language, trace_id, USER_STATE_SHEET_NAME)
+        if not ok_language:
+            values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+            headers = values[0] if values else []
+            header_map = build_header_index_map(headers)
+            if "language_group" not in header_map:
+                try:
+                    ws.update_cell(1, len(headers) + 1, "language_group")
+                    logger.info(f"[{trace_id}] USER_LANGUAGE_COLUMN_ADDED_OK col_index={len(headers) + 1}")
+                    ok_language = update_cell_by_header(ws, row_index, "language_group", normalized_language, trace_id, USER_STATE_SHEET_NAME)
+                except Exception as e:
+                    logger.exception(f"[{trace_id}] USER_LANGUAGE_COLUMN_ADD_FAILED exception={type(e).__name__}:{e}")
+                    ok_language = False
+        ok_updated_at = update_cell_by_header(ws, row_index, "updated_at", now_iso, trace_id, USER_STATE_SHEET_NAME)
+        ok = bool(ok_language and ok_updated_at)
+        if ok:
+            logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_UPDATE_OK user_id={normalized_user_id} language_group={normalized_language}")
+        return ok
+
+    try:
+        ws.append_row([normalized_user_id, "", now_iso, normalized_language], value_input_option="USER_ENTERED")
+        logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_OK user_id={normalized_user_id} language_group={normalized_language}")
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+
+def resolve_user_language(user_id: str, trace_id: str) -> str:
+    runtime_language = get_runtime_user_language(user_id, trace_id)
+    if runtime_language:
+        return runtime_language
+    persistent_language = get_persistent_user_language(user_id, trace_id)
+    if persistent_language:
+        set_runtime_user_language(user_id, persistent_language, trace_id)
+        logger.info(f"[{trace_id}] USER_LANGUAGE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} language_group={persistent_language}")
+        return persistent_language
+    return DEFAULT_LANGUAGE_GROUP
+
+
+def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
+    normalized_language = normalize_language_group(language_group)
+    set_runtime_user_language(user_id, normalized_language, trace_id)
+    persist_ok = set_persistent_user_language(user_id, normalized_language, trace_id)
+    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
+    return persist_ok
 
 
 def ensure_user_state_worksheet(trace_id: str):
@@ -1141,7 +1315,27 @@ def handle_help_message() -> str:
         "/reset",
         "/exit",
         "/help",
+        "/lang vi",
+        "/lang id",
+        "/lang th",
     ])
+
+
+def parse_lang_command(text: str) -> str:
+    parts = safe_str(text).lower().split()
+    if len(parts) != 2:
+        return ""
+    if parts[0] != LANG_COMMAND_PREFIX:
+        return ""
+    return normalize_language_group(parts[1]) if parts[1] in SUPPORTED_LANGUAGE_GROUPS else ""
+
+
+def handle_lang_message(language_group: str) -> str:
+    return f"đã đổi ngôn ngữ: {normalize_language_group(language_group)}"
+
+
+def handle_lang_invalid_message() -> str:
+    return "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th"
 
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
@@ -1149,7 +1343,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     text = get_message_text(event)
     normalized = text.strip().lower()
     current_flow = resolve_user_flow(user_id, trace_id)
-    logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} current_flow={current_flow}")
+    current_language = resolve_user_language(user_id, trace_id)
+    requested_language = parse_lang_command(text)
+    logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
+
     if normalized == WORKER_ENTRY_COMMAND:
         persist_user_flow(user_id, FLOW_WORKER, trace_id)
         reply_text = handle_worker_entry()
@@ -1168,6 +1365,14 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     elif normalized == HELP_ENTRY_COMMAND:
         reply_text = handle_help_message()
         flow_used = current_flow or "help"
+    elif normalized.startswith(LANG_COMMAND_PREFIX):
+        if requested_language:
+            persist_user_language(user_id, requested_language, trace_id)
+            reply_text = handle_lang_message(requested_language)
+            flow_used = current_flow or "lang"
+        else:
+            reply_text = handle_lang_invalid_message()
+            flow_used = current_flow or "lang_invalid"
     elif current_flow == FLOW_WORKER:
         reply_text = handle_worker_message(text)
         flow_used = FLOW_WORKER
@@ -1177,6 +1382,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     else:
         reply_text = f"Đã nhận: {text}"
         flow_used = "default"
+
     reply_ok = reply_line_text(reply_token, reply_text, trace_id)
     return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_id": user_id, "reply_sent": reply_ok}
 
