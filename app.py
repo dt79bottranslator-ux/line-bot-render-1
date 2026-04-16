@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__WORKSPACE_VALIDATION__PUBLISH_SYNC_V30"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__CALLBACK_MINIMAL_V31"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1147,7 +1147,7 @@ def sync_single_owner_ads_input_to_catalog(
     )
     if not update_ok:
         result["reason"] = "source_status_update_failed"
-        result["status"] = "partial_success"
+        result["status"] = SYNC_STATUS_PARTIAL_SUCCESS
         result["ad_id"] = safe_str(catalog_append_row[0])
         logger.error(
             f"[{trace_id}] PUBLISH_SYNC_PARTIAL_SUCCESS "
@@ -1272,3 +1272,230 @@ def internal_publish_sync():
         "result": sync_result,
     }
     return jsonify(payload), status_code
+
+# =========================================================
+# LINE WEBHOOK / CALLBACK [GIẢ ĐỊNH]
+# =========================================================
+def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> bool:
+    secret = safe_str(LINE_CHANNEL_SECRET)
+    if not secret:
+        logger.error(f"[{trace_id}] LINE_SIGNATURE_SECRET_MISSING")
+        return False
+
+    if not signature:
+        logger.error(f"[{trace_id}] LINE_SIGNATURE_HEADER_MISSING")
+        return False
+
+    try:
+        digest = hmac.new(
+            secret.encode("utf-8"),
+            raw_body,
+            hashlib.sha256
+        ).digest()
+        expected_signature = base64.b64encode(digest).decode("utf-8")
+        ok = hmac.compare_digest(expected_signature, signature)
+        logger.info(f"[{trace_id}] LINE_SIGNATURE_CHECK ok={ok}")
+        return ok
+    except Exception as e:
+        logger.exception(f"[{trace_id}] LINE_SIGNATURE_EXCEPTION exception={type(e).__name__}:{e}")
+        return False
+
+
+def parse_line_webhook_payload(raw_body: bytes, trace_id: str) -> dict:
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+        if not isinstance(payload, dict):
+            logger.error(f"[{trace_id}] LINE_PAYLOAD_NOT_DICT")
+            return {}
+        logger.info(f"[{trace_id}] LINE_PAYLOAD_PARSED keys={list(payload.keys())}")
+        return payload
+    except Exception as e:
+        logger.exception(f"[{trace_id}] LINE_PAYLOAD_PARSE_FAILED exception={type(e).__name__}:{e}")
+        return {}
+
+
+def get_event_user_id(event: dict) -> str:
+    source = event.get("source") or {}
+    return safe_str(source.get("userId"))
+
+
+def get_event_type(event: dict) -> str:
+    return safe_str(event.get("type")).lower()
+
+
+def get_message_type(event: dict) -> str:
+    message = event.get("message") or {}
+    return safe_str(message.get("type")).lower()
+
+
+def get_message_text(event: dict) -> str:
+    message = event.get("message") or {}
+    return safe_str(message.get("text"))
+
+
+def get_reply_token(event: dict) -> str:
+    return safe_str(event.get("replyToken"))
+
+
+def reply_line_text(reply_token: str, text: str, trace_id: str) -> bool:
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        logger.error(f"[{trace_id}] LINE_REPLY_MISSING_ACCESS_TOKEN")
+        return False
+
+    if not reply_token:
+        logger.error(f"[{trace_id}] LINE_REPLY_MISSING_REPLY_TOKEN")
+        return False
+
+    text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or FALLBACK_REPLY_TEXT
+
+    headers = {
+        "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "text",
+                "text": text,
+            }
+        ],
+    }
+
+    try:
+        resp = requests.post(
+            LINE_REPLY_API_URL,
+            headers=headers,
+            json=payload,
+            timeout=OUTBOUND_TIMEOUT,
+        )
+        body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
+        logger.info(
+            f"[{trace_id}] LINE_REPLY_HTTP status_code={resp.status_code} body={json.dumps(body_preview, ensure_ascii=False)}"
+        )
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        logger.exception(f"[{trace_id}] LINE_REPLY_EXCEPTION exception={type(e).__name__}:{e}")
+        return False
+
+
+def handle_worker_command(text: str) -> str:
+    return "Đã vào worker flow. Gửi nội dung tiếp theo."
+
+
+def handle_ads_command(text: str) -> str:
+    return "Đã vào ads flow. Gửi nội dung tiếp theo."
+
+
+def dispatch_text_event(event: dict, trace_id: str) -> dict:
+    user_id = get_event_user_id(event)
+    reply_token = get_reply_token(event)
+    text = get_message_text(event)
+    normalized = text.strip().lower()
+
+    logger.info(
+        f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)}"
+    )
+
+    if normalized == WORKER_ENTRY_COMMAND:
+        reply_text = handle_worker_command(text)
+        flow = "worker"
+    elif normalized == ADS_ENTRY_COMMAND:
+        reply_text = handle_ads_command(text)
+        flow = "ads"
+    else:
+        reply_text = f"Đã nhận: {text}"
+        flow = "default"
+
+    reply_ok = reply_line_text(reply_token, reply_text, trace_id)
+
+    return {
+        "handled": True,
+        "event_type": "message",
+        "message_type": "text",
+        "flow": flow,
+        "user_id": user_id,
+        "reply_sent": reply_ok,
+    }
+
+
+def dispatch_line_event(event: dict, trace_id: str) -> dict:
+    event_type = get_event_type(event)
+    logger.info(f"[{trace_id}] LINE_EVENT_DISPATCH event_type={event_type}")
+
+    if event_type != "message":
+        return {
+            "handled": False,
+            "event_type": event_type,
+            "reason": "unsupported_event_type",
+        }
+
+    message_type = get_message_type(event)
+    if message_type != "text":
+        return {
+            "handled": False,
+            "event_type": event_type,
+            "message_type": message_type,
+            "reason": "unsupported_message_type",
+        }
+
+    return dispatch_text_event(event, trace_id)
+
+
+@app.route("/callback", methods=["POST"])
+def callback():
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+
+    raw_body = request.get_data() or b""
+    signature = safe_str(request.headers.get("X-Line-Signature"))
+
+    logger.info(
+        f"[{trace_id}] CALLBACK_IN content_length={len(raw_body)} signature_present={bool(signature)}"
+    )
+
+    if not verify_line_signature(raw_body, signature, trace_id):
+        logger.error(f"[{trace_id}] CALLBACK_REJECT_INVALID_SIGNATURE")
+        return jsonify({
+            "ok": False,
+            "trace_id": trace_id,
+            "error": "invalid_signature",
+        }), 403
+
+    payload = parse_line_webhook_payload(raw_body, trace_id)
+    events = payload.get("events") or []
+    if not isinstance(events, list) or not events:
+        logger.error(f"[{trace_id}] CALLBACK_EMPTY_EVENTS")
+        return jsonify({
+            "ok": False,
+            "trace_id": trace_id,
+            "error": "empty_or_invalid_events",
+        }), 400
+
+    results = []
+    for event in events:
+        try:
+            result = dispatch_line_event(event, trace_id)
+            results.append(result)
+        except Exception as e:
+            logger.exception(f"[{trace_id}] CALLBACK_EVENT_EXCEPTION exception={type(e).__name__}:{e}")
+            results.append({
+                "handled": False,
+                "reason": "event_exception",
+            })
+
+    latency_ms = ms_since(started)
+    logger.info(f"[{trace_id}] CALLBACK_DONE events={len(events)} latency_ms={latency_ms}")
+
+    return jsonify({
+        "ok": True,
+        "app_version": APP_VERSION,
+        "trace_id": trace_id,
+        "latency_ms": latency_ms,
+        "event_count": len(events),
+        "results": results,
+    }), 200
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
