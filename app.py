@@ -60,7 +60,7 @@ USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 # =========================================================
 # CONSTANTS
 # =========================================================
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__CALLBACK_MINIMAL_V31"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__CALLBACK_VERIFY_V32"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1273,8 +1273,9 @@ def internal_publish_sync():
     }
     return jsonify(payload), status_code
 
+
 # =========================================================
-# LINE WEBHOOK / CALLBACK [GIẢ ĐỊNH]
+# LINE WEBHOOK / CALLBACK
 # =========================================================
 def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> bool:
     secret = safe_str(LINE_CHANNEL_SECRET)
@@ -1304,11 +1305,8 @@ def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> boo
 def parse_line_webhook_payload(raw_body: bytes, trace_id: str) -> dict:
     try:
         payload = json.loads(raw_body.decode("utf-8"))
-        if not isinstance(payload, dict):
-            logger.error(f"[{trace_id}] LINE_PAYLOAD_NOT_DICT")
-            return {}
         logger.info(f"[{trace_id}] LINE_PAYLOAD_PARSED keys={list(payload.keys())}")
-        return payload
+        return payload if isinstance(payload, dict) else {}
     except Exception as e:
         logger.exception(f"[{trace_id}] LINE_PAYLOAD_PARSE_FAILED exception={type(e).__name__}:{e}")
         return {}
@@ -1339,14 +1337,14 @@ def get_reply_token(event: dict) -> str:
 
 def reply_line_text(reply_token: str, text: str, trace_id: str) -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN:
-        logger.error(f"[{trace_id}] LINE_REPLY_MISSING_ACCESS_TOKEN")
+        logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_ACCESS_TOKEN")
         return False
 
     if not reply_token:
-        logger.error(f"[{trace_id}] LINE_REPLY_MISSING_REPLY_TOKEN")
+        logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_REPLY_TOKEN")
         return False
 
-    message_text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or FALLBACK_REPLY_TEXT
+    text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or FALLBACK_REPLY_TEXT
 
     headers = {
         "Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}",
@@ -1357,7 +1355,7 @@ def reply_line_text(reply_token: str, text: str, trace_id: str) -> bool:
         "messages": [
             {
                 "type": "text",
-                "text": message_text,
+                "text": text,
             }
         ],
     }
@@ -1463,14 +1461,28 @@ def callback():
         }), 403
 
     payload = parse_line_webhook_payload(raw_body, trace_id)
-    events = payload.get("events") or []
-    if not isinstance(events, list) or not events:
-        logger.error(f"[{trace_id}] CALLBACK_EMPTY_EVENTS")
+    events = payload.get("events")
+
+    if not isinstance(events, list):
+        logger.error(f"[{trace_id}] CALLBACK_INVALID_EVENTS_TYPE")
         return jsonify({
             "ok": False,
             "trace_id": trace_id,
-            "error": "empty_or_invalid_events",
+            "error": "invalid_events_type",
         }), 400
+
+    if len(events) == 0:
+        latency_ms = ms_since(started)
+        logger.info(f"[{trace_id}] CALLBACK_VERIFY_EMPTY_EVENTS_OK latency_ms={latency_ms}")
+        return jsonify({
+            "ok": True,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": latency_ms,
+            "event_count": 0,
+            "results": [],
+            "reason": "empty_events_verify_ok",
+        }), 200
 
     results = []
     for event in events:
@@ -1495,4 +1507,3 @@ def callback():
         "event_count": len(events),
         "results": results,
     }), 200
-
