@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__FLOW_LANG_V38"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__LANG_AWARE_REPLY_V39"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -292,6 +292,64 @@ USER_STATE_HEADERS = ["user_id", "flow", "updated_at"]
 
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
 USER_LANGUAGE_HEADERS = ["user_id", "language_group", "updated_at"]
+
+
+LOCALIZED_TEXT = {
+    "vi": {
+        "busy": "Hệ thống bận, thử lại sau.",
+        "worker_entry": "Đã vào worker flow. Gửi nội dung tiếp theo.",
+        "worker_message": "Worker flow đã nhận: {text}",
+        "ads_entry": "Đã vào ads flow. Gửi nội dung tiếp theo.",
+        "ads_message": "Ads flow đã nhận: {text}",
+        "reset": "Đã reset flow. Bạn có thể chọn lại /worker hoặc /ads.",
+        "exit": "Đã thoát flow hiện tại.",
+        "status_worker": "flow hiện tại: worker",
+        "status_ads": "flow hiện tại: ads",
+        "status_none": "flow hiện tại: none",
+        "help_title": "lệnh hỗ trợ:",
+        "lang_changed": "đã đổi ngôn ngữ: {lang}",
+        "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th",
+        "default_echo": "Đã nhận: {text}",
+    },
+    "id": {
+        "busy": "Sistem sedang sibuk, coba lagi nanti.",
+        "worker_entry": "Masuk ke alur worker. Kirim isi berikutnya.",
+        "worker_message": "Alur worker menerima: {text}",
+        "ads_entry": "Masuk ke alur iklan. Kirim isi berikutnya.",
+        "ads_message": "Alur iklan menerima: {text}",
+        "reset": "Alur sudah direset. Anda bisa pilih lagi /worker atau /ads.",
+        "exit": "Sudah keluar dari alur saat ini.",
+        "status_worker": "alur saat ini: worker",
+        "status_ads": "alur saat ini: ads",
+        "status_none": "alur saat ini: none",
+        "help_title": "perintah yang didukung:",
+        "lang_changed": "bahasa diubah: {lang}",
+        "lang_invalid": "format yang benar: /lang vi atau /lang id atau /lang th",
+        "default_echo": "Diterima: {text}",
+    },
+    "th": {
+        "busy": "ระบบกำลังยุ่ง กรุณาลองใหม่ภายหลัง",
+        "worker_entry": "เข้าสู่โฟลว์ worker แล้ว ส่งข้อมูลถัดไปได้",
+        "worker_message": "โฟลว์ worker ได้รับแล้ว: {text}",
+        "ads_entry": "เข้าสู่โฟลว์โฆษณาแล้ว ส่งข้อมูลถัดไปได้",
+        "ads_message": "โฟลว์โฆษณาได้รับแล้ว: {text}",
+        "reset": "รีเซ็ตโฟลว์แล้ว คุณสามารถเลือก /worker หรือ /ads ใหม่ได้",
+        "exit": "ออกจากโฟลว์ปัจจุบันแล้ว",
+        "status_worker": "โฟลว์ปัจจุบัน: worker",
+        "status_ads": "โฟลว์ปัจจุบัน: ads",
+        "status_none": "โฟลว์ปัจจุบัน: none",
+        "help_title": "คำสั่งที่รองรับ:",
+        "lang_changed": "เปลี่ยนภาษาแล้ว: {lang}",
+        "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th",
+        "default_echo": "รับแล้ว: {text}",
+    },
+}
+
+
+def t(language_group: str, key: str, **kwargs) -> str:
+    lang = normalize_language_group(language_group)
+    template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
+    return template.format(**kwargs)
 
 
 def prune_runtime_user_language_state(trace_id: str) -> None:
@@ -1257,14 +1315,14 @@ def get_message_text(event: dict) -> str:
 def get_reply_token(event: dict) -> str:
     return safe_str(event.get("replyToken"))
 
-def reply_line_text(reply_token: str, text: str, trace_id: str) -> bool:
+def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: str = "vi") -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN:
         logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_ACCESS_TOKEN")
         return False
     if not reply_token:
         logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_REPLY_TOKEN")
         return False
-    text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or FALLBACK_REPLY_TEXT
+    text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or t(language_group, "busy")
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
     try:
@@ -1331,11 +1389,12 @@ def parse_lang_command(text: str) -> str:
 
 
 def handle_lang_message(language_group: str) -> str:
-    return f"đã đổi ngôn ngữ: {normalize_language_group(language_group)}"
+    normalized = normalize_language_group(language_group)
+    return t(normalized, "lang_changed", lang=normalized)
 
 
-def handle_lang_invalid_message() -> str:
-    return "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th"
+def handle_lang_invalid_message(language_group: str) -> str:
+    return t(language_group, "lang_invalid")
 
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
@@ -1347,43 +1406,46 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     requested_language = parse_lang_command(text)
     logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
 
+    reply_language = current_language
+
     if normalized == WORKER_ENTRY_COMMAND:
         persist_user_flow(user_id, FLOW_WORKER, trace_id)
-        reply_text = handle_worker_entry()
+        reply_text = handle_worker_entry(current_language)
         flow_used = FLOW_WORKER
     elif normalized == ADS_ENTRY_COMMAND:
         persist_user_flow(user_id, FLOW_ADS, trace_id)
-        reply_text = handle_ads_entry()
+        reply_text = handle_ads_entry(current_language)
         flow_used = FLOW_ADS
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
         clear_user_flow(user_id, trace_id)
-        reply_text = handle_reset_message() if normalized == RESET_ENTRY_COMMAND else handle_exit_message()
+        reply_text = handle_reset_message(current_language) if normalized == RESET_ENTRY_COMMAND else handle_exit_message(current_language)
         flow_used = "cleared"
     elif normalized == STATUS_ENTRY_COMMAND:
-        reply_text = handle_status_message(current_flow)
+        reply_text = handle_status_message(current_flow, current_language)
         flow_used = current_flow or "none"
     elif normalized == HELP_ENTRY_COMMAND:
-        reply_text = handle_help_message()
+        reply_text = handle_help_message(current_language)
         flow_used = current_flow or "help"
     elif normalized.startswith(LANG_COMMAND_PREFIX):
         if requested_language:
             persist_user_language(user_id, requested_language, trace_id)
+            reply_language = requested_language
             reply_text = handle_lang_message(requested_language)
             flow_used = current_flow or "lang"
         else:
-            reply_text = handle_lang_invalid_message()
+            reply_text = handle_lang_invalid_message(current_language)
             flow_used = current_flow or "lang_invalid"
     elif current_flow == FLOW_WORKER:
-        reply_text = handle_worker_message(text)
+        reply_text = handle_worker_message(text, current_language)
         flow_used = FLOW_WORKER
     elif current_flow == FLOW_ADS:
-        reply_text = handle_ads_message(text)
+        reply_text = handle_ads_message(text, current_language)
         flow_used = FLOW_ADS
     else:
-        reply_text = f"Đã nhận: {text}"
+        reply_text = t(current_language, "default_echo", text=text)
         flow_used = "default"
 
-    reply_ok = reply_line_text(reply_token, reply_text, trace_id)
+    reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
     return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_id": user_id, "reply_sent": reply_ok}
 
 def dispatch_line_event(event: dict, trace_id: str) -> dict:
