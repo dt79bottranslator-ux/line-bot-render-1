@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__FLOW_STATUS_V36"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__FLOW_HELP_V37"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -68,6 +68,7 @@ ADS_ENTRY_COMMAND = "/ads"
 RESET_ENTRY_COMMAND = "/reset"
 EXIT_ENTRY_COMMAND = "/exit"
 STATUS_ENTRY_COMMAND = "/status"
+HELP_ENTRY_COMMAND = "/help"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
@@ -1130,6 +1131,18 @@ def handle_status_message(flow: str) -> str:
         return "flow hiện tại: ads"
     return "flow hiện tại: none"
 
+
+def handle_help_message() -> str:
+    return "\n".join([
+        "lệnh hỗ trợ:",
+        "/worker",
+        "/ads",
+        "/status",
+        "/reset",
+        "/exit",
+        "/help",
+    ])
+
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -1152,6 +1165,9 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     elif normalized == STATUS_ENTRY_COMMAND:
         reply_text = handle_status_message(current_flow)
         flow_used = current_flow or "none"
+    elif normalized == HELP_ENTRY_COMMAND:
+        reply_text = handle_help_message()
+        flow_used = current_flow or "help"
     elif current_flow == FLOW_WORKER:
         reply_text = handle_worker_message(text)
         flow_used = FLOW_WORKER
