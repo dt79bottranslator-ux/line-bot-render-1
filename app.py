@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__PERSISTENT_STATE_V34B"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__FLOW_RESET_V35"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -65,6 +65,8 @@ GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translat
 
 WORKER_ENTRY_COMMAND = "/worker"
 ADS_ENTRY_COMMAND = "/ads"
+RESET_ENTRY_COMMAND = "/reset"
+EXIT_ENTRY_COMMAND = "/exit"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
 
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
@@ -312,23 +314,6 @@ def ensure_user_state_worksheet(trace_id: str):
         except Exception as e:
             logger.exception(f"[{trace_id}] USER_STATE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
             return None
-        return ws
-
-    first_row = [safe_str(x) for x in values[0]]
-    normalized_headers = [normalize_header_key(x) for x in first_row]
-    required_headers = [normalize_header_key(x) for x in USER_STATE_HEADERS]
-
-    if not all(header in normalized_headers for header in required_headers):
-        try:
-            ws.insert_row(USER_STATE_HEADERS, index=1, value_input_option="USER_ENTERED")
-            logger.info(
-                f"[{trace_id}] USER_STATE_HEADERS_REPAIRED "
-                f"old_headers={json.dumps(first_row, ensure_ascii=False)}"
-            )
-        except Exception as e:
-            logger.exception(f"[{trace_id}] USER_STATE_HEADERS_REPAIR_FAILED exception={type(e).__name__}:{e}")
-            return None
-
     return ws
 
 
@@ -385,6 +370,55 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     except Exception as e:
         logger.exception(f"[{trace_id}] USER_STATE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
+
+
+
+def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_SKIPPED reason=missing_user_id")
+        return False
+
+    ws = ensure_user_state_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_SKIPPED reason=worksheet_unavailable")
+        return False
+
+    row_index = find_first_row_index_by_column_value(
+        ws=ws,
+        column_name="user_id",
+        expected_value=normalized_user_id,
+        trace_id=trace_id,
+        worksheet_name=USER_STATE_SHEET_NAME,
+    )
+    if not row_index:
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_MISS user_id={normalized_user_id}")
+        return True
+
+    try:
+        ws.delete_rows(row_index)
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_DELETE_OK user_id={normalized_user_id} row_index={row_index}")
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_STATE_PERSIST_DELETE_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+
+def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_FLOW_STATE_CLEAR_SKIPPED reason=missing_user_id")
+        return
+    existed = normalized_user_id in _USER_FLOW_STATE
+    _USER_FLOW_STATE.pop(normalized_user_id, None)
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_CLEARED user_id={normalized_user_id} existed={existed}")
+
+
+def clear_user_flow(user_id: str, trace_id: str) -> bool:
+    clear_runtime_user_flow(user_id, trace_id)
+    persist_ok = clear_persistent_user_flow(user_id, trace_id)
+    logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
+    return persist_ok
 
 
 def resolve_user_flow(user_id: str, trace_id: str) -> str:
@@ -1078,6 +1112,14 @@ def handle_ads_entry() -> str:
 def handle_ads_message(text: str) -> str:
     return f"Ads flow đã nhận: {text}"
 
+
+def handle_reset_message() -> str:
+    return "Đã reset flow. Bạn có thể chọn lại /worker hoặc /ads."
+
+
+def handle_exit_message() -> str:
+    return "Đã thoát flow hiện tại."
+
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -1093,6 +1135,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         persist_user_flow(user_id, FLOW_ADS, trace_id)
         reply_text = handle_ads_entry()
         flow_used = FLOW_ADS
+    elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
+        clear_user_flow(user_id, trace_id)
+        reply_text = handle_reset_message() if normalized == RESET_ENTRY_COMMAND else handle_exit_message()
+        flow_used = "cleared"
     elif current_flow == FLOW_WORKER:
         reply_text = handle_worker_message(text)
         flow_used = FLOW_WORKER
