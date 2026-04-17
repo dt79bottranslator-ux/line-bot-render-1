@@ -1355,13 +1355,13 @@ def handle_exit_message() -> str:
     return "Đã thoát flow hiện tại."
 
 
-def handle_status_message(flow: str) -> str:
+def handle_status_message(flow: str, language_group: str) -> str:
     normalized = safe_str(flow)
     if normalized == FLOW_WORKER:
-        return "flow hiện tại: worker"
+        return t(language_group, "status_worker")
     if normalized == FLOW_ADS:
-        return "flow hiện tại: ads"
-    return "flow hiện tại: none"
+        return t(language_group, "status_ads")
+    return t(language_group, "status_none")
 
 
 def handle_help_message() -> str:
