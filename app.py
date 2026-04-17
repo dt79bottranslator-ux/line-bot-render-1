@@ -280,6 +280,43 @@ def update_cell_by_header(ws, row_index: int, column_name: str, value: str, trac
         logger.exception(f"[{trace_id}] UPDATE_CELL_FAILED worksheet_name={worksheet_name} row_index={row_index} column_name={column_name} exception={type(e).__name__}:{e}")
         return False
 
+
+def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str) -> bool:
+    values = get_all_values_safe(ws, trace_id, worksheet_name)
+    if not values:
+        return False
+    headers = values[0]
+    header_map = build_header_index_map(headers)
+    normalized_items = []
+    for column_name, value in field_values.items():
+        col_idx = header_map.get(normalize_header_key(column_name))
+        if col_idx is None:
+            logger.error(f"[{trace_id}] UPDATE_ROW_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
+            return False
+        normalized_items.append((col_idx, column_name, safe_str(value)))
+
+    min_col_idx = min(col_idx for col_idx, _, _ in normalized_items)
+    max_col_idx = max(col_idx for col_idx, _, _ in normalized_items)
+    row_values = [""] * (max_col_idx - min_col_idx + 1)
+    for col_idx, _, value in normalized_items:
+        row_values[col_idx - min_col_idx] = value
+
+    start_col_letter = chr(ord("A") + min_col_idx)
+    end_col_letter = chr(ord("A") + max_col_idx)
+    target_range = f"{start_col_letter}{row_index}:{end_col_letter}{row_index}"
+
+    try:
+        ws.update(target_range, [row_values], value_input_option="USER_ENTERED")
+        logger.info(
+            f"[{trace_id}] UPDATE_ROW_FIELDS_OK worksheet_name={worksheet_name} row_index={row_index} "
+            f"columns={json.dumps([name for _, name, _ in normalized_items], ensure_ascii=False)} "
+            f"values={json.dumps({name: value for _, name, value in normalized_items}, ensure_ascii=False)}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] UPDATE_ROW_FIELDS_FAILED worksheet_name={worksheet_name} row_index={row_index} exception={type(e).__name__}:{e}")
+        return False
+
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
 _ADS_DETAIL_CACHE: Dict[str, dict] = {}
@@ -310,8 +347,6 @@ LOCALIZED_TEXT = {
         "lang_changed": "đã đổi ngôn ngữ: {lang}",
         "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th",
         "default_echo": "Đã nhận: {text}",
-        "state_save_failed": "Lưu trạng thái thất bại. Thử lại sau.",
-        "state_clear_failed": "Xóa trạng thái thất bại. Thử lại sau.",
     },
     "id": {
         "busy": "Sistem sedang sibuk, coba lagi nanti.",
@@ -328,8 +363,6 @@ LOCALIZED_TEXT = {
         "lang_changed": "bahasa diubah: {lang}",
         "lang_invalid": "format yang benar: /lang vi atau /lang id atau /lang th",
         "default_echo": "Diterima: {text}",
-        "state_save_failed": "Gagal menyimpan status. Coba lagi nanti.",
-        "state_clear_failed": "Gagal menghapus status. Coba lagi nanti.",
     },
     "th": {
         "busy": "ระบบกำลังยุ่ง กรุณาลองใหม่ภายหลัง",
@@ -346,8 +379,6 @@ LOCALIZED_TEXT = {
         "lang_changed": "เปลี่ยนภาษาแล้ว: {lang}",
         "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th",
         "default_echo": "รับแล้ว: {text}",
-        "state_save_failed": "บันทึกสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
-        "state_clear_failed": "ล้างสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
     },
 }
 
@@ -439,21 +470,13 @@ def set_persistent_user_language(user_id: str, language_group: str, trace_id: st
     now_iso = now_tw_iso()
 
     if row_index:
-        ok_language = update_cell_by_header(ws, row_index, "language_group", normalized_language, trace_id, USER_STATE_SHEET_NAME)
-        if not ok_language:
-            values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
-            headers = values[0] if values else []
-            header_map = build_header_index_map(headers)
-            if "language_group" not in header_map:
-                try:
-                    ws.update_cell(1, len(headers) + 1, "language_group")
-                    logger.info(f"[{trace_id}] USER_LANGUAGE_COLUMN_ADDED_OK col_index={len(headers) + 1}")
-                    ok_language = update_cell_by_header(ws, row_index, "language_group", normalized_language, trace_id, USER_STATE_SHEET_NAME)
-                except Exception as e:
-                    logger.exception(f"[{trace_id}] USER_LANGUAGE_COLUMN_ADD_FAILED exception={type(e).__name__}:{e}")
-                    ok_language = False
-        ok_updated_at = update_cell_by_header(ws, row_index, "updated_at", now_iso, trace_id, USER_STATE_SHEET_NAME)
-        ok = bool(ok_language and ok_updated_at)
+        ok = update_row_fields_by_header(
+            ws=ws,
+            row_index=row_index,
+            field_values={"language_group": normalized_language, "updated_at": now_iso},
+            trace_id=trace_id,
+            worksheet_name=USER_STATE_SHEET_NAME,
+        )
         if ok:
             logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_UPDATE_OK user_id={normalized_user_id} language_group={normalized_language}")
         return ok
@@ -481,11 +504,8 @@ def resolve_user_language(user_id: str, trace_id: str) -> str:
 
 def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_language = normalize_language_group(language_group)
+    set_runtime_user_language(user_id, normalized_language, trace_id)
     persist_ok = set_persistent_user_language(user_id, normalized_language, trace_id)
-    if persist_ok:
-        set_runtime_user_language(user_id, normalized_language, trace_id)
-    else:
-        _USER_LANGUAGE_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
     return persist_ok
 
@@ -572,9 +592,13 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     now_iso = now_tw_iso()
 
     if row_index:
-        ok_flow = update_cell_by_header(ws, row_index, "flow", normalized_flow, trace_id, USER_STATE_SHEET_NAME)
-        ok_updated_at = update_cell_by_header(ws, row_index, "updated_at", now_iso, trace_id, USER_STATE_SHEET_NAME)
-        ok = bool(ok_flow and ok_updated_at)
+        ok = update_row_fields_by_header(
+            ws=ws,
+            row_index=row_index,
+            field_values={"flow": normalized_flow, "updated_at": now_iso},
+            trace_id=trace_id,
+            worksheet_name=USER_STATE_SHEET_NAME,
+        )
         if ok:
             logger.info(f"[{trace_id}] USER_STATE_PERSIST_UPDATE_OK user_id={normalized_user_id} flow={normalized_flow}")
         return ok
@@ -611,9 +635,13 @@ def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_MISS user_id={normalized_user_id}")
         return True
 
-    ok_flow = update_cell_by_header(ws, row_index, "flow", "", trace_id, USER_STATE_SHEET_NAME)
-    ok_updated_at = update_cell_by_header(ws, row_index, "updated_at", now_tw_iso(), trace_id, USER_STATE_SHEET_NAME)
-    ok = bool(ok_flow and ok_updated_at)
+    ok = update_row_fields_by_header(
+        ws=ws,
+        row_index=row_index,
+        field_values={"flow": "", "updated_at": now_tw_iso()},
+        trace_id=trace_id,
+        worksheet_name=USER_STATE_SHEET_NAME,
+    )
     if ok:
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_id={normalized_user_id} row_index={row_index}")
     return ok
@@ -630,9 +658,8 @@ def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
 
 
 def clear_user_flow(user_id: str, trace_id: str) -> bool:
+    clear_runtime_user_flow(user_id, trace_id)
     persist_ok = clear_persistent_user_flow(user_id, trace_id)
-    if persist_ok:
-        clear_runtime_user_flow(user_id, trace_id)
     logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
     return persist_ok
 
@@ -650,11 +677,8 @@ def resolve_user_flow(user_id: str, trace_id: str) -> str:
 
 
 def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
+    set_runtime_user_flow(user_id, flow, trace_id)
     persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
-    if persist_ok:
-        set_runtime_user_flow(user_id, flow, trace_id)
-    else:
-        _USER_FLOW_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
     return persist_ok
 
@@ -1133,9 +1157,13 @@ def update_owner_ads_input_status(draft_id: str, new_status: str, trace_id: str,
     if not row_index:
         logger.error(f"[{trace_id}] OWNER_ADS_INPUT_STATUS_UPDATE_ROW_NOT_FOUND draft_id={draft_id}")
         return False
-    ok_status = update_cell_by_header(ws=ws, row_index=row_index, column_name="input_status", value=new_status, trace_id=trace_id, worksheet_name=OWNER_ADS_INPUT_SHEET_NAME)
-    ok_updated_at = update_cell_by_header(ws=ws, row_index=row_index, column_name="updated_at", value=updated_at or now_tw_iso(), trace_id=trace_id, worksheet_name=OWNER_ADS_INPUT_SHEET_NAME)
-    return bool(ok_status and ok_updated_at)
+    return update_row_fields_by_header(
+        ws=ws,
+        row_index=row_index,
+        field_values={"input_status": new_status, "updated_at": updated_at or now_tw_iso()},
+        trace_id=trace_id,
+        worksheet_name=OWNER_ADS_INPUT_SHEET_NAME,
+    )
 
 def sync_single_owner_ads_input_to_catalog(owner_ads_input_row: dict, workspace_meta: dict, owner_settings_rows: List[dict], catalog_rows: List[dict], trace_id: str) -> dict:
     draft_id = safe_str(owner_ads_input_row.get("draft_id"))
@@ -1389,14 +1417,6 @@ def handle_lang_message(language_group: str) -> str:
 def handle_lang_invalid_message(language_group: str) -> str:
     return t(language_group, "lang_invalid")
 
-
-def handle_state_save_failed_message(language_group: str) -> str:
-    return t(language_group, "state_save_failed")
-
-
-def handle_state_clear_failed_message(language_group: str) -> str:
-    return t(language_group, "state_clear_failed")
-
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -1413,29 +1433,18 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         persist_ok = persist_user_flow(user_id, FLOW_WORKER, trace_id)
         if not persist_ok:
             logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/worker user_id={user_id}")
-            reply_text = handle_state_save_failed_message(current_language)
-            flow_used = "persist_failed"
-        else:
-            reply_text = handle_worker_entry(current_language)
-            flow_used = FLOW_WORKER
+        reply_text = handle_worker_entry(current_language)
+        flow_used = FLOW_WORKER
     elif normalized == ADS_ENTRY_COMMAND:
         persist_ok = persist_user_flow(user_id, FLOW_ADS, trace_id)
         if not persist_ok:
             logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/ads user_id={user_id}")
-            reply_text = handle_state_save_failed_message(current_language)
-            flow_used = "persist_failed"
-        else:
-            reply_text = handle_ads_entry(current_language)
-            flow_used = FLOW_ADS
+        reply_text = handle_ads_entry(current_language)
+        flow_used = FLOW_ADS
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
-        clear_ok = clear_user_flow(user_id, trace_id)
-        if not clear_ok:
-            logger.error(f"[{trace_id}] USER_STATE_CLEAR_FAILED command={normalized} user_id={user_id}")
-            reply_text = handle_state_clear_failed_message(current_language)
-            flow_used = "clear_failed"
-        else:
-            reply_text = handle_reset_message(current_language) if normalized == RESET_ENTRY_COMMAND else handle_exit_message(current_language)
-            flow_used = "cleared"
+        clear_user_flow(user_id, trace_id)
+        reply_text = handle_reset_message(current_language) if normalized == RESET_ENTRY_COMMAND else handle_exit_message(current_language)
+        flow_used = "cleared"
     elif normalized == STATUS_ENTRY_COMMAND:
         reply_text = handle_status_message(current_flow, current_language)
         flow_used = current_flow or "none"
@@ -1444,15 +1453,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = current_flow or "help"
     elif normalized.startswith(LANG_COMMAND_PREFIX):
         if requested_language:
-            persist_ok = persist_user_language(user_id, requested_language, trace_id)
-            if not persist_ok:
-                logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_FAILED command=/lang user_id={user_id} requested_language={requested_language}")
-                reply_text = handle_state_save_failed_message(current_language)
-                flow_used = current_flow or "lang_persist_failed"
-            else:
-                reply_language = requested_language
-                reply_text = handle_lang_message(requested_language)
-                flow_used = current_flow or "lang"
+            persist_user_language(user_id, requested_language, trace_id)
+            reply_language = requested_language
+            reply_text = handle_lang_message(requested_language)
+            flow_used = current_flow or "lang"
         else:
             reply_text = handle_lang_invalid_message(current_language)
             flow_used = current_flow or "lang_invalid"
