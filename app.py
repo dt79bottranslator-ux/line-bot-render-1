@@ -341,6 +341,8 @@ LOCALIZED_TEXT = {
         "ads_list_title": "Danh sách quảng cáo đang chạy:",
         "ads_empty": "Hiện chưa có quảng cáo phù hợp.",
         "ads_read_failed": "Đọc danh sách quảng cáo thất bại. Thử lại sau.",
+        "ads_contact_label": "Liên hệ",
+        "ads_id_label": "ID",
         "reset": "Đã reset flow. Bạn có thể chọn lại /worker hoặc /ads.",
         "exit": "Đã thoát flow hiện tại.",
         "status_worker": "flow hiện tại: worker",
@@ -362,6 +364,8 @@ LOCALIZED_TEXT = {
         "ads_list_title": "Daftar iklan yang sedang aktif:",
         "ads_empty": "Belum ada iklan yang cocok saat ini.",
         "ads_read_failed": "Gagal membaca daftar iklan. Coba lagi nanti.",
+        "ads_contact_label": "Kontak",
+        "ads_id_label": "ID",
         "reset": "Alur sudah direset. Anda bisa pilih lagi /worker atau /ads.",
         "exit": "Sudah keluar dari alur saat ini.",
         "status_worker": "alur saat ini: worker",
@@ -383,6 +387,8 @@ LOCALIZED_TEXT = {
         "ads_list_title": "รายการโฆษณาที่กำลังใช้งาน:",
         "ads_empty": "ขณะนี้ยังไม่มีโฆษณาที่ตรงเงื่อนไข",
         "ads_read_failed": "อ่านรายการโฆษณาล้มเหลว กรุณาลองใหม่ภายหลัง",
+        "ads_contact_label": "ติดต่อ",
+        "ads_id_label": "รหัส",
         "reset": "รีเซ็ตโฟลว์แล้ว คุณสามารถเลือก /worker หรือ /ads ใหม่ได้",
         "exit": "ออกจากโฟลว์ปัจจุบันแล้ว",
         "status_worker": "โฟลว์ปัจจุบัน: worker",
@@ -1483,9 +1489,9 @@ def build_ads_catalog_reply(language_group: str, ads_rows: List[dict]) -> str:
         if body:
             lines.append(body)
         if contact_name:
-            lines.append(f"Liên hệ: {contact_name}")
+            lines.append(f"{t(language_group, 'ads_contact_label')}: {contact_name}")
         if ad_id:
-            lines.append(f"ID: {ad_id}")
+            lines.append(f"{t(language_group, 'ads_id_label')}: {ad_id}")
         if idx < max_items:
             lines.append("")
 
