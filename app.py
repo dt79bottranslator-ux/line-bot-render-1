@@ -287,7 +287,7 @@ _WORKSPACE_VALIDATION_CACHE = {"result": None, "loaded_at_ts": 0}
 _USER_FLOW_STATE: Dict[str, dict] = {}
 
 
-USER_STATE_HEADERS = ["user_id", "flow", "updated_at"]
+USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
 
 
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
@@ -529,7 +529,7 @@ def ensure_user_state_worksheet(trace_id: str):
         ws = spreadsheet.worksheet(USER_STATE_SHEET_NAME)
     except gspread.WorksheetNotFound:
         try:
-            ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=3)
+            ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=6)
             ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] USER_STATE_SHEET_CREATED worksheet_name={USER_STATE_SHEET_NAME}")
             return ws
@@ -547,6 +547,19 @@ def ensure_user_state_worksheet(trace_id: str):
             logger.info(f"[{trace_id}] USER_STATE_HEADERS_INIT_OK")
         except Exception as e:
             logger.exception(f"[{trace_id}] USER_STATE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
+            return None
+        return ws
+
+    headers = values[0]
+    required_headers = ["user_id", "flow", "updated_at", "language_group"]
+    header_map = build_header_index_map(headers)
+    if any(h not in header_map for h in required_headers):
+        repaired_headers = ["user_id", "flow", "updated_at", "language_group"]
+        try:
+            ws.update("A1:D1", [repaired_headers])
+            logger.info(f"[{trace_id}] USER_STATE_HEADERS_REPAIRED old_headers={json.dumps(headers, ensure_ascii=False)}")
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_STATE_HEADERS_REPAIR_FAILED exception={type(e).__name__}:{e}")
             return None
     return ws
 
@@ -598,7 +611,7 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
         return ok
 
     try:
-        ws.append_row([normalized_user_id, normalized_flow, now_iso], value_input_option="USER_ENTERED")
+        ws.append_row([normalized_user_id, normalized_flow, now_iso, ""], value_input_option="USER_ENTERED")
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_APPEND_OK user_id={normalized_user_id} flow={normalized_flow}")
         return True
     except Exception as e:
@@ -629,13 +642,12 @@ def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_MISS user_id={normalized_user_id}")
         return True
 
-    try:
-        ws.delete_rows(row_index)
-        logger.info(f"[{trace_id}] USER_STATE_PERSIST_DELETE_OK user_id={normalized_user_id} row_index={row_index}")
-        return True
-    except Exception as e:
-        logger.exception(f"[{trace_id}] USER_STATE_PERSIST_DELETE_FAILED exception={type(e).__name__}:{e}")
-        return False
+    ok_flow = update_cell_by_header(ws, row_index, "flow", "", trace_id, USER_STATE_SHEET_NAME)
+    ok_updated_at = update_cell_by_header(ws, row_index, "updated_at", now_tw_iso(), trace_id, USER_STATE_SHEET_NAME)
+    ok = bool(ok_flow and ok_updated_at)
+    if ok:
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_id={normalized_user_id} row_index={row_index}")
+    return ok
 
 
 def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
@@ -1334,34 +1346,34 @@ def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: 
         logger.exception(f"[{trace_id}] LINE_REPLY_EXCEPTION exception={type(e).__name__}:{e}")
         return False
 
-def handle_worker_entry() -> str:
-    return "Đã vào worker flow. Gửi nội dung tiếp theo."
+def handle_worker_entry(language_group: str) -> str:
+    return t(language_group, "worker_entry")
 
-def handle_worker_message(text: str) -> str:
-    return f"Worker flow đã nhận: {text}"
+def handle_worker_message(text: str, language_group: str) -> str:
+    return t(language_group, "worker_message", text=text)
 
-def handle_ads_entry() -> str:
-    return "Đã vào ads flow. Gửi nội dung tiếp theo."
+def handle_ads_entry(language_group: str) -> str:
+    return t(language_group, "ads_entry")
 
-def handle_ads_message(text: str) -> str:
-    return f"Ads flow đã nhận: {text}"
-
-
-def handle_reset_message() -> str:
-    return "Đã reset flow. Bạn có thể chọn lại /worker hoặc /ads."
+def handle_ads_message(text: str, language_group: str) -> str:
+    return t(language_group, "ads_message", text=text)
 
 
-def handle_exit_message() -> str:
-    return "Đã thoát flow hiện tại."
+def handle_reset_message(language_group: str) -> str:
+    return t(language_group, "reset")
 
 
-def handle_status_message(flow: str) -> str:
+def handle_exit_message(language_group: str) -> str:
+    return t(language_group, "exit")
+
+
+def handle_status_message(flow: str, language_group: str) -> str:
     normalized = safe_str(flow)
     if normalized == FLOW_WORKER:
-        return "flow hiện tại: worker"
+        return t(language_group, "status_worker")
     if normalized == FLOW_ADS:
-        return "flow hiện tại: ads"
-    return "flow hiện tại: none"
+        return t(language_group, "status_ads")
+    return t(language_group, "status_none")
 
 
 def handle_help_message(language_group: str) -> str:
