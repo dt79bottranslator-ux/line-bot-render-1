@@ -1391,8 +1391,15 @@ def handle_help_message(language_group: str) -> str:
     ])
 
 
+def normalize_command_text(text: str) -> str:
+    normalized = safe_str(text).lower()
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
 def parse_lang_command(text: str) -> str:
-    parts = safe_str(text).lower().split()
+    normalized = normalize_command_text(text)
+    parts = normalized.split(" ") if normalized else []
     if len(parts) != 2:
         return ""
     if parts[0] != LANG_COMMAND_PREFIX:
@@ -1412,11 +1419,11 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
     text = get_message_text(event)
-    normalized = text.strip().lower()
+    normalized = normalize_command_text(text)
     current_flow = resolve_user_flow(user_id, trace_id)
     current_language = resolve_user_language(user_id, trace_id)
     requested_language = parse_lang_command(text)
-    logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
+    logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} normalized={json.dumps(normalized, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
 
     reply_language = current_language
 
