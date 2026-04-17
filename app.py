@@ -341,6 +341,8 @@ LOCALIZED_TEXT = {
         "ads_list_title": "Danh sách quảng cáo đang chạy:",
         "ads_empty": "Hiện chưa có quảng cáo phù hợp.",
         "ads_read_failed": "Đọc danh sách quảng cáo thất bại. Thử lại sau.",
+        "ads_contact_label": "Liên hệ",
+        "ads_id_label": "ID",
         "reset": "Đã reset flow. Bạn có thể chọn lại /worker hoặc /ads.",
         "exit": "Đã thoát flow hiện tại.",
         "status_worker": "flow hiện tại: worker",
@@ -362,6 +364,8 @@ LOCALIZED_TEXT = {
         "ads_list_title": "Daftar iklan yang sedang aktif:",
         "ads_empty": "Belum ada iklan yang cocok saat ini.",
         "ads_read_failed": "Gagal membaca daftar iklan. Coba lagi nanti.",
+        "ads_contact_label": "Kontak",
+        "ads_id_label": "ID",
         "reset": "Alur sudah direset. Anda bisa pilih lagi /worker atau /ads.",
         "exit": "Sudah keluar dari alur saat ini.",
         "status_worker": "alur saat ini: worker",
@@ -383,6 +387,8 @@ LOCALIZED_TEXT = {
         "ads_list_title": "รายการโฆษณาที่กำลังใช้งาน:",
         "ads_empty": "ขณะนี้ยังไม่มีโฆษณาที่ตรงเงื่อนไข",
         "ads_read_failed": "อ่านรายการโฆษณาล้มเหลว กรุณาลองใหม่ภายหลัง",
+        "ads_contact_label": "ติดต่อ",
+        "ads_id_label": "รหัส",
         "reset": "รีเซ็ตโฟลว์แล้ว คุณสามารถเลือก /worker หรือ /ads ใหม่ได้",
         "exit": "ออกจากโฟลว์ปัจจุบันแล้ว",
         "status_worker": "โฟลว์ปัจจุบัน: worker",
@@ -1454,25 +1460,13 @@ def handle_ads_read_failed_message(language_group: str) -> str:
 def filter_ads_rows_for_viewer(rows: List[dict], language_group: str) -> List[dict]:
     viewer_language = normalize_language_group(language_group)
     filtered = []
-    skipped_same_language_only = 0
     for row in rows:
         visibility_policy = safe_str(row.get("visibility_policy")).lower()
         author_language_group = normalize_language_group(row.get("author_language_group"))
         if visibility_policy == VISIBILITY_SAME_LANGUAGE_ONLY and author_language_group != viewer_language:
-            skipped_same_language_only += 1
             continue
         filtered.append(row)
-    logger.info(
-        f"[{{trace_id}}] ADS_VIEW_FILTER_RESULT viewer_language={{viewer_language}} kept={{len(filtered)}} skipped_same_language_only={{skipped_same_language_only}}"
-    ) if False else None
     return filtered
-
-def build_ads_fallback_rows(rows: List[dict]) -> List[dict]:
-    fallback_rows = []
-    for row in rows:
-        if normalize_language_group(row.get("author_language_group")) == DEFAULT_LANGUAGE_GROUP:
-            fallback_rows.append(row)
-    return fallback_rows
 
 def truncate_text(value: str, max_len: int) -> str:
     raw = safe_str(value)
@@ -1495,9 +1489,9 @@ def build_ads_catalog_reply(language_group: str, ads_rows: List[dict]) -> str:
         if body:
             lines.append(body)
         if contact_name:
-            lines.append(f"Liên hệ: {contact_name}")
+            lines.append(f"{t(language_group, 'ads_contact_label')}: {contact_name}")
         if ad_id:
-            lines.append(f"ID: {ad_id}")
+            lines.append(f"{t(language_group, 'ads_id_label')}: {ad_id}")
         if idx < max_items:
             lines.append("")
 
@@ -1507,23 +1501,7 @@ def load_ads_reply_message(language_group: str, trace_id: str) -> Tuple[str, boo
     rows, read_ok = load_ads_catalog_rows(trace_id)
     if not read_ok:
         return handle_ads_read_failed_message(language_group), False
-
     filtered_rows = filter_ads_rows_for_viewer(rows, language_group)
-    logger.info(
-        f"[{trace_id}] ADS_VIEW_FILTER_RESULT viewer_language={normalize_language_group(language_group)} "
-        f"source_rows={len(rows)} filtered_rows={len(filtered_rows)}"
-    )
-    if filtered_rows:
-        return build_ads_catalog_reply(language_group, filtered_rows), True
-
-    fallback_rows = build_ads_fallback_rows(rows)
-    if fallback_rows and normalize_language_group(language_group) != DEFAULT_LANGUAGE_GROUP:
-        logger.warning(
-            f"[{trace_id}] ADS_VIEW_FILTER_FALLBACK viewer_language={normalize_language_group(language_group)} "
-            f"fallback_language={DEFAULT_LANGUAGE_GROUP} fallback_rows={len(fallback_rows)}"
-        )
-        return build_ads_catalog_reply(language_group, fallback_rows), True
-
     return build_ads_catalog_reply(language_group, filtered_rows), True
 
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
