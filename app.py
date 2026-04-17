@@ -1468,6 +1468,13 @@ def filter_ads_rows_for_viewer(rows: List[dict], language_group: str) -> List[di
         filtered.append(row)
     return filtered
 
+def build_ads_fallback_rows(rows: List[dict]) -> List[dict]:
+    fallback_rows = []
+    for row in rows:
+        if normalize_language_group(row.get("author_language_group")) == DEFAULT_LANGUAGE_GROUP:
+            fallback_rows.append(row)
+    return fallback_rows
+
 def truncate_text(value: str, max_len: int) -> str:
     raw = safe_str(value)
     if len(raw) <= max_len:
@@ -1501,7 +1508,23 @@ def load_ads_reply_message(language_group: str, trace_id: str) -> Tuple[str, boo
     rows, read_ok = load_ads_catalog_rows(trace_id)
     if not read_ok:
         return handle_ads_read_failed_message(language_group), False
+
     filtered_rows = filter_ads_rows_for_viewer(rows, language_group)
+    logger.info(
+        f"[{trace_id}] ADS_VIEW_FILTER_RESULT viewer_language={normalize_language_group(language_group)} "
+        f"source_rows={len(rows)} filtered_rows={len(filtered_rows)}"
+    )
+    if filtered_rows:
+        return build_ads_catalog_reply(language_group, filtered_rows), True
+
+    fallback_rows = build_ads_fallback_rows(rows)
+    if fallback_rows and normalize_language_group(language_group) != DEFAULT_LANGUAGE_GROUP:
+        logger.warning(
+            f"[{trace_id}] ADS_VIEW_FILTER_FALLBACK viewer_language={normalize_language_group(language_group)} "
+            f"fallback_language={DEFAULT_LANGUAGE_GROUP} fallback_rows={len(fallback_rows)}"
+        )
+        return build_ads_catalog_reply(language_group, fallback_rows), True
+
     return build_ads_catalog_reply(language_group, filtered_rows), True
 
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
