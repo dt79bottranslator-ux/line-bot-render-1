@@ -343,10 +343,6 @@ LOCALIZED_TEXT = {
         "ads_read_failed": "Đọc danh sách quảng cáo thất bại. Thử lại sau.",
         "ads_contact_label": "Liên hệ",
         "ads_id_label": "ID",
-        "ads_detail_title": "Chi tiết quảng cáo:",
-        "ads_select_invalid": "Số thứ tự quảng cáo không hợp lệ. Hãy chọn lại từ danh sách hiện tại.",
-        "ads_select_expired": "Danh sách quảng cáo đã hết hạn. Gõ /ads để tải lại.",
-        "ads_click_log_failed": "Đã mở chi tiết nhưng ghi log click thất bại.",
         "reset": "Đã reset flow. Bạn có thể chọn lại /worker hoặc /ads.",
         "exit": "Đã thoát flow hiện tại.",
         "status_worker": "flow hiện tại: worker",
@@ -370,10 +366,6 @@ LOCALIZED_TEXT = {
         "ads_read_failed": "Gagal membaca daftar iklan. Coba lagi nanti.",
         "ads_contact_label": "Kontak",
         "ads_id_label": "ID",
-        "ads_detail_title": "Detail iklan:",
-        "ads_select_invalid": "Nomor iklan tidak valid. Pilih lagi dari daftar saat ini.",
-        "ads_select_expired": "Daftar iklan sudah kedaluwarsa. Ketik /ads untuk memuat ulang.",
-        "ads_click_log_failed": "Detail sudah dibuka tetapi pencatatan klik gagal.",
         "reset": "Alur sudah direset. Anda bisa pilih lagi /worker atau /ads.",
         "exit": "Sudah keluar dari alur saat ini.",
         "status_worker": "alur saat ini: worker",
@@ -397,10 +389,6 @@ LOCALIZED_TEXT = {
         "ads_read_failed": "อ่านรายการโฆษณาล้มเหลว กรุณาลองใหม่ภายหลัง",
         "ads_contact_label": "ติดต่อ",
         "ads_id_label": "รหัส",
-        "ads_detail_title": "รายละเอียดโฆษณา:",
-        "ads_select_invalid": "หมายเลขโฆษณาไม่ถูกต้อง กรุณาเลือกใหม่จากรายการปัจจุบัน",
-        "ads_select_expired": "รายการโฆษณาหมดอายุแล้ว พิมพ์ /ads เพื่อโหลดใหม่",
-        "ads_click_log_failed": "เปิดรายละเอียดแล้ว แต่บันทึกคลิกล้มเหลว",
         "reset": "รีเซ็ตโฟลว์แล้ว คุณสามารถเลือก /worker หรือ /ads ใหม่ได้",
         "exit": "ออกจากโฟลว์ปัจจุบันแล้ว",
         "status_worker": "โฟลว์ปัจจุบัน: worker",
@@ -1493,91 +1481,6 @@ def truncate_text(value: str, max_len: int) -> str:
         return raw
     return raw[: max_len - 3].rstrip() + "..."
 
-def handle_ads_select_invalid_message(language_group: str) -> str:
-    return t(language_group, "ads_select_invalid")
-
-def handle_ads_select_expired_message(language_group: str) -> str:
-    return t(language_group, "ads_select_expired")
-
-def handle_ads_click_log_failed_message(language_group: str) -> str:
-    return t(language_group, "ads_click_log_failed")
-
-def is_numeric_ads_selection(text: str) -> bool:
-    return bool(re.fullmatch(r"\d+", safe_str(text)))
-
-def open_ads_click_log_worksheet(trace_id: str):
-    return get_worksheet_by_name(trace_id, ADS_CLICK_LOG_SHEET_NAME)
-
-def append_ads_click_log(ad_row: dict, viewer_user_id: str, language_group: str, action_type: str, trace_id: str) -> bool:
-    ws = open_ads_click_log_worksheet(trace_id)
-    if not ws:
-        logger.error(f"[{trace_id}] ADS_CLICK_LOG_APPEND_SKIPPED reason=worksheet_unavailable action_type={action_type}")
-        return False
-    click_id = f"clk_{uuid.uuid4().hex[:12]}"
-    row = [
-        click_id,
-        safe_str(ad_row.get("ad_id")),
-        safe_str(viewer_user_id),
-        safe_str(ad_row.get("owner_user_id") or ad_row.get("owner_line_id")),
-        safe_str(action_type),
-        normalize_language_group(language_group),
-        now_tw_iso(),
-    ]
-    try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info(
-            f"[{trace_id}] ADS_CLICK_LOG_APPEND_OK click_id={click_id} ad_id={safe_str(ad_row.get('ad_id'))} "
-            f"viewer_user_id={safe_str(viewer_user_id)} action_type={action_type}"
-        )
-        return True
-    except Exception as e:
-        logger.exception(f"[{trace_id}] ADS_CLICK_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
-        return False
-
-def set_ads_view_cache(user_id: str, language_group: str, ads_rows: List[dict], trace_id: str) -> None:
-    normalized_user_id = safe_str(user_id)
-    if not normalized_user_id:
-        logger.error(f"[{trace_id}] ADS_VIEW_CACHE_SET_SKIPPED reason=missing_user_id")
-        return
-    cached_rows = [dict(row) for row in ads_rows[:ADS_LIST_LIMIT]]
-    _ADS_VIEW_CACHE[normalized_user_id] = {
-        "rows": cached_rows,
-        "language_group": normalize_language_group(language_group),
-        "updated_at_ts": get_now_ts(),
-    }
-    logger.info(f"[{trace_id}] ADS_VIEW_CACHE_SET user_id={normalized_user_id} rows={len(cached_rows)}")
-
-def get_ads_view_cache(user_id: str, trace_id: str) -> List[dict]:
-    normalized_user_id = safe_str(user_id)
-    item = _ADS_VIEW_CACHE.get(normalized_user_id)
-    if not item:
-        logger.info(f"[{trace_id}] ADS_VIEW_CACHE_MISS user_id={normalized_user_id}")
-        return []
-    updated_at_ts = int(item.get("updated_at_ts", 0) or 0)
-    if updated_at_ts <= 0 or (get_now_ts() - updated_at_ts) > ADS_VIEW_TTL_SECONDS:
-        _ADS_VIEW_CACHE.pop(normalized_user_id, None)
-        logger.info(f"[{trace_id}] ADS_VIEW_CACHE_EXPIRED user_id={normalized_user_id}")
-        return []
-    rows = item.get("rows") or []
-    logger.info(f"[{trace_id}] ADS_VIEW_CACHE_HIT user_id={normalized_user_id} rows={len(rows)}")
-    return rows
-
-def build_ads_detail_reply(language_group: str, ad_row: dict) -> str:
-    lines = [t(language_group, "ads_detail_title")]
-    title = truncate_text(ad_row.get("title_source"), 120)
-    body = truncate_text(ad_row.get("body_source"), 500)
-    contact_name = truncate_text(ad_row.get("owner_contact_name"), 60)
-    ad_id = truncate_text(ad_row.get("ad_id"), 60)
-    if title:
-        lines.append(title)
-    if body:
-        lines.append(body)
-    if contact_name:
-        lines.append(f"{t(language_group, 'ads_contact_label')}: {contact_name}")
-    if ad_id:
-        lines.append(f"{t(language_group, 'ads_id_label')}: {ad_id}")
-    return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
-
 def build_ads_catalog_reply(language_group: str, ads_rows: List[dict]) -> str:
     if not ads_rows:
         return handle_ads_empty_message(language_group)
@@ -1601,7 +1504,7 @@ def build_ads_catalog_reply(language_group: str, ads_rows: List[dict]) -> str:
 
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
-def load_ads_reply_message(user_id: str, language_group: str, trace_id: str) -> Tuple[str, bool]:
+def load_ads_reply_message(language_group: str, trace_id: str) -> Tuple[str, bool]:
     rows, read_ok = load_ads_catalog_rows(trace_id)
     if not read_ok:
         return handle_ads_read_failed_message(language_group), False
@@ -1611,22 +1514,18 @@ def load_ads_reply_message(user_id: str, language_group: str, trace_id: str) -> 
         f"[{trace_id}] ADS_VIEW_FILTER_RESULT viewer_language={normalize_language_group(language_group)} "
         f"source_rows={len(rows)} filtered_rows={len(filtered_rows)}"
     )
-    selected_rows = filtered_rows
-    if not selected_rows:
-        fallback_rows = build_ads_fallback_rows(rows)
-        if fallback_rows and normalize_language_group(language_group) != DEFAULT_LANGUAGE_GROUP:
-            logger.warning(
-                f"[{trace_id}] ADS_VIEW_FILTER_FALLBACK viewer_language={normalize_language_group(language_group)} "
-                f"fallback_language={DEFAULT_LANGUAGE_GROUP} fallback_rows={len(fallback_rows)}"
-            )
-            selected_rows = fallback_rows
+    if filtered_rows:
+        return build_ads_catalog_reply(language_group, filtered_rows), True
 
-    selected_rows = selected_rows[:ADS_LIST_LIMIT]
-    set_ads_view_cache(user_id, language_group, selected_rows, trace_id)
-    for row in selected_rows:
-        append_ads_click_log(row, user_id, language_group, "ads_list_view", trace_id)
+    fallback_rows = build_ads_fallback_rows(rows)
+    if fallback_rows and normalize_language_group(language_group) != DEFAULT_LANGUAGE_GROUP:
+        logger.warning(
+            f"[{trace_id}] ADS_VIEW_FILTER_FALLBACK viewer_language={normalize_language_group(language_group)} "
+            f"fallback_language={DEFAULT_LANGUAGE_GROUP} fallback_rows={len(fallback_rows)}"
+        )
+        return build_ads_catalog_reply(language_group, fallback_rows), True
 
-    return build_ads_catalog_reply(language_group, selected_rows), True
+    return build_ads_catalog_reply(language_group, filtered_rows), True
 
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
@@ -1656,7 +1555,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             reply_text = handle_state_save_failed_message(current_language)
             flow_used = "persist_failed"
         else:
-            reply_text, ads_read_ok = load_ads_reply_message(user_id, current_language, trace_id)
+            reply_text, ads_read_ok = load_ads_reply_message(current_language, trace_id)
             flow_used = FLOW_ADS if ads_read_ok else "ads_read_failed"
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
         clear_ok = clear_user_flow(user_id, trace_id)
@@ -1691,27 +1590,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         reply_text = handle_worker_message(text, current_language)
         flow_used = FLOW_WORKER
     elif current_flow == FLOW_ADS:
-        if is_numeric_ads_selection(text):
-            cached_rows = get_ads_view_cache(user_id, trace_id)
-            if not cached_rows:
-                reply_text = handle_ads_select_expired_message(current_language)
-                flow_used = "ads_select_expired"
-            else:
-                selected_index = int(safe_str(text)) - 1
-                if selected_index < 0 or selected_index >= len(cached_rows):
-                    reply_text = handle_ads_select_invalid_message(current_language)
-                    flow_used = "ads_select_invalid"
-                else:
-                    selected_row = cached_rows[selected_index]
-                    _ADS_DETAIL_CACHE[safe_str(user_id)] = {"row": dict(selected_row), "updated_at_ts": get_now_ts()}
-                    click_ok = append_ads_click_log(selected_row, user_id, current_language, "ads_detail_view", trace_id)
-                    reply_text = build_ads_detail_reply(current_language, selected_row)
-                    if not click_ok:
-                        logger.error(f"[{trace_id}] ADS_DETAIL_CLICK_LOG_FAILED user_id={safe_str(user_id)} ad_id={safe_str(selected_row.get('ad_id'))}")
-                    flow_used = "ads_detail_view"
-        else:
-            reply_text = handle_ads_message(text, current_language)
-            flow_used = FLOW_ADS
+        reply_text = handle_ads_message(text, current_language)
+        flow_used = FLOW_ADS
     else:
         reply_text = t(current_language, "default_echo", text=text)
         flow_used = "default"
