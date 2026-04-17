@@ -47,7 +47,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__LANG_AWARE_STATUS_FIX_V41"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__LOCALIZED_HELP_V42"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -1355,18 +1355,18 @@ def handle_exit_message() -> str:
     return "Đã thoát flow hiện tại."
 
 
-def handle_status_message(flow: str, language_group: str) -> str:
+def handle_status_message(flow: str) -> str:
     normalized = safe_str(flow)
     if normalized == FLOW_WORKER:
-        return t(language_group, "status_worker")
+        return "flow hiện tại: worker"
     if normalized == FLOW_ADS:
-        return t(language_group, "status_ads")
-    return t(language_group, "status_none")
+        return "flow hiện tại: ads"
+    return "flow hiện tại: none"
 
 
-def handle_help_message() -> str:
+def handle_help_message(language_group: str) -> str:
     return "\n".join([
-        "lệnh hỗ trợ:",
+        t(language_group, "help_title"),
         "/worker",
         "/ads",
         "/status",
