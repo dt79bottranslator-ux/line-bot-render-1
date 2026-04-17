@@ -391,47 +391,7 @@ def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) 
 
 
 def ensure_user_language_worksheet(trace_id: str):
-    spreadsheet = open_spreadsheet(trace_id)
-    if not spreadsheet:
-        return None
-    try:
-        ws = spreadsheet.worksheet(USER_STATE_SHEET_NAME)
-    except gspread.WorksheetNotFound:
-        try:
-            ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=6)
-            ws.append_row(USER_STATE_HEADERS + USER_LANGUAGE_HEADERS[1:], value_input_option="USER_ENTERED")
-            logger.info(f"[{trace_id}] USER_LANGUAGE_SHEET_CREATED worksheet_name={USER_STATE_SHEET_NAME}")
-            return ws
-        except Exception as e:
-            logger.exception(f"[{trace_id}] USER_LANGUAGE_SHEET_CREATE_FAILED exception={type(e).__name__}:{e}")
-            return None
-    except Exception as e:
-        logger.exception(f"[{trace_id}] USER_LANGUAGE_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
-        return None
-
-    values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
-    if not values:
-        try:
-            ws.append_row(USER_STATE_HEADERS + USER_LANGUAGE_HEADERS[1:], value_input_option="USER_ENTERED")
-            logger.info(f"[{trace_id}] USER_LANGUAGE_HEADERS_INIT_OK")
-        except Exception as e:
-            logger.exception(f"[{trace_id}] USER_LANGUAGE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
-            return None
-        return ws
-
-    headers = values[0]
-    required_headers = ["user_id", "flow", "updated_at", "language_group"]
-    header_map = build_header_index_map(headers)
-    if any(h not in header_map for h in required_headers):
-        repaired_headers = ["user_id", "flow", "updated_at", "language_group"]
-        try:
-            ws.update(f"A1:D1", [repaired_headers])
-            logger.info(f"[{trace_id}] USER_LANGUAGE_HEADERS_REPAIRED old_headers={json.dumps(headers, ensure_ascii=False)}")
-        except Exception as e:
-            logger.exception(f"[{trace_id}] USER_LANGUAGE_HEADERS_REPAIR_FAILED exception={type(e).__name__}:{e}")
-            return None
-    return ws
-
+    return ensure_user_state_worksheet(trace_id)
 
 def get_persistent_user_language(user_id: str, trace_id: str) -> str:
     normalized_user_id = safe_str(user_id)
@@ -679,10 +639,11 @@ def resolve_user_flow(user_id: str, trace_id: str) -> str:
     return ""
 
 
-def persist_user_flow(user_id: str, flow: str, trace_id: str) -> None:
+def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     set_runtime_user_flow(user_id, flow, trace_id)
     persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
+    return persist_ok
 
 def reset_ads_runtime_caches(trace_id: str) -> None:
     _ADS_CATALOG_CACHE["loaded_at_ts"] = 0
@@ -1428,11 +1389,15 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     reply_language = current_language
 
     if normalized == WORKER_ENTRY_COMMAND:
-        persist_user_flow(user_id, FLOW_WORKER, trace_id)
+        persist_ok = persist_user_flow(user_id, FLOW_WORKER, trace_id)
+        if not persist_ok:
+            logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/worker user_id={user_id}")
         reply_text = handle_worker_entry(current_language)
         flow_used = FLOW_WORKER
     elif normalized == ADS_ENTRY_COMMAND:
-        persist_user_flow(user_id, FLOW_ADS, trace_id)
+        persist_ok = persist_user_flow(user_id, FLOW_ADS, trace_id)
+        if not persist_ok:
+            logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/ads user_id={user_id}")
         reply_text = handle_ads_entry(current_language)
         flow_used = FLOW_ADS
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
