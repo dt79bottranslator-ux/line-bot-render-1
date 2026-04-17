@@ -310,6 +310,8 @@ LOCALIZED_TEXT = {
         "lang_changed": "đã đổi ngôn ngữ: {lang}",
         "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th",
         "default_echo": "Đã nhận: {text}",
+        "state_save_failed": "Lưu trạng thái thất bại. Thử lại sau.",
+        "state_clear_failed": "Xóa trạng thái thất bại. Thử lại sau.",
     },
     "id": {
         "busy": "Sistem sedang sibuk, coba lagi nanti.",
@@ -326,6 +328,8 @@ LOCALIZED_TEXT = {
         "lang_changed": "bahasa diubah: {lang}",
         "lang_invalid": "format yang benar: /lang vi atau /lang id atau /lang th",
         "default_echo": "Diterima: {text}",
+        "state_save_failed": "Gagal menyimpan status. Coba lagi nanti.",
+        "state_clear_failed": "Gagal menghapus status. Coba lagi nanti.",
     },
     "th": {
         "busy": "ระบบกำลังยุ่ง กรุณาลองใหม่ภายหลัง",
@@ -342,6 +346,8 @@ LOCALIZED_TEXT = {
         "lang_changed": "เปลี่ยนภาษาแล้ว: {lang}",
         "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th",
         "default_echo": "รับแล้ว: {text}",
+        "state_save_failed": "บันทึกสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
+        "state_clear_failed": "ล้างสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
     },
 }
 
@@ -475,8 +481,11 @@ def resolve_user_language(user_id: str, trace_id: str) -> str:
 
 def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_language = normalize_language_group(language_group)
-    set_runtime_user_language(user_id, normalized_language, trace_id)
     persist_ok = set_persistent_user_language(user_id, normalized_language, trace_id)
+    if persist_ok:
+        set_runtime_user_language(user_id, normalized_language, trace_id)
+    else:
+        _USER_LANGUAGE_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
     return persist_ok
 
@@ -621,8 +630,9 @@ def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
 
 
 def clear_user_flow(user_id: str, trace_id: str) -> bool:
-    clear_runtime_user_flow(user_id, trace_id)
     persist_ok = clear_persistent_user_flow(user_id, trace_id)
+    if persist_ok:
+        clear_runtime_user_flow(user_id, trace_id)
     logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
     return persist_ok
 
@@ -640,8 +650,11 @@ def resolve_user_flow(user_id: str, trace_id: str) -> str:
 
 
 def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
-    set_runtime_user_flow(user_id, flow, trace_id)
     persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
+    if persist_ok:
+        set_runtime_user_flow(user_id, flow, trace_id)
+    else:
+        _USER_FLOW_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
     return persist_ok
 
@@ -1376,6 +1389,14 @@ def handle_lang_message(language_group: str) -> str:
 def handle_lang_invalid_message(language_group: str) -> str:
     return t(language_group, "lang_invalid")
 
+
+def handle_state_save_failed_message(language_group: str) -> str:
+    return t(language_group, "state_save_failed")
+
+
+def handle_state_clear_failed_message(language_group: str) -> str:
+    return t(language_group, "state_clear_failed")
+
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -1392,18 +1413,29 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         persist_ok = persist_user_flow(user_id, FLOW_WORKER, trace_id)
         if not persist_ok:
             logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/worker user_id={user_id}")
-        reply_text = handle_worker_entry(current_language)
-        flow_used = FLOW_WORKER
+            reply_text = handle_state_save_failed_message(current_language)
+            flow_used = "persist_failed"
+        else:
+            reply_text = handle_worker_entry(current_language)
+            flow_used = FLOW_WORKER
     elif normalized == ADS_ENTRY_COMMAND:
         persist_ok = persist_user_flow(user_id, FLOW_ADS, trace_id)
         if not persist_ok:
             logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/ads user_id={user_id}")
-        reply_text = handle_ads_entry(current_language)
-        flow_used = FLOW_ADS
+            reply_text = handle_state_save_failed_message(current_language)
+            flow_used = "persist_failed"
+        else:
+            reply_text = handle_ads_entry(current_language)
+            flow_used = FLOW_ADS
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
-        clear_user_flow(user_id, trace_id)
-        reply_text = handle_reset_message(current_language) if normalized == RESET_ENTRY_COMMAND else handle_exit_message(current_language)
-        flow_used = "cleared"
+        clear_ok = clear_user_flow(user_id, trace_id)
+        if not clear_ok:
+            logger.error(f"[{trace_id}] USER_STATE_CLEAR_FAILED command={normalized} user_id={user_id}")
+            reply_text = handle_state_clear_failed_message(current_language)
+            flow_used = "clear_failed"
+        else:
+            reply_text = handle_reset_message(current_language) if normalized == RESET_ENTRY_COMMAND else handle_exit_message(current_language)
+            flow_used = "cleared"
     elif normalized == STATUS_ENTRY_COMMAND:
         reply_text = handle_status_message(current_flow, current_language)
         flow_used = current_flow or "none"
@@ -1412,10 +1444,15 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = current_flow or "help"
     elif normalized.startswith(LANG_COMMAND_PREFIX):
         if requested_language:
-            persist_user_language(user_id, requested_language, trace_id)
-            reply_language = requested_language
-            reply_text = handle_lang_message(requested_language)
-            flow_used = current_flow or "lang"
+            persist_ok = persist_user_language(user_id, requested_language, trace_id)
+            if not persist_ok:
+                logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_FAILED command=/lang user_id={user_id} requested_language={requested_language}")
+                reply_text = handle_state_save_failed_message(current_language)
+                flow_used = current_flow or "lang_persist_failed"
+            else:
+                reply_language = requested_language
+                reply_text = handle_lang_message(requested_language)
+                flow_used = current_flow or "lang"
         else:
             reply_text = handle_lang_invalid_message(current_language)
             flow_used = current_flow or "lang_invalid"
