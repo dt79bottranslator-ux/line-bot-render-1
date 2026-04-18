@@ -39,6 +39,7 @@ LINE_RICH_MENU_ID_ZH = os.getenv("LINE_RICH_MENU_ID_ZH", "").strip()
 
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
+INTERNAL_SYNC_TOKEN = os.getenv("INTERNAL_SYNC_TOKEN", "").strip()
 USER_STATE_SHEET_NAME = "user_state"
 
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").strip()
@@ -1337,13 +1338,46 @@ def resolve_publish_sync_status_code(sync_result: dict) -> int:
         return 500
     return 409
 
+def verify_internal_sync_token(trace_id: str) -> bool:
+    expected = safe_str(INTERNAL_SYNC_TOKEN)
+    provided = safe_str(request.headers.get("X-Internal-Sync-Token"))
+
+    if not expected:
+        logger.error(f"[{trace_id}] INTERNAL_SYNC_TOKEN_MISSING_IN_ENV")
+        return False
+
+    if not provided:
+        logger.error(f"[{trace_id}] INTERNAL_SYNC_TOKEN_HEADER_MISSING")
+        return False
+
+    ok = hmac.compare_digest(provided, expected)
+    logger.info(f"[{trace_id}] INTERNAL_SYNC_TOKEN_CHECK ok={ok}")
+    return ok
+
 @app.route("/internal/publish-sync", methods=["POST"])
 def internal_publish_sync():
     trace_id = make_trace_id()
     started = time.perf_counter()
+
+    if not verify_internal_sync_token(trace_id):
+        payload = {
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": ms_since(started),
+            "error": "unauthorized",
+        }
+        return jsonify(payload), 401
+
     sync_result = run_publish_sync_once(trace_id)
     status_code = resolve_publish_sync_status_code(sync_result)
-    payload = {"ok": bool(sync_result.get("ok")), "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": ms_since(started), "result": sync_result}
+    payload = {
+        "ok": bool(sync_result.get("ok")),
+        "app_version": APP_VERSION,
+        "trace_id": trace_id,
+        "latency_ms": ms_since(started),
+        "result": sync_result,
+    }
     return jsonify(payload), status_code
 
 def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> bool:
