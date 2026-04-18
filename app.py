@@ -1,3 +1,4 @@
+
 import os
 import re
 import json
@@ -31,6 +32,11 @@ LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
 
+LINE_RICH_MENU_ID_VI = os.getenv("LINE_RICH_MENU_ID_VI", "").strip()
+LINE_RICH_MENU_ID_ID = os.getenv("LINE_RICH_MENU_ID_ID", "").strip()
+LINE_RICH_MENU_ID_TH = os.getenv("LINE_RICH_MENU_ID_TH", "").strip()
+LINE_RICH_MENU_ID_ZH = os.getenv("LINE_RICH_MENU_ID_ZH", "").strip()
+
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
 USER_STATE_SHEET_NAME = "user_state"
@@ -47,7 +53,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__LOCALIZED_HELP_V42"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__LOCALIZED_HELP_V43__RICH_MENU_SWITCH"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -70,7 +76,14 @@ EXIT_ENTRY_COMMAND = "/exit"
 STATUS_ENTRY_COMMAND = "/status"
 HELP_ENTRY_COMMAND = "/help"
 LANG_COMMAND_PREFIX = "/lang"
-SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th"}
+SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th", "zh"}
+
+RICH_MENU_ID_BY_LANGUAGE = {
+    "vi": LINE_RICH_MENU_ID_VI,
+    "id": LINE_RICH_MENU_ID_ID,
+    "th": LINE_RICH_MENU_ID_TH,
+    "zh": LINE_RICH_MENU_ID_ZH,
+}
 
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
 OWNER_ADS_INPUT_SHEET_NAME = "OWNER_ADS_INPUT"
@@ -198,7 +211,6 @@ def open_spreadsheet(trace_id: str):
         logger.exception(f"[{trace_id}] SPREADSHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
         return None
 
-
 def normalize_header_key(value: str) -> str:
     return safe_str(value).strip().lower()
 
@@ -280,7 +292,6 @@ def update_cell_by_header(ws, row_index: int, column_name: str, value: str, trac
         logger.exception(f"[{trace_id}] UPDATE_CELL_FAILED worksheet_name={worksheet_name} row_index={row_index} column_name={column_name} exception={type(e).__name__}:{e}")
         return False
 
-
 def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str) -> bool:
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
@@ -323,13 +334,10 @@ _ADS_DETAIL_CACHE: Dict[str, dict] = {}
 _WORKSPACE_VALIDATION_CACHE = {"result": None, "loaded_at_ts": 0}
 _USER_FLOW_STATE: Dict[str, dict] = {}
 
-
 USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
-
 
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
 USER_LANGUAGE_HEADERS = ["user_id", "language_group", "updated_at"]
-
 
 LOCALIZED_TEXT = {
     "vi": {
@@ -343,10 +351,6 @@ LOCALIZED_TEXT = {
         "ads_read_failed": "Đọc danh sách quảng cáo thất bại. Thử lại sau.",
         "ads_contact_label": "Liên hệ",
         "ads_id_label": "ID",
-        "ads_detail_title": "Detail iklan nomor {index}:",
-        "ads_select_invalid": "Nomor tidak valid. Pilih nomor dari daftar iklan terbaru.",
-        "ads_select_expired": "Daftar iklan sudah kedaluwarsa. Kirim /ads untuk memuat ulang daftar baru.",
-        "ads_select_log_failed": "Gagal mencatat log klik.",
         "ads_detail_title": "Chi tiết quảng cáo số {index}:",
         "ads_select_invalid": "Số thứ tự không hợp lệ. Hãy chọn số trong danh sách vừa nhận.",
         "ads_select_expired": "Danh sách quảng cáo đã hết hạn. Gửi lại /ads để tải danh sách mới.",
@@ -358,10 +362,11 @@ LOCALIZED_TEXT = {
         "status_none": "flow hiện tại: none",
         "help_title": "lệnh hỗ trợ:",
         "lang_changed": "đã đổi ngôn ngữ: {lang}",
-        "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th",
+        "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th hoặc /lang zh",
         "default_echo": "Đã nhận: {text}",
         "state_save_failed": "Lưu trạng thái thất bại. Thử lại sau.",
         "state_clear_failed": "Xóa trạng thái thất bại. Thử lại sau.",
+        "rich_menu_switch_failed": "Đã lưu ngôn ngữ nhưng đổi menu thất bại.",
     },
     "id": {
         "busy": "Sistem sedang sibuk, coba lagi nanti.",
@@ -374,10 +379,10 @@ LOCALIZED_TEXT = {
         "ads_read_failed": "Gagal membaca daftar iklan. Coba lagi nanti.",
         "ads_contact_label": "Kontak",
         "ads_id_label": "ID",
-        "ads_detail_title": "Chi tiết quảng cáo số {index}:",
-        "ads_select_invalid": "Số thứ tự không hợp lệ. Hãy chọn số trong danh sách vừa nhận.",
-        "ads_select_expired": "Danh sách quảng cáo đã hết hạn. Gửi lại /ads để tải danh sách mới.",
-        "ads_select_log_failed": "Ghi log click thất bại.",
+        "ads_detail_title": "Detail iklan nomor {index}:",
+        "ads_select_invalid": "Nomor tidak valid. Pilih nomor dari daftar iklan terbaru.",
+        "ads_select_expired": "Daftar iklan sudah kedaluwarsa. Kirim /ads untuk memuat ulang daftar baru.",
+        "ads_select_log_failed": "Gagal mencatat log klik.",
         "reset": "Alur sudah direset. Anda bisa pilih lagi /worker atau /ads.",
         "exit": "Sudah keluar dari alur saat ini.",
         "status_worker": "alur saat ini: worker",
@@ -385,10 +390,11 @@ LOCALIZED_TEXT = {
         "status_none": "alur saat ini: none",
         "help_title": "perintah yang didukung:",
         "lang_changed": "bahasa diubah: {lang}",
-        "lang_invalid": "format yang benar: /lang vi atau /lang id atau /lang th",
+        "lang_invalid": "format yang benar: /lang vi atau /lang id atau /lang th atau /lang zh",
         "default_echo": "Diterima: {text}",
         "state_save_failed": "Gagal menyimpan status. Coba lagi nanti.",
         "state_clear_failed": "Gagal menghapus status. Coba lagi nanti.",
+        "rich_menu_switch_failed": "Bahasa tersimpan tetapi pergantian menu gagal.",
     },
     "th": {
         "busy": "ระบบกำลังยุ่ง กรุณาลองใหม่ภายหลัง",
@@ -412,19 +418,46 @@ LOCALIZED_TEXT = {
         "status_none": "โฟลว์ปัจจุบัน: none",
         "help_title": "คำสั่งที่รองรับ:",
         "lang_changed": "เปลี่ยนภาษาแล้ว: {lang}",
-        "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th",
+        "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th หรือ /lang zh",
         "default_echo": "รับแล้ว: {text}",
         "state_save_failed": "บันทึกสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
         "state_clear_failed": "ล้างสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
+        "rich_menu_switch_failed": "บันทึกภาษาแล้ว แต่สลับเมนูไม่สำเร็จ",
+    },
+    "zh": {
+        "busy": "系統忙碌中，請稍後再試。",
+        "worker_entry": "已進入 worker flow，請發送下一段內容。",
+        "worker_message": "worker flow 已收到：{text}",
+        "ads_entry": "已進入廣告 flow，請發送下一段內容。",
+        "ads_message": "廣告 flow 已收到：{text}",
+        "ads_list_title": "目前有效廣告清單：",
+        "ads_empty": "目前沒有符合條件的廣告。",
+        "ads_read_failed": "讀取廣告清單失敗，請稍後再試。",
+        "ads_contact_label": "聯絡人",
+        "ads_id_label": "ID",
+        "ads_detail_title": "廣告詳情 #{index}：",
+        "ads_select_invalid": "編號無效，請從最新清單中選擇。",
+        "ads_select_expired": "廣告清單已過期，請重新發送 /ads。",
+        "ads_select_log_failed": "點擊紀錄失敗。",
+        "reset": "流程已重置，你可以重新選擇 /worker 或 /ads。",
+        "exit": "已退出目前流程。",
+        "status_worker": "目前流程：worker",
+        "status_ads": "目前流程：ads",
+        "status_none": "目前流程：none",
+        "help_title": "支援指令：",
+        "lang_changed": "語言已切換：{lang}",
+        "lang_invalid": "正確格式：/lang vi 或 /lang id 或 /lang th 或 /lang zh",
+        "default_echo": "已收到：{text}",
+        "state_save_failed": "儲存狀態失敗，請稍後再試。",
+        "state_clear_failed": "清除狀態失敗，請稍後再試。",
+        "rich_menu_switch_failed": "語言已儲存，但切換選單失敗。",
     },
 }
-
 
 def t(language_group: str, key: str, **kwargs) -> str:
     lang = normalize_language_group(language_group)
     template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
     return template.format(**kwargs)
-
 
 def prune_runtime_user_language_state(trace_id: str) -> None:
     now_ts = get_now_ts()
@@ -441,7 +474,6 @@ def prune_runtime_user_language_state(trace_id: str) -> None:
     if expired_keys:
         logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_PRUNED removed={len(expired_keys)}")
 
-
 def get_runtime_user_language(user_id: str, trace_id: str) -> str:
     prune_runtime_user_language_state(trace_id)
     item = _USER_LANGUAGE_STATE.get(safe_str(user_id))
@@ -452,7 +484,6 @@ def get_runtime_user_language(user_id: str, trace_id: str) -> str:
     logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_HIT user_id={user_id} language_group={language_group}")
     return language_group
 
-
 def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) -> None:
     normalized_user_id = safe_str(user_id)
     normalized_language = normalize_language_group(language_group)
@@ -462,7 +493,6 @@ def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) 
     prune_runtime_user_language_state(trace_id)
     _USER_LANGUAGE_STATE[normalized_user_id] = {"language_group": normalized_language, "updated_at_ts": get_now_ts()}
     logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_SET user_id={normalized_user_id} language_group={normalized_language}")
-
 
 def ensure_user_language_worksheet(trace_id: str):
     return ensure_user_state_worksheet(trace_id)
@@ -483,7 +513,6 @@ def get_persistent_user_language(user_id: str, trace_id: str) -> str:
             return language_group
     logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_MISS user_id={normalized_user_id}")
     return ""
-
 
 def set_persistent_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
@@ -526,7 +555,6 @@ def set_persistent_user_language(user_id: str, language_group: str, trace_id: st
         logger.exception(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
-
 def resolve_user_language(user_id: str, trace_id: str) -> str:
     runtime_language = get_runtime_user_language(user_id, trace_id)
     if runtime_language:
@@ -538,7 +566,6 @@ def resolve_user_language(user_id: str, trace_id: str) -> str:
         return persistent_language
     return DEFAULT_LANGUAGE_GROUP
 
-
 def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_language = normalize_language_group(language_group)
     persist_ok = set_persistent_user_language(user_id, normalized_language, trace_id)
@@ -548,7 +575,6 @@ def persist_user_language(user_id: str, language_group: str, trace_id: str) -> b
         _USER_LANGUAGE_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
     return persist_ok
-
 
 def ensure_user_state_worksheet(trace_id: str):
     spreadsheet = open_spreadsheet(trace_id)
@@ -592,7 +618,6 @@ def ensure_user_state_worksheet(trace_id: str):
             return None
     return ws
 
-
 def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -609,7 +634,6 @@ def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
             return flow
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_id={normalized_user_id}")
     return ""
-
 
 def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
@@ -651,8 +675,6 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
         logger.exception(f"[{trace_id}] USER_STATE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
-
-
 def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -686,7 +708,6 @@ def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_id={normalized_user_id} row_index={row_index}")
     return ok
 
-
 def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -696,14 +717,12 @@ def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
     _USER_FLOW_STATE.pop(normalized_user_id, None)
     logger.info(f"[{trace_id}] USER_FLOW_STATE_CLEARED user_id={normalized_user_id} existed={existed}")
 
-
 def clear_user_flow(user_id: str, trace_id: str) -> bool:
     persist_ok = clear_persistent_user_flow(user_id, trace_id)
     if persist_ok:
         clear_runtime_user_flow(user_id, trace_id)
     logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
     return persist_ok
-
 
 def resolve_user_flow(user_id: str, trace_id: str) -> str:
     runtime_flow = get_runtime_user_flow(user_id, trace_id)
@@ -715,7 +734,6 @@ def resolve_user_flow(user_id: str, trace_id: str) -> str:
         logger.info(f"[{trace_id}] USER_STATE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} flow={persistent_flow}")
         return persistent_flow
     return ""
-
 
 def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
@@ -1392,6 +1410,43 @@ def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: 
         logger.exception(f"[{trace_id}] LINE_REPLY_EXCEPTION exception={type(e).__name__}:{e}")
         return False
 
+def switch_user_rich_menu(user_id: str, language_group: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    normalized_language = normalize_language_group(language_group)
+    rich_menu_id = safe_str(RICH_MENU_ID_BY_LANGUAGE.get(normalized_language))
+
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED reason=missing_user_id")
+        return False
+
+    if not LINE_CHANNEL_ACCESS_TOKEN:
+        logger.error(f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED reason=missing_access_token")
+        return False
+
+    if not rich_menu_id:
+        logger.error(
+            f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED "
+            f"reason=missing_rich_menu_id language_group={normalized_language}"
+        )
+        return False
+
+    url = f"https://api.line.me/v2/bot/user/{normalized_user_id}/richmenu/{rich_menu_id}"
+    headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}
+
+    try:
+        resp = requests.post(url, headers=headers, timeout=OUTBOUND_TIMEOUT)
+        body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
+        logger.info(
+            f"[{trace_id}] RICH_MENU_SWITCH_HTTP "
+            f"user_id={normalized_user_id} language_group={normalized_language} "
+            f"rich_menu_id={rich_menu_id} status_code={resp.status_code} "
+            f"body={json.dumps(body_preview, ensure_ascii=False)}"
+        )
+        return 200 <= resp.status_code < 300
+    except Exception as e:
+        logger.exception(f"[{trace_id}] RICH_MENU_SWITCH_EXCEPTION exception={type(e).__name__}:{e}")
+        return False
+
 def handle_worker_entry(language_group: str) -> str:
     return t(language_group, "worker_entry")
 
@@ -1404,14 +1459,11 @@ def handle_ads_entry(language_group: str) -> str:
 def handle_ads_message(text: str, language_group: str) -> str:
     return t(language_group, "ads_message", text=text)
 
-
 def handle_reset_message(language_group: str) -> str:
     return t(language_group, "reset")
 
-
 def handle_exit_message(language_group: str) -> str:
     return t(language_group, "exit")
-
 
 def handle_status_message(flow: str, language_group: str) -> str:
     normalized = safe_str(flow)
@@ -1420,7 +1472,6 @@ def handle_status_message(flow: str, language_group: str) -> str:
     if normalized == FLOW_ADS:
         return t(language_group, "status_ads")
     return t(language_group, "status_none")
-
 
 def handle_help_message(language_group: str) -> str:
     return "\n".join([
@@ -1434,14 +1485,13 @@ def handle_help_message(language_group: str) -> str:
         "/lang vi",
         "/lang id",
         "/lang th",
+        "/lang zh",
     ])
-
 
 def normalize_command_text(text: str) -> str:
     normalized = safe_str(text).lower()
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
-
 
 def parse_lang_command(text: str) -> str:
     normalized = normalize_command_text(text)
@@ -1452,11 +1502,9 @@ def parse_lang_command(text: str) -> str:
         return ""
     return normalize_language_group(parts[1]) if parts[1] in SUPPORTED_LANGUAGE_GROUPS else ""
 
-
 def handle_lang_message(language_group: str) -> str:
     normalized = normalize_language_group(language_group)
     return t(normalized, "lang_changed", lang=normalized)
-
 
 def handle_lang_invalid_message(language_group: str) -> str:
     return t(language_group, "lang_invalid")
@@ -1748,9 +1796,19 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 reply_text = handle_state_save_failed_message(current_language)
                 flow_used = current_flow or "lang_persist_failed"
             else:
-                reply_language = requested_language
-                reply_text = handle_lang_message(requested_language)
-                flow_used = current_flow or "lang"
+                switch_ok = switch_user_rich_menu(user_id, requested_language, trace_id)
+                if not switch_ok:
+                    logger.error(
+                        f"[{trace_id}] RICH_MENU_SWITCH_FAILED_AFTER_LANG_SAVE "
+                        f"user_id={user_id} requested_language={requested_language}"
+                    )
+                    reply_text = t(requested_language, "rich_menu_switch_failed")
+                    reply_language = requested_language
+                    flow_used = current_flow or "lang_switch_failed"
+                else:
+                    reply_language = requested_language
+                    reply_text = handle_lang_message(requested_language)
+                    flow_used = current_flow or "lang"
         else:
             reply_text = handle_lang_invalid_message(current_language)
             flow_used = current_flow or "lang_invalid"
