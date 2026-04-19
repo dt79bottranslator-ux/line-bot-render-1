@@ -9,6 +9,7 @@ import base64
 import time
 import uuid
 import logging
+import unicodedata
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Tuple, Optional, List
 
@@ -27,6 +28,29 @@ logger = logging.getLogger(__name__)
 
 def safe_str(v) -> str:
     return str(v).strip() if v else ""
+
+def sanitize_incoming_text(text: str) -> str:
+    raw = safe_str(text)
+    if not raw:
+        return ""
+
+    normalized = unicodedata.normalize("NFKC", raw)
+    normalized = re.sub(r"[\u200B-\u200F\u2060\uFEFF]", "", normalized)
+    normalized = "".join(ch for ch in normalized if ch == "\n" or unicodedata.category(ch)[0] != "C")
+    normalized = re.sub(r"[ \t\r\f\v]+", " ", normalized)
+    normalized = re.sub(r"[¥\\]+$", "", normalized).strip()
+    return normalized
+
+def is_supported_flow(value: str) -> bool:
+    normalized = safe_str(value)
+    return normalized in {FLOW_WORKER, FLOW_ADS}
+
+def is_persistent_flow_expired(updated_at_value: str) -> bool:
+    updated_at_dt = parse_iso_datetime(updated_at_value)
+    if not updated_at_dt:
+        return True
+    age_seconds = int((now_tw_dt() - updated_at_dt).total_seconds())
+    return age_seconds > PERSISTENT_FLOW_TTL_SECONDS
 
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
@@ -50,11 +74,12 @@ MAX_ALL_CHARS = int(os.getenv("MAX_ALL_CHARS", "500").strip() or "500")
 
 RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
+PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__WORKER_ADS_PHONE_SUBMIT_FLOW__LOCALIZED_HELP_V43__RICH_MENU_SWITCH"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__FLOW_TTL_SANITIZE__ADS_AUTO_CLEAR_V44"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -629,10 +654,28 @@ def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
         return ""
     records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
     for row in records:
-        if safe_str(row.get("user_id")) == normalized_user_id:
-            flow = safe_str(row.get("flow"))
-            logger.info(f"[{trace_id}] USER_STATE_PERSIST_HIT user_id={normalized_user_id} flow={flow}")
-            return flow
+        if safe_str(row.get("user_id")) != normalized_user_id:
+            continue
+
+        flow = safe_str(row.get("flow"))
+        updated_at = safe_str(row.get("updated_at"))
+
+        if flow and not is_supported_flow(flow):
+            logger.warning(f"[{trace_id}] USER_STATE_PERSIST_UNSUPPORTED_FLOW user_id={normalized_user_id} flow={flow}")
+            return ""
+
+        if flow and is_persistent_flow_expired(updated_at):
+            logger.info(
+                f"[{trace_id}] USER_STATE_PERSIST_EXPIRED "
+                f"user_id={normalized_user_id} flow={flow} updated_at={json.dumps(updated_at, ensure_ascii=False)} "
+                f"ttl_seconds={PERSISTENT_FLOW_TTL_SECONDS}"
+            )
+            clear_persistent_user_flow(normalized_user_id, trace_id)
+            return ""
+
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_HIT user_id={normalized_user_id} flow={flow}")
+        return flow
+
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_id={normalized_user_id}")
     return ""
 
@@ -1420,7 +1463,7 @@ def get_message_type(event: dict) -> str:
 
 def get_message_text(event: dict) -> str:
     message = event.get("message") or {}
-    return safe_str(message.get("text"))
+    return sanitize_incoming_text(message.get("text"))
 
 def get_reply_token(event: dict) -> str:
     return safe_str(event.get("replyToken"))
@@ -1523,7 +1566,7 @@ def handle_help_message(language_group: str) -> str:
     ])
 
 def normalize_command_text(text: str) -> str:
-    normalized = safe_str(text).lower()
+    normalized = sanitize_incoming_text(text).lower()
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
 
@@ -1851,10 +1894,12 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = FLOW_WORKER
     elif current_flow == FLOW_ADS and normalized.isdigit():
         reply_text = handle_ads_numeric_selection(user_id, normalized, current_language, trace_id)
+        clear_user_flow(user_id, trace_id)
         flow_used = "ads_detail_view"
     elif current_flow == FLOW_ADS:
-        reply_text = handle_ads_message(text, current_language)
-        flow_used = FLOW_ADS
+        clear_user_flow(user_id, trace_id)
+        reply_text = t(current_language, "default_echo", text=text)
+        flow_used = "ads_auto_cleared"
     else:
         reply_text = t(current_language, "default_echo", text=text)
         flow_used = "default"
