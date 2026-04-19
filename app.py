@@ -26,6 +26,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@app.route("/", methods=["GET", "HEAD"])
+def root_health():
+    return "OK", 200
+
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "ok": True,
+        "app_version": APP_VERSION,
+    }), 200
+
 def safe_str(v) -> str:
     return str(v).strip() if v else ""
 
@@ -91,6 +103,8 @@ FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 LINE_TEXT_HARD_LIMIT = 5000
 RATE_LIMIT_STORE_MAX_KEYS = 5000
 ERROR_BODY_LOG_LIMIT = 800
+PROCESSED_EVENT_TTL_SECONDS = int(os.getenv("PROCESSED_EVENT_TTL_SECONDS", "21600").strip() or "21600")
+PROCESSED_EVENT_MAX_KEYS = int(os.getenv("PROCESSED_EVENT_MAX_KEYS", "10000").strip() or "10000")
 
 LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
@@ -364,6 +378,7 @@ USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
 
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
 USER_LANGUAGE_HEADERS = ["user_id", "language_group", "updated_at"]
+_PROCESSED_EVENT_STATE: Dict[str, int] = {}
 
 LOCALIZED_TEXT = {
     "vi": {
@@ -484,6 +499,53 @@ def t(language_group: str, key: str, **kwargs) -> str:
     lang = normalize_language_group(language_group)
     template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
     return template.format(**kwargs)
+
+
+def prune_processed_event_state(trace_id: str) -> None:
+    now_ts = get_now_ts()
+    expired_keys = []
+    for event_key, processed_at_ts in list(_PROCESSED_EVENT_STATE.items()):
+        if int(processed_at_ts or 0) <= 0 or (now_ts - int(processed_at_ts or 0)) > PROCESSED_EVENT_TTL_SECONDS:
+            expired_keys.append(event_key)
+    for event_key in expired_keys:
+        _PROCESSED_EVENT_STATE.pop(event_key, None)
+    while len(_PROCESSED_EVENT_STATE) > PROCESSED_EVENT_MAX_KEYS:
+        oldest_key = min(_PROCESSED_EVENT_STATE.keys(), key=lambda x: int(_PROCESSED_EVENT_STATE.get(x, 0) or 0))
+        _PROCESSED_EVENT_STATE.pop(oldest_key, None)
+    if expired_keys:
+        logger.info(f"[{trace_id}] PROCESSED_EVENT_STATE_PRUNED removed={len(expired_keys)}")
+
+def get_event_unique_key(event: dict) -> str:
+    webhook_event_id = safe_str(event.get("webhookEventId"))
+    if webhook_event_id:
+        return f"webhook:{webhook_event_id}"
+    message = event.get("message") or {}
+    message_id = safe_str(message.get("id"))
+    if message_id:
+        return f"message:{message_id}"
+    reply_token = safe_str(event.get("replyToken"))
+    if reply_token:
+        return f"reply:{reply_token}"
+    return ""
+
+def is_duplicate_event(event: dict, trace_id: str) -> bool:
+    event_key = get_event_unique_key(event)
+    if not event_key:
+        logger.info(f"[{trace_id}] EVENT_DEDUP_SKIPPED reason=missing_event_key")
+        return False
+    prune_processed_event_state(trace_id)
+    duplicate = event_key in _PROCESSED_EVENT_STATE
+    logger.info(f"[{trace_id}] EVENT_DEDUP_CHECK event_key={event_key} duplicate={duplicate}")
+    return duplicate
+
+def mark_event_processed(event: dict, trace_id: str) -> None:
+    event_key = get_event_unique_key(event)
+    if not event_key:
+        logger.info(f"[{trace_id}] EVENT_DEDUP_MARK_SKIPPED reason=missing_event_key")
+        return
+    prune_processed_event_state(trace_id)
+    _PROCESSED_EVENT_STATE[event_key] = get_now_ts()
+    logger.info(f"[{trace_id}] EVENT_DEDUP_MARKED event_key={event_key}")
 
 def prune_runtime_user_language_state(trace_id: str) -> None:
     now_ts = get_now_ts()
@@ -662,6 +724,7 @@ def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
 
         if flow and not is_supported_flow(flow):
             logger.warning(f"[{trace_id}] USER_STATE_PERSIST_UNSUPPORTED_FLOW user_id={normalized_user_id} flow={flow}")
+            clear_persistent_user_flow(normalized_user_id, trace_id)
             return ""
 
         if flow and is_persistent_flow_expired(updated_at):
@@ -1824,6 +1887,15 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
     text = get_message_text(event)
+
+    if not user_id:
+        logger.error(f"[{trace_id}] LINE_TEXT_DISPATCH_SKIPPED reason=missing_user_id")
+        return {"handled": False, "event_type": "message", "message_type": "text", "reason": "missing_user_id"}
+
+    if not reply_token:
+        logger.error(f"[{trace_id}] LINE_TEXT_DISPATCH_SKIPPED reason=missing_reply_token user_id={user_id}")
+        return {"handled": False, "event_type": "message", "message_type": "text", "reason": "missing_reply_token", "user_id": user_id}
+
     normalized = normalize_command_text(text)
     current_flow = resolve_user_flow(user_id, trace_id)
     current_language = resolve_user_language(user_id, trace_id)
@@ -1939,7 +2011,12 @@ def callback():
     results = []
     for event in events:
         try:
+            if is_duplicate_event(event, trace_id):
+                results.append({"handled": False, "reason": "duplicate_event"})
+                continue
             result = dispatch_line_event(event, trace_id)
+            if bool(result.get("handled")):
+                mark_event_processed(event, trace_id)
             results.append(result)
         except Exception as e:
             logger.exception(f"[{trace_id}] CALLBACK_EVENT_EXCEPTION exception={type(e).__name__}:{e}")
