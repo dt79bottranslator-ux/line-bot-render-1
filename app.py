@@ -1374,35 +1374,55 @@ def handle_state_clear_failed_message(language_group: str) -> str:
     return t(language_group, "state_clear_failed")
 
 
+def _contains_any_phrase(text: str, phrases: List[str]) -> bool:
+    return any(phrase in text for phrase in phrases)
+
+
 def classify_default_intent(normalized_text: str) -> str:
     text = safe_str(normalized_text).lower()
     if not text:
         return "general"
 
-    leave_keywords = [
-        "nghỉ", "xin nghỉ", "không đi làm", "nghi phep", "nghỉ phép",
-        "leave", "off work", "day off", "cuti", "izin", "libur",
-        "ลา", "หยุดงาน", "請假", "休假", "不上班",
+    leave_strong_phrases = [
+        "xin nghỉ", "nghỉ phép", "nghi phep", "nghỉ làm", "báo nghỉ", "nghỉ ca", "không đi làm",
+        "request leave", "take leave", "day off work", "off work",
+        "izin kerja", "cuti kerja",
+        "ลางาน", "ขอลางาน",
+        "請假", "休假", "不上班",
     ]
-    health_keywords = [
-        "đau", "ốm", "sốt", "mệt", "khám", "bệnh", "nhức", "ho", "đi bệnh viện",
+    health_strong_phrases = [
+        "bị ốm", "bi om", "đau đầu", "đau bụng", "sốt", "mệt", "không khỏe", "khong khoe",
+        "khám bệnh", "đi bệnh viện", "nhức đầu", "ho", "bệnh",
         "sakit", "demam", "pusing", "batuk", "rumah sakit",
         "ป่วย", "ไข้", "เจ็บ", "โรงพยาบาล",
         "生病", "發燒", "頭痛", "看醫生", "醫院",
     ]
-    travel_keywords = [
-        "đi ", "về ", "bay", "xe", "tàu", "ở đâu", "đến", "tới", "sang", "về quê",
+    travel_strong_phrases = [
+        "đi ", "đi chơi", "về ", "bay", "ra sân bay", "về quê", "qua ", "sang ", "tới ", "đến ", "ở đâu",
+        "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan",
         "travel", "go to", "flight", "bus", "train",
-        "pergi", "pulang", "naik", "berangkat",
+        "pergi", "pulang", "berangkat", "naik",
         "ไป", "กลับ", "เดินทาง",
         "去", "回", "搭機", "坐車", "行程",
     ]
 
-    if any(keyword in text for keyword in leave_keywords):
-        return "leave"
-    if any(keyword in text for keyword in health_keywords):
+    leave_negative_guards = [
+        "được nghỉ", "neu duoc nghi", "nếu được nghỉ", "nghỉ rồi đi", "nghỉ đi chơi", "nghỉ thì đi",
+        "đi chơi", "bay", "về ", "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan",
+    ]
+
+    travel_hit = _contains_any_phrase(text, travel_strong_phrases)
+    health_hit = _contains_any_phrase(text, health_strong_phrases)
+    leave_hit = _contains_any_phrase(text, leave_strong_phrases)
+    leave_blocked = _contains_any_phrase(text, leave_negative_guards) and travel_hit
+
+    if health_hit:
         return "health"
-    if any(keyword in text for keyword in travel_keywords):
+    if travel_hit and leave_blocked:
+        return "travel"
+    if leave_hit and not leave_blocked:
+        return "leave"
+    if travel_hit:
         return "travel"
     return "general"
 
