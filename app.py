@@ -1491,7 +1491,9 @@ def callback():
     for event in events:
         try:
             if is_duplicate_event(event, trace_id):
-                results.append({"handled": False, "reason": "duplicate_event"})
+                duplicate_event_key = get_event_unique_key(event)
+                logger.info(f"[{trace_id}] CALLBACK_EVENT_DUPLICATE_SKIP event_key={duplicate_event_key}")
+                results.append({"handled": False, "reason": "duplicate_event", "event_key": duplicate_event_key})
                 continue
             result = dispatch_line_event(event, trace_id)
             if bool(result.get("handled")):
