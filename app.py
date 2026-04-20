@@ -426,6 +426,10 @@ LOCALIZED_TEXT = {
         "lang_changed": "đã đổi ngôn ngữ: {lang}",
         "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th hoặc /lang zh",
         "default_echo": "Đã nhận yêu cầu. Gửi /help để xem lệnh hỗ trợ, hoặc dùng /worker, /ads, /lang.",
+        "default_leave_intent": "Đã nhận nhóm nội dung nghỉ/phép. Nếu cần xử lý theo mẫu, gửi /worker rồi nhập nội dung chi tiết.",
+        "default_health_intent": "Đã nhận nhóm nội dung sức khỏe. Nếu cần hỗ trợ theo mẫu, gửi /worker rồi nhập tình trạng cụ thể.",
+        "default_travel_intent": "Đã nhận nhóm nội dung lịch trình/di chuyển. Nếu cần xử lý theo mẫu, gửi /worker rồi nhập nơi đi, nơi đến, thời gian.",
+        "default_general_intent": "Đã nhận yêu cầu chung. Gửi /help để xem lệnh hỗ trợ, hoặc dùng /worker, /ads, /lang.",
         "state_save_failed": "Lưu trạng thái thất bại. Thử lại sau.",
         "state_clear_failed": "Xóa trạng thái thất bại. Thử lại sau.",
         "rich_menu_switch_failed": "Đã lưu ngôn ngữ nhưng đổi menu thất bại.",
@@ -454,6 +458,10 @@ LOCALIZED_TEXT = {
         "lang_changed": "bahasa diubah: {lang}",
         "lang_invalid": "format yang benar: /lang vi hoặc /lang id hoặc /lang th hoặc /lang zh",
         "default_echo": "Permintaan diterima. Kirim /help untuk melihat perintah, atau gunakan /worker, /ads, /lang.",
+        "default_leave_intent": "Konten izin/cuti diterima. Jika ingin diproses dengan format kerja, kirim /worker lalu isi detailnya.",
+        "default_health_intent": "Konten kesehatan diterima. Jika ingin diproses dengan format kerja, kirim /worker lalu isi kondisi detail.",
+        "default_travel_intent": "Konten perjalanan diterima. Jika ingin diproses dengan format kerja, kirim /worker lalu isi asal, tujuan, dan waktu.",
+        "default_general_intent": "Permintaan umum diterima. Gunakan /help untuk melihat perintah, atau /worker, /ads, /lang.",
         "state_save_failed": "Gagal menyimpan status. Coba lagi nanti.",
         "state_clear_failed": "Gagal menghapus status. Coba lagi nanti.",
         "rich_menu_switch_failed": "Bahasa tersimpan tetapi pergantian menu gagal.",
@@ -482,6 +490,10 @@ LOCALIZED_TEXT = {
         "lang_changed": "เปลี่ยนภาษาแล้ว: {lang}",
         "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th หรือ /lang zh",
         "default_echo": "รับคำขอแล้ว ส่ง /help เพื่อดูคำสั่ง หรือใช้ /worker, /ads, /lang",
+        "default_leave_intent": "ได้รับเนื้อหาเรื่องลางาน/หยุดงานแล้ว หากต้องการให้จัดการตามแบบงาน ให้ส่ง /worker แล้วส่งรายละเอียดต่อ",
+        "default_health_intent": "ได้รับเนื้อหาเรื่องสุขภาพแล้ว หากต้องการให้จัดการตามแบบงาน ให้ส่ง /worker แล้วส่งอาการต่อ",
+        "default_travel_intent": "ได้รับเนื้อหาเรื่องการเดินทางแล้ว หากต้องการให้จัดการตามแบบงาน ให้ส่ง /worker แล้วส่งต้นทาง ปลายทาง และเวลา",
+        "default_general_intent": "ได้รับคำขอทั่วไปแล้ว ใช้ /help เพื่อดูคำสั่ง หรือใช้ /worker, /ads, /lang",
         "state_save_failed": "บันทึกสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
         "state_clear_failed": "ล้างสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
         "rich_menu_switch_failed": "บันทึกภาษาแล้ว แต่สลับเมนูไม่สำเร็จ",
@@ -510,6 +522,10 @@ LOCALIZED_TEXT = {
         "lang_changed": "語言已切換：{lang}",
         "lang_invalid": "正確格式：/lang vi 或 /lang id 或 /lang th 或 /lang zh",
         "default_echo": "已收到需求。可發送 /help 查看指令，或使用 /worker、/ads、/lang。",
+        "default_leave_intent": "已收到請假/休假類內容。若要依工作格式處理，請先發送 /worker 再補充細節。",
+        "default_health_intent": "已收到健康狀況類內容。若要依工作格式處理，請先發送 /worker 再補充具體情況。",
+        "default_travel_intent": "已收到行程/移動類內容。若要依工作格式處理，請先發送 /worker 再補充出發地、目的地、時間。",
+        "default_general_intent": "已收到一般需求。發送 /help 查看指令，或使用 /worker、/ads、/lang。",
         "state_save_failed": "儲存狀態失敗，請稍後再試。",
         "state_clear_failed": "清除狀態失敗，請稍後再試。",
         "rich_menu_switch_failed": "語言已儲存，但切換選單失敗。",
@@ -1358,6 +1374,55 @@ def handle_state_clear_failed_message(language_group: str) -> str:
     return t(language_group, "state_clear_failed")
 
 
+def classify_default_intent(normalized_text: str) -> str:
+    text = safe_str(normalized_text).lower()
+    if not text:
+        return "general"
+
+    leave_keywords = [
+        "nghỉ", "xin nghỉ", "không đi làm", "nghi phep", "nghỉ phép",
+        "leave", "off work", "day off", "cuti", "izin", "libur",
+        "ลา", "หยุดงาน", "請假", "休假", "不上班",
+    ]
+    health_keywords = [
+        "đau", "ốm", "sốt", "mệt", "khám", "bệnh", "nhức", "ho", "đi bệnh viện",
+        "sakit", "demam", "pusing", "batuk", "rumah sakit",
+        "ป่วย", "ไข้", "เจ็บ", "โรงพยาบาล",
+        "生病", "發燒", "頭痛", "看醫生", "醫院",
+    ]
+    travel_keywords = [
+        "đi ", "về ", "bay", "xe", "tàu", "ở đâu", "đến", "tới", "sang", "về quê",
+        "travel", "go to", "flight", "bus", "train",
+        "pergi", "pulang", "naik", "berangkat",
+        "ไป", "กลับ", "เดินทาง",
+        "去", "回", "搭機", "坐車", "行程",
+    ]
+
+    if any(keyword in text for keyword in leave_keywords):
+        return "leave"
+    if any(keyword in text for keyword in health_keywords):
+        return "health"
+    if any(keyword in text for keyword in travel_keywords):
+        return "travel"
+    return "general"
+
+
+def build_default_intent_reply(text: str, language_group: str, trace_id: str) -> str:
+    normalized = normalize_command_text(text)
+    intent = classify_default_intent(normalized)
+    logger.info(
+        f"[{trace_id}] DEFAULT_INTENT_ROUTED "
+        f"intent={intent} normalized={json.dumps(normalized, ensure_ascii=False)}"
+    )
+    key_map = {
+        "leave": "default_leave_intent",
+        "health": "default_health_intent",
+        "travel": "default_travel_intent",
+        "general": "default_general_intent",
+    }
+    return t(language_group, key_map.get(intent, "default_general_intent"))
+
+
 def truncate_text(value: str, max_len: int) -> str:
     raw = safe_str(value)
     if len(raw) <= max_len:
@@ -1579,10 +1644,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = "ads_detail_view"
     elif current_flow == FLOW_ADS:
         clear_user_flow(user_id, trace_id)
-        reply_text = t(current_language, "default_echo", text=text)
+        reply_text = build_default_intent_reply(text, current_language, trace_id)
         flow_used = "ads_auto_cleared"
     else:
-        reply_text = t(current_language, "default_echo", text=text)
+        reply_text = build_default_intent_reply(text, current_language, trace_id)
         flow_used = "default"
 
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
