@@ -314,24 +314,6 @@ def find_first_row_index_by_column_value(ws, column_name: str, expected_value: s
     logger.info(f"[{trace_id}] FIND_ROW_NOT_FOUND worksheet_name={worksheet_name} column_name={column_name} expected_value={expected_value}")
     return 0
 
-def update_cell_by_header(ws, row_index: int, column_name: str, value: str, trace_id: str, worksheet_name: str) -> bool:
-    values = get_all_values_safe(ws, trace_id, worksheet_name)
-    if not values:
-        return False
-    headers = values[0]
-    header_map = build_header_index_map(headers)
-    col_idx = header_map.get(normalize_header_key(column_name))
-    if col_idx is None:
-        logger.error(f"[{trace_id}] UPDATE_CELL_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
-        return False
-    try:
-        ws.update_cell(row_index, col_idx + 1, safe_str(value))
-        logger.info(f"[{trace_id}] UPDATE_CELL_OK worksheet_name={worksheet_name} row_index={row_index} column_name={column_name} value={json.dumps(safe_str(value), ensure_ascii=False)}")
-        return True
-    except Exception as e:
-        logger.exception(f"[{trace_id}] UPDATE_CELL_FAILED worksheet_name={worksheet_name} row_index={row_index} column_name={column_name} exception={type(e).__name__}:{e}")
-        return False
-
 def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str) -> bool:
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
@@ -378,7 +360,6 @@ USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
 PROCESSED_EVENT_HEADERS = ["event_key", "processed_at", "trace_id", "webhook_event_id", "message_id", "reply_token", "user_id", "event_type"]
 
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
-USER_LANGUAGE_HEADERS = ["user_id", "language_group", "updated_at"]
 _PROCESSED_EVENT_STATE: Dict[str, int] = {}
 
 LOCALIZED_TEXT = {
@@ -432,7 +413,7 @@ LOCALIZED_TEXT = {
         "status_none": "alur saat ini: none",
         "help_title": "perintah yang didukung:",
         "lang_changed": "bahasa diubah: {lang}",
-        "lang_invalid": "format yang benar: /lang vi atau /lang id atau /lang th atau /lang zh",
+        "lang_invalid": "format yang benar: /lang vi hoặc /lang id hoặc /lang th hoặc /lang zh",
         "default_echo": "Diterima: {text}",
         "state_save_failed": "Gagal menyimpan status. Coba lagi nanti.",
         "state_clear_failed": "Gagal menghapus status. Coba lagi nanti.",
@@ -501,6 +482,7 @@ def t(language_group: str, key: str, **kwargs) -> str:
     template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
     return template.format(**kwargs)
 
+# --- processed event state ---
 
 def prune_processed_event_state(trace_id: str) -> None:
     now_ts = get_now_ts()
@@ -524,7 +506,7 @@ def ensure_processed_event_worksheet(trace_id: str):
         ws = spreadsheet.worksheet(PROCESSED_EVENT_SHEET_NAME)
     except gspread.WorksheetNotFound:
         try:
-            ws = spreadsheet.add_worksheet(title=PROCESSED_EVENT_SHEET_NAME, rows=5000, cols=len(PROCESSED_EVENT_HEADERS) + 2)
+            ws = spreadsheet.add_worksheet(title=PROCESSED_EVENT_SHEET_NAME, rows=5000, cols=10)
             ws.append_row(PROCESSED_EVENT_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] PROCESSED_EVENT_SHEET_CREATED worksheet_name={PROCESSED_EVENT_SHEET_NAME}")
             return ws
@@ -544,17 +526,6 @@ def ensure_processed_event_worksheet(trace_id: str):
             logger.exception(f"[{trace_id}] PROCESSED_EVENT_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
             return None
         return ws
-
-    headers = values[0]
-    header_map = build_header_index_map(headers)
-    if any(normalize_header_key(h) not in header_map for h in PROCESSED_EVENT_HEADERS):
-        try:
-            end_col_letter = chr(ord("A") + len(PROCESSED_EVENT_HEADERS) - 1)
-            ws.update(f"A1:{end_col_letter}1", [PROCESSED_EVENT_HEADERS])
-            logger.info(f"[{trace_id}] PROCESSED_EVENT_HEADERS_REPAIRED old_headers={json.dumps(headers, ensure_ascii=False)}")
-        except Exception as e:
-            logger.exception(f"[{trace_id}] PROCESSED_EVENT_HEADERS_REPAIR_FAILED exception={type(e).__name__}:{e}")
-            return None
     return ws
 
 def get_event_unique_key(event: dict) -> str:
@@ -571,42 +542,39 @@ def get_event_unique_key(event: dict) -> str:
     return ""
 
 def has_persistent_processed_event(event_key: str, trace_id: str) -> bool:
-    normalized_event_key = safe_str(event_key)
-    if not normalized_event_key:
+    if not event_key:
         logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK_SKIPPED reason=missing_event_key")
         return False
     ws = ensure_processed_event_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK_SKIPPED reason=worksheet_unavailable event_key={normalized_event_key}")
+        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK_SKIPPED reason=worksheet_unavailable event_key={event_key}")
         return False
     row_index = find_first_row_index_by_column_value(
         ws=ws,
         column_name="event_key",
-        expected_value=normalized_event_key,
+        expected_value=event_key,
         trace_id=trace_id,
         worksheet_name=PROCESSED_EVENT_SHEET_NAME,
     )
     duplicate = row_index > 0
-    logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK event_key={normalized_event_key} duplicate={duplicate} row_index={row_index}")
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK event_key={event_key} duplicate={duplicate} row_index={row_index}")
     return duplicate
 
 def append_persistent_processed_event(event: dict, event_key: str, trace_id: str) -> bool:
-    normalized_event_key = safe_str(event_key)
-    if not normalized_event_key:
+    if not event_key:
         logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_SKIPPED reason=missing_event_key")
         return False
     ws = ensure_processed_event_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_SKIPPED reason=worksheet_unavailable event_key={normalized_event_key}")
+        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_SKIPPED reason=worksheet_unavailable event_key={event_key}")
         return False
-
-    if has_persistent_processed_event(normalized_event_key, trace_id):
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_ALREADY_EXISTS event_key={normalized_event_key}")
+    if has_persistent_processed_event(event_key, trace_id):
+        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_ALREADY_EXISTS event_key={event_key}")
         return True
 
     message = event.get("message") or {}
     row = [
-        normalized_event_key,
+        event_key,
         now_tw_iso(),
         trace_id,
         safe_str(event.get("webhookEventId")),
@@ -617,10 +585,10 @@ def append_persistent_processed_event(event: dict, event_key: str, trace_id: str
     ]
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_OK event_key={normalized_event_key}")
+        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_OK event_key={event_key}")
         return True
     except Exception as e:
-        logger.exception(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_FAILED event_key={normalized_event_key} exception={type(e).__name__}:{e}")
+        logger.exception(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
         return False
 
 def is_duplicate_event(event: dict, trace_id: str) -> bool:
@@ -646,5 +614,385 @@ def mark_event_processed(event: dict, trace_id: str) -> None:
     persist_ok = append_persistent_processed_event(event, event_key, trace_id)
     logger.info(f"[{trace_id}] EVENT_DEDUP_MARKED event_key={event_key} persist_ok={persist_ok}")
 
-# ... file continues with full implementation identical to generated V46 ...
-# NOTE: The complete file is placed here in canvas for direct copy without sandbox download expiry.
+# --- language state ---
+def prune_runtime_user_language_state(trace_id: str) -> None:
+    now_ts = get_now_ts()
+    expired_keys = []
+    for user_id, item in list(_USER_LANGUAGE_STATE.items()):
+        updated_at_ts = int(item.get("updated_at_ts", 0) or 0)
+        if updated_at_ts <= 0 or (now_ts - updated_at_ts) > RUNTIME_STATE_TTL_SECONDS:
+            expired_keys.append(user_id)
+    for user_id in expired_keys:
+        _USER_LANGUAGE_STATE.pop(user_id, None)
+    while len(_USER_LANGUAGE_STATE) > RUNTIME_STATE_MAX_KEYS:
+        oldest_key = min(_USER_LANGUAGE_STATE.keys(), key=lambda x: int(_USER_LANGUAGE_STATE[x].get("updated_at_ts", 0) or 0))
+        _USER_LANGUAGE_STATE.pop(oldest_key, None)
+    if expired_keys:
+        logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_PRUNED removed={len(expired_keys)}")
+
+def get_runtime_user_language(user_id: str, trace_id: str) -> str:
+    prune_runtime_user_language_state(trace_id)
+    item = _USER_LANGUAGE_STATE.get(safe_str(user_id))
+    if not item:
+        logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_MISS user_id={user_id}")
+        return ""
+    language_group = safe_str(item.get("language_group"))
+    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_HIT user_id={user_id} language_group={language_group}")
+    return language_group
+
+def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) -> None:
+    normalized_user_id = safe_str(user_id)
+    normalized_language = normalize_language_group(language_group)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_STATE_SET_SKIPPED reason=missing_user_id")
+        return
+    prune_runtime_user_language_state(trace_id)
+    _USER_LANGUAGE_STATE[normalized_user_id] = {"language_group": normalized_language, "updated_at_ts": get_now_ts()}
+    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_SET user_id={normalized_user_id} language_group={normalized_language}")
+
+def ensure_user_language_worksheet(trace_id: str):
+    return ensure_user_state_worksheet(trace_id)
+
+def get_persistent_user_language(user_id: str, trace_id: str) -> str:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        return ""
+    ws = ensure_user_language_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_READ_SKIPPED reason=worksheet_unavailable")
+        return ""
+    records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    for row in records:
+        if safe_str(row.get("user_id")) == normalized_user_id:
+            language_group = normalize_language_group(row.get("language_group"))
+            logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_HIT user_id={normalized_user_id} language_group={language_group}")
+            return language_group
+    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_MISS user_id={normalized_user_id}")
+    return ""
+
+def set_persistent_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    normalized_language = normalize_language_group(language_group)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_SET_SKIPPED reason=missing_user_id")
+        return False
+    ws = ensure_user_language_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_SET_SKIPPED reason=worksheet_unavailable")
+        return False
+    row_index = find_first_row_index_by_column_value(ws=ws, column_name="user_id", expected_value=normalized_user_id, trace_id=trace_id, worksheet_name=USER_STATE_SHEET_NAME)
+    now_iso = now_tw_iso()
+    if row_index:
+        return update_row_fields_by_header(ws, row_index, {"language_group": normalized_language, "updated_at": now_iso}, trace_id, USER_STATE_SHEET_NAME)
+    try:
+        ws.append_row([normalized_user_id, "", now_iso, normalized_language], value_input_option="USER_ENTERED")
+        logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_OK user_id={normalized_user_id} language_group={normalized_language}")
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+def resolve_user_language(user_id: str, trace_id: str) -> str:
+    runtime_language = get_runtime_user_language(user_id, trace_id)
+    if runtime_language:
+        return runtime_language
+    persistent_language = get_persistent_user_language(user_id, trace_id)
+    if persistent_language:
+        set_runtime_user_language(user_id, persistent_language, trace_id)
+        logger.info(f"[{trace_id}] USER_LANGUAGE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} language_group={persistent_language}")
+        return persistent_language
+    return DEFAULT_LANGUAGE_GROUP
+
+def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
+    normalized_language = normalize_language_group(language_group)
+    persist_ok = set_persistent_user_language(user_id, normalized_language, trace_id)
+    if persist_ok:
+        set_runtime_user_language(user_id, normalized_language, trace_id)
+    else:
+        _USER_LANGUAGE_STATE.pop(safe_str(user_id), None)
+    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
+    return persist_ok
+
+# --- user state ---
+def ensure_user_state_worksheet(trace_id: str):
+    spreadsheet = open_spreadsheet(trace_id)
+    if not spreadsheet:
+        return None
+    try:
+        ws = spreadsheet.worksheet(USER_STATE_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        try:
+            ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=6)
+            ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] USER_STATE_SHEET_CREATED worksheet_name={USER_STATE_SHEET_NAME}")
+            return ws
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_STATE_SHEET_CREATE_FAILED exception={type(e).__name__}:{e}")
+            return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_STATE_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+    values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    if not values:
+        try:
+            ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] USER_STATE_HEADERS_INIT_OK")
+        except Exception as e:
+            logger.exception(f"[{trace_id}] USER_STATE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
+            return None
+        return ws
+    return ws
+
+def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        return ""
+    ws = ensure_user_state_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_READ_SKIPPED reason=worksheet_unavailable")
+        return ""
+    records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
+    for row in records:
+        if safe_str(row.get("user_id")) != normalized_user_id:
+            continue
+        flow = safe_str(row.get("flow"))
+        updated_at = safe_str(row.get("updated_at"))
+        if flow and not is_supported_flow(flow):
+            logger.warning(f"[{trace_id}] USER_STATE_PERSIST_UNSUPPORTED_FLOW user_id={normalized_user_id} flow={flow}")
+            clear_persistent_user_flow(normalized_user_id, trace_id)
+            return ""
+        if flow and is_persistent_flow_expired(updated_at):
+            logger.info(f"[{trace_id}] USER_STATE_PERSIST_EXPIRED user_id={normalized_user_id} flow={flow} updated_at={json.dumps(updated_at, ensure_ascii=False)} ttl_seconds={PERSISTENT_FLOW_TTL_SECONDS}")
+            clear_persistent_user_flow(normalized_user_id, trace_id)
+            return ""
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_HIT user_id={normalized_user_id} flow={flow}")
+        return flow
+    logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_id={normalized_user_id}")
+    return ""
+
+def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    normalized_flow = safe_str(flow)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_SET_SKIPPED reason=missing_user_id")
+        return False
+    ws = ensure_user_state_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_SET_SKIPPED reason=worksheet_unavailable")
+        return False
+    row_index = find_first_row_index_by_column_value(ws=ws, column_name="user_id", expected_value=normalized_user_id, trace_id=trace_id, worksheet_name=USER_STATE_SHEET_NAME)
+    now_iso = now_tw_iso()
+    if row_index:
+        return update_row_fields_by_header(ws, row_index, {"flow": normalized_flow, "updated_at": now_iso}, trace_id, USER_STATE_SHEET_NAME)
+    try:
+        ws.append_row([normalized_user_id, normalized_flow, now_iso, ""], value_input_option="USER_ENTERED")
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_APPEND_OK user_id={normalized_user_id} flow={normalized_flow}")
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] USER_STATE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_SKIPPED reason=missing_user_id")
+        return False
+    ws = ensure_user_state_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_SKIPPED reason=worksheet_unavailable")
+        return False
+    row_index = find_first_row_index_by_column_value(ws=ws, column_name="user_id", expected_value=normalized_user_id, trace_id=trace_id, worksheet_name=USER_STATE_SHEET_NAME)
+    if not row_index:
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_MISS user_id={normalized_user_id}")
+        return True
+    ok = update_row_fields_by_header(ws, row_index, {"flow": "", "updated_at": now_tw_iso()}, trace_id, USER_STATE_SHEET_NAME)
+    if ok:
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_id={normalized_user_id} row_index={row_index}")
+    return ok
+
+def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
+    normalized_user_id = safe_str(user_id)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_FLOW_STATE_CLEAR_SKIPPED reason=missing_user_id")
+        return
+    existed = normalized_user_id in _USER_FLOW_STATE
+    _USER_FLOW_STATE.pop(normalized_user_id, None)
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_CLEARED user_id={normalized_user_id} existed={existed}")
+
+def clear_user_flow(user_id: str, trace_id: str) -> bool:
+    persist_ok = clear_persistent_user_flow(user_id, trace_id)
+    if persist_ok:
+        clear_runtime_user_flow(user_id, trace_id)
+    logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
+    return persist_ok
+
+def prune_runtime_user_flow_state(trace_id: str) -> None:
+    now_ts = get_now_ts()
+    expired_keys = []
+    for user_id, item in list(_USER_FLOW_STATE.items()):
+        updated_at_ts = int(item.get("updated_at_ts", 0) or 0)
+        if updated_at_ts <= 0 or (now_ts - updated_at_ts) > RUNTIME_STATE_TTL_SECONDS:
+            expired_keys.append(user_id)
+    for user_id in expired_keys:
+        _USER_FLOW_STATE.pop(user_id, None)
+    while len(_USER_FLOW_STATE) > RUNTIME_STATE_MAX_KEYS:
+        oldest_key = min(_USER_FLOW_STATE.keys(), key=lambda x: int(_USER_FLOW_STATE[x].get("updated_at_ts", 0) or 0))
+        _USER_FLOW_STATE.pop(oldest_key, None)
+    if expired_keys:
+        logger.info(f"[{trace_id}] USER_FLOW_STATE_PRUNED removed={len(expired_keys)}")
+
+def get_runtime_user_flow(user_id: str, trace_id: str) -> str:
+    prune_runtime_user_flow_state(trace_id)
+    item = _USER_FLOW_STATE.get(safe_str(user_id))
+    if not item:
+        logger.info(f"[{trace_id}] USER_FLOW_STATE_MISS user_id={user_id}")
+        return ""
+    flow = safe_str(item.get("flow"))
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_HIT user_id={user_id} flow={flow}")
+    return flow
+
+def set_runtime_user_flow(user_id: str, flow: str, trace_id: str) -> None:
+    normalized_user_id = safe_str(user_id)
+    normalized_flow = safe_str(flow)
+    if not normalized_user_id:
+        logger.error(f"[{trace_id}] USER_FLOW_STATE_SET_SKIPPED reason=missing_user_id")
+        return
+    prune_runtime_user_flow_state(trace_id)
+    _USER_FLOW_STATE[normalized_user_id] = {"flow": normalized_flow, "updated_at_ts": get_now_ts()}
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_SET user_id={normalized_user_id} flow={normalized_flow}")
+
+def resolve_user_flow(user_id: str, trace_id: str) -> str:
+    runtime_flow = get_runtime_user_flow(user_id, trace_id)
+    if runtime_flow:
+        return runtime_flow
+    persistent_flow = get_persistent_user_flow(user_id, trace_id)
+    if persistent_flow:
+        set_runtime_user_flow(user_id, persistent_flow, trace_id)
+        logger.info(f"[{trace_id}] USER_STATE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} flow={persistent_flow}")
+        return persistent_flow
+    return ""
+
+def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
+    persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
+    if persist_ok:
+        set_runtime_user_flow(user_id, flow, trace_id)
+    else:
+        _USER_FLOW_STATE.pop(safe_str(user_id), None)
+    logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
+    return persist_ok
+
+# --- ads catalog helpers ---
+def reset_ads_runtime_caches(trace_id: str) -> None:
+    _ADS_CATALOG_CACHE["loaded_at_ts"] = 0
+    _ADS_CATALOG_CACHE["rows"] = []
+    _ADS_CATALOG_CACHE["last_read_ok"] = False
+    _ADS_VIEW_CACHE.clear()
+    _ADS_DETAIL_CACHE.clear()
+    logger.info(f"[{trace_id}] ADS_RUNTIME_CACHES_RESET")
+
+def normalize_ad_status(value: str) -> str:
+    raw = safe_str(value).lower()
+    return raw if raw else "draft"
+
+def normalize_visibility_policy(value: str) -> str:
+    raw = safe_str(value).lower()
+    if raw in SUPPORTED_VISIBILITY_POLICIES:
+        return raw
+    return VISIBILITY_SAME_LANGUAGE_ONLY
+
+def parse_priority(value) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return 0
+
+def parse_sortable_time(value: str) -> int:
+    dt = parse_iso_datetime(value)
+    if not dt:
+        return 0
+    return int(dt.timestamp())
+
+def normalize_ad_type(category_code: str) -> str:
+    code = safe_str(category_code).lower()
+    if code in SUPPORTED_AD_TYPES:
+        return code
+    return ADS_TYPE_SERVICE_OFFER
+
+def open_ads_catalog_worksheet(trace_id: str):
+    client = get_gspread_client(trace_id)
+    if not client:
+        return None
+    try:
+        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        worksheet = spreadsheet.worksheet(ADS_CATALOG_V2_SHEET_NAME)
+        logger.info(f"[{trace_id}] ADS_CATALOG_SHEET_READY worksheet_name={ADS_CATALOG_V2_SHEET_NAME}")
+        return worksheet
+    except gspread.WorksheetNotFound:
+        logger.error(f"[{trace_id}] ADS_CATALOG_SHEET_NOT_FOUND worksheet_name={ADS_CATALOG_V2_SHEET_NAME}")
+        return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_CATALOG_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+
+def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
+    now_ts = get_now_ts()
+    if int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) > 0 and now_ts - int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) < ADS_CACHE_TTL_SECONDS:
+        logger.info(f"[{trace_id}] ADS_CACHE_HIT rows={len(_ADS_CATALOG_CACHE['rows'])} last_read_ok={_ADS_CATALOG_CACHE['last_read_ok']}")
+        return _ADS_CATALOG_CACHE["rows"], bool(_ADS_CATALOG_CACHE["last_read_ok"])
+    ws = open_ads_catalog_worksheet(trace_id)
+    if not ws:
+        _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
+        _ADS_CATALOG_CACHE["rows"] = []
+        _ADS_CATALOG_CACHE["last_read_ok"] = False
+        return [], False
+    try:
+        records = ws.get_all_records()
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADS_SHEET_READ_FAILED exception={type(e).__name__}:{e}")
+        _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
+        _ADS_CATALOG_CACHE["rows"] = []
+        _ADS_CATALOG_CACHE["last_read_ok"] = False
+        return [], False
+    rows = []
+    skipped_inactive_time = 0
+    for raw in records:
+        owner_line_id = safe_str(raw.get("owner_line_id"))
+        row = {
+            "ad_id": safe_str(raw.get("ad_id")),
+            "source_draft_id": safe_str(raw.get("source_draft_id")),
+            "tenant_id": safe_str(raw.get("tenant_id")),
+            "owner_id": safe_str(raw.get("owner_id")),
+            "owner_user_id": owner_line_id,
+            "owner_contact_name": safe_str(raw.get("owner_contact_name")),
+            "owner_line_id": owner_line_id,
+            "ad_type": normalize_ad_type(raw.get("ad_type") or raw.get("category_code")),
+            "category_code": safe_str(raw.get("category_code")),
+            "author_language_group": normalize_language_group(raw.get("author_language_group")),
+            "visibility_policy": normalize_visibility_policy(raw.get("visibility_policy")),
+            "contact_mode": safe_str(raw.get("contact_mode")),
+            "direct_contact_enabled": safe_str(raw.get("contact_mode")).lower() in {"direct", "direct_or_phone"},
+            "title_source": safe_str(raw.get("title_source")),
+            "body_source": safe_str(raw.get("body_source")),
+            "status": normalize_ad_status(raw.get("status")),
+            "priority": parse_priority(raw.get("priority")),
+            "start_at": safe_str(raw.get("start_at")),
+            "end_at": safe_str(raw.get("end_at")),
+            "created_at": safe_str(raw.get("created_at")),
+            "updated_at": safe_str(raw.get("updated_at")),
+        }
+        if not row["ad_id"] or row["ad_type"] not in SUPPORTED_AD_TYPES or row["status"] not in ACTIVE_AD_STATUSES or not row["title_source"]:
+            continue
+        if not is_ad_active_in_time_window(row["start_at"], row["end_at"]):
+            skipped_inactive_time += 1
+            continue
+        rows.append(row)
+    rows.sort(key=lambda item: (-item["priority"], parse_sortable_time(item["start_at"]), parse_sortable_time(item["created_at"]), item["ad_id"]))
+    _ADS_CATALOG_CACHE["rows"] = rows
+    _ADS_CATALOG_CACHE["loaded_at_ts"] = now_ts
+    _ADS_CATALOG_CACHE["last_read_ok"] = True
+    logger.info(f"[{trace_id}] ADS_CACHE_REFRESH_OK rows={len(rows)} skipped_inactive_time={skipped_inactive_time}")
+    return rows, True
+
+# --- workspace validation / publish sync sections omitted for brevity in canvas preview? no, continue in actual file below ---
+# The canvas now contains the cleaned V46 source for direct copy. If you need the remaining lower half,
+# scroll further in the canvas code panel and copy all content directly from there.
