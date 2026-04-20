@@ -15,7 +15,7 @@ from typing import Dict, Tuple, Optional, List
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, g
 
 app = Flask(__name__)
 
@@ -240,11 +240,16 @@ def get_gspread_client(trace_id: str):
         return None
 
 def open_spreadsheet(trace_id: str):
+    cached = getattr(g, "_dt79_spreadsheet", None)
+    if cached is not None:
+        logger.info(f"[{trace_id}] SPREADSHEET_CACHE_HIT name={PHASE1_SPREADSHEET_NAME}")
+        return cached
     client = get_gspread_client(trace_id)
     if not client:
         return None
     try:
         spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        g._dt79_spreadsheet = spreadsheet
         logger.info(f"[{trace_id}] SPREADSHEET_READY name={PHASE1_SPREADSHEET_NAME}")
         return spreadsheet
     except Exception as e:
@@ -263,11 +268,20 @@ def build_header_index_map(headers: List[str]) -> Dict[str, int]:
     return result
 
 def get_worksheet_by_name(trace_id: str, worksheet_name: str):
+    worksheet_cache = getattr(g, "_dt79_worksheets", None)
+    if worksheet_cache is None:
+        worksheet_cache = {}
+        g._dt79_worksheets = worksheet_cache
+    if worksheet_name in worksheet_cache:
+        logger.info(f"[{trace_id}] WORKSHEET_CACHE_HIT worksheet_name={worksheet_name}")
+        return worksheet_cache[worksheet_name]
+
     spreadsheet = open_spreadsheet(trace_id)
     if not spreadsheet:
         return None
     try:
         ws = spreadsheet.worksheet(worksheet_name)
+        worksheet_cache[worksheet_name] = ws
         logger.info(f"[{trace_id}] WORKSHEET_READY worksheet_name={worksheet_name}")
         return ws
     except gspread.WorksheetNotFound:
@@ -278,8 +292,17 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
         return None
 
 def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str]]:
+    values_cache = getattr(g, "_dt79_values_cache", None)
+    if values_cache is None:
+        values_cache = {}
+        g._dt79_values_cache = values_cache
+    if worksheet_name in values_cache:
+        values = values_cache[worksheet_name]
+        logger.info(f"[{trace_id}] WORKSHEET_VALUES_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
+        return values
     try:
         values = ws.get_all_values()
+        values_cache[worksheet_name] = values
         logger.info(f"[{trace_id}] WORKSHEET_READ_OK worksheet_name={worksheet_name} row_count={len(values)}")
         return values
     except Exception as e:
@@ -287,8 +310,17 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
         return []
 
 def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
+    records_cache = getattr(g, "_dt79_records_cache", None)
+    if records_cache is None:
+        records_cache = {}
+        g._dt79_records_cache = records_cache
+    if worksheet_name in records_cache:
+        records = records_cache[worksheet_name]
+        logger.info(f"[{trace_id}] WORKSHEET_RECORDS_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
+        return records
     try:
         records = ws.get_all_records()
+        records_cache[worksheet_name] = records
         logger.info(f"[{trace_id}] WORKSHEET_RECORDS_OK worksheet_name={worksheet_name} count={len(records)}")
         return records
     except Exception as e:
@@ -340,6 +372,12 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
 
     try:
         ws.update(target_range, [row_values], value_input_option="USER_ENTERED")
+        values_cache = getattr(g, "_dt79_values_cache", None)
+        if isinstance(values_cache, dict):
+            values_cache.pop(worksheet_name, None)
+        records_cache = getattr(g, "_dt79_records_cache", None)
+        if isinstance(records_cache, dict):
+            records_cache.pop(worksheet_name, None)
         logger.info(
             f"[{trace_id}] UPDATE_ROW_FIELDS_OK worksheet_name={worksheet_name} row_index={row_index} "
             f"columns={json.dumps([name for _, name, _ in normalized_items], ensure_ascii=False)} "
@@ -358,9 +396,10 @@ _USER_FLOW_STATE: Dict[str, dict] = {}
 
 USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
 PROCESSED_EVENT_HEADERS = ["event_key", "processed_at", "trace_id", "webhook_event_id", "message_id", "reply_token", "user_id", "event_type"]
+EVENT_PROCESSING_LOCK_SECONDS = int(os.getenv("EVENT_PROCESSING_LOCK_SECONDS", "120").strip() or "120")
 
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
-_PROCESSED_EVENT_STATE: Dict[str, int] = {}
+_PROCESSED_EVENT_STATE: Dict[str, dict] = {}
 
 LOCALIZED_TEXT = {
     "vi": {
@@ -386,7 +425,7 @@ LOCALIZED_TEXT = {
         "help_title": "lệnh hỗ trợ:",
         "lang_changed": "đã đổi ngôn ngữ: {lang}",
         "lang_invalid": "cú pháp đúng: /lang vi hoặc /lang id hoặc /lang th hoặc /lang zh",
-        "default_echo": "Đã nhận: {text}",
+        "default_echo": "Đã nhận yêu cầu. Gửi /help để xem lệnh hỗ trợ, hoặc dùng /worker, /ads, /lang.",
         "state_save_failed": "Lưu trạng thái thất bại. Thử lại sau.",
         "state_clear_failed": "Xóa trạng thái thất bại. Thử lại sau.",
         "rich_menu_switch_failed": "Đã lưu ngôn ngữ nhưng đổi menu thất bại.",
@@ -414,7 +453,7 @@ LOCALIZED_TEXT = {
         "help_title": "perintah yang didukung:",
         "lang_changed": "bahasa diubah: {lang}",
         "lang_invalid": "format yang benar: /lang vi hoặc /lang id hoặc /lang th hoặc /lang zh",
-        "default_echo": "Diterima: {text}",
+        "default_echo": "Permintaan diterima. Kirim /help untuk melihat perintah, atau gunakan /worker, /ads, /lang.",
         "state_save_failed": "Gagal menyimpan status. Coba lagi nanti.",
         "state_clear_failed": "Gagal menghapus status. Coba lagi nanti.",
         "rich_menu_switch_failed": "Bahasa tersimpan tetapi pergantian menu gagal.",
@@ -442,7 +481,7 @@ LOCALIZED_TEXT = {
         "help_title": "คำสั่งที่รองรับ:",
         "lang_changed": "เปลี่ยนภาษาแล้ว: {lang}",
         "lang_invalid": "รูปแบบที่ถูกต้อง: /lang vi หรือ /lang id หรือ /lang th หรือ /lang zh",
-        "default_echo": "รับแล้ว: {text}",
+        "default_echo": "รับคำขอแล้ว ส่ง /help เพื่อดูคำสั่ง หรือใช้ /worker, /ads, /lang",
         "state_save_failed": "บันทึกสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
         "state_clear_failed": "ล้างสถานะล้มเหลว กรุณาลองใหม่ภายหลัง",
         "rich_menu_switch_failed": "บันทึกภาษาแล้ว แต่สลับเมนูไม่สำเร็จ",
@@ -470,7 +509,7 @@ LOCALIZED_TEXT = {
         "help_title": "支援指令：",
         "lang_changed": "語言已切換：{lang}",
         "lang_invalid": "正確格式：/lang vi 或 /lang id 或 /lang th 或 /lang zh",
-        "default_echo": "已收到：{text}",
+        "default_echo": "已收到需求。可發送 /help 查看指令，或使用 /worker、/ads、/lang。",
         "state_save_failed": "儲存狀態失敗，請稍後再試。",
         "state_clear_failed": "清除狀態失敗，請稍後再試。",
         "rich_menu_switch_failed": "語言已儲存，但切換選單失敗。",
@@ -481,6 +520,36 @@ def t(language_group: str, key: str, **kwargs) -> str:
     lang = normalize_language_group(language_group)
     template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
     return template.format(**kwargs)
+
+def make_processing_marker() -> str:
+    return f"PROCESSING::{now_tw_iso()}"
+
+def make_done_marker() -> str:
+    return f"DONE::{now_tw_iso()}"
+
+def make_failed_marker() -> str:
+    return f"FAILED::{now_tw_iso()}"
+
+def parse_processed_state_marker(value: str) -> Tuple[str, Optional[datetime]]:
+    raw = safe_str(value)
+    if not raw:
+        return "", None
+    if raw.startswith("PROCESSING::"):
+        return "processing", parse_iso_datetime(raw.split("::", 1)[1])
+    if raw.startswith("DONE::"):
+        return "done", parse_iso_datetime(raw.split("::", 1)[1])
+    if raw.startswith("FAILED::"):
+        return "failed", parse_iso_datetime(raw.split("::", 1)[1])
+    legacy_dt = parse_iso_datetime(raw)
+    if legacy_dt:
+        return "done", legacy_dt
+    return "done", None
+
+def is_processing_marker_fresh(marker_dt: Optional[datetime]) -> bool:
+    if not marker_dt:
+        return False
+    age_seconds = int((now_tw_dt() - marker_dt).total_seconds())
+    return age_seconds <= EVENT_PROCESSING_LOCK_SECONDS
 
 # --- processed event state ---
 
@@ -541,78 +610,175 @@ def get_event_unique_key(event: dict) -> str:
         return f"reply:{reply_token}"
     return ""
 
-def has_persistent_processed_event(event_key: str, trace_id: str) -> bool:
+def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict:
+    empty_result = {"status": "", "row_index": 0, "processed_at_value": ""}
     if not event_key:
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK_SKIPPED reason=missing_event_key")
-        return False
+        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_SKIPPED reason=missing_event_key")
+        return empty_result
     ws = ensure_processed_event_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK_SKIPPED reason=worksheet_unavailable event_key={event_key}")
-        return False
-    row_index = find_first_row_index_by_column_value(
-        ws=ws,
-        column_name="event_key",
-        expected_value=event_key,
-        trace_id=trace_id,
-        worksheet_name=PROCESSED_EVENT_SHEET_NAME,
-    )
-    duplicate = row_index > 0
-    logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_CHECK event_key={event_key} duplicate={duplicate} row_index={row_index}")
-    return duplicate
+        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_SKIPPED reason=worksheet_unavailable event_key={event_key}")
+        return empty_result
+    values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME)
+    if not values:
+        return empty_result
+    headers = values[0]
+    header_map = build_header_index_map(headers)
+    event_key_idx = header_map.get("event_key")
+    processed_at_idx = header_map.get("processed_at")
+    if event_key_idx is None or processed_at_idx is None:
+        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_COLUMN_MISSING event_key={event_key}")
+        return empty_result
 
-def append_persistent_processed_event(event: dict, event_key: str, trace_id: str) -> bool:
+    for row_index, row in enumerate(values[1:], start=2):
+        current_event_key = safe_str(row[event_key_idx]) if event_key_idx < len(row) else ""
+        if current_event_key != event_key:
+            continue
+        processed_at_value = safe_str(row[processed_at_idx]) if processed_at_idx < len(row) else ""
+        marker_status, marker_dt = parse_processed_state_marker(processed_at_value)
+        if marker_status == "processing":
+            status = "processing" if is_processing_marker_fresh(marker_dt) else "stale_processing"
+        else:
+            status = marker_status
+        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP event_key={event_key} status={status} row_index={row_index}")
+        return {"status": status, "row_index": row_index, "processed_at_value": processed_at_value}
+
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_MISS event_key={event_key}")
+    return empty_result
+
+def set_processed_event_runtime_state(event_key: str, status: str, trace_id: str) -> None:
     if not event_key:
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_SKIPPED reason=missing_event_key")
-        return False
-    ws = ensure_processed_event_worksheet(trace_id)
-    if not ws:
-        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_SKIPPED reason=worksheet_unavailable event_key={event_key}")
-        return False
-    if has_persistent_processed_event(event_key, trace_id):
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_ALREADY_EXISTS event_key={event_key}")
-        return True
-
-    message = event.get("message") or {}
-    row = [
-        event_key,
-        now_tw_iso(),
-        trace_id,
-        safe_str(event.get("webhookEventId")),
-        safe_str(message.get("id")),
-        safe_str(event.get("replyToken")),
-        get_event_user_id(event),
-        get_event_type(event),
-    ]
-    try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_OK event_key={event_key}")
-        return True
-    except Exception as e:
-        logger.exception(f"[{trace_id}] PROCESSED_EVENT_PERSIST_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
-        return False
-
-def is_duplicate_event(event: dict, trace_id: str) -> bool:
-    event_key = get_event_unique_key(event)
-    if not event_key:
-        logger.info(f"[{trace_id}] EVENT_DEDUP_SKIPPED reason=missing_event_key")
-        return False
-    prune_processed_event_state(trace_id)
-    if event_key in _PROCESSED_EVENT_STATE:
-        logger.info(f"[{trace_id}] EVENT_DEDUP_CHECK event_key={event_key} duplicate=True source=runtime")
-        return True
-    duplicate_persist = has_persistent_processed_event(event_key, trace_id)
-    logger.info(f"[{trace_id}] EVENT_DEDUP_CHECK event_key={event_key} duplicate={duplicate_persist} source=persistent")
-    return duplicate_persist
-
-def mark_event_processed(event: dict, trace_id: str) -> None:
-    event_key = get_event_unique_key(event)
-    if not event_key:
-        logger.info(f"[{trace_id}] EVENT_DEDUP_MARK_SKIPPED reason=missing_event_key")
         return
     prune_processed_event_state(trace_id)
-    _PROCESSED_EVENT_STATE[event_key] = get_now_ts()
-    persist_ok = append_persistent_processed_event(event, event_key, trace_id)
-    logger.info(f"[{trace_id}] EVENT_DEDUP_MARKED event_key={event_key} persist_ok={persist_ok}")
+    _PROCESSED_EVENT_STATE[event_key] = {"status": safe_str(status), "updated_at_ts": get_now_ts()}
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_SET event_key={event_key} status={status}")
+
+def clear_processed_event_runtime_state(event_key: str, trace_id: str) -> None:
+    if not event_key:
+        return
+    existed = event_key in _PROCESSED_EVENT_STATE
+    _PROCESSED_EVENT_STATE.pop(event_key, None)
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_CLEARED event_key={event_key} existed={existed}")
+
+def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
+    event_key = get_event_unique_key(event)
+    if not event_key:
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_SKIPPED reason=missing_event_key")
+        return True, "missing_event_key", ""
+
+    prune_processed_event_state(trace_id)
+    runtime_item = _PROCESSED_EVENT_STATE.get(event_key) or {}
+    runtime_status = safe_str(runtime_item.get("status"))
+    runtime_updated_at_ts = int(runtime_item.get("updated_at_ts", 0) or 0)
+    if runtime_status == "done":
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=runtime_done")
+        return False, "duplicate_done_runtime", event_key
+    if runtime_status == "processing" and (get_now_ts() - runtime_updated_at_ts) <= EVENT_PROCESSING_LOCK_SECONDS:
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=runtime_processing")
+        return False, "duplicate_processing_runtime", event_key
+
+    lookup = get_persistent_processed_event_record(event_key, trace_id)
+    persistent_status = safe_str(lookup.get("status"))
+    row_index = int(lookup.get("row_index", 0) or 0)
+    ws = ensure_processed_event_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] EVENT_PROCESSING_BEGIN_FAILED reason=worksheet_unavailable event_key={event_key}")
+        return False, "worksheet_unavailable", event_key
+
+    if persistent_status == "done":
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=persistent_done")
+        set_processed_event_runtime_state(event_key, "done", trace_id)
+        return False, "duplicate_done_persistent", event_key
+    if persistent_status == "processing":
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=persistent_processing")
+        set_processed_event_runtime_state(event_key, "processing", trace_id)
+        return False, "duplicate_processing_persistent", event_key
+
+    message = event.get("message") or {}
+    marker = make_processing_marker()
+    row_payload = {
+        "processed_at": marker,
+        "trace_id": trace_id,
+        "webhook_event_id": safe_str(event.get("webhookEventId")),
+        "message_id": safe_str(message.get("id")),
+        "reply_token": safe_str(event.get("replyToken")),
+        "user_id": get_event_user_id(event),
+        "event_type": get_event_type(event),
+    }
+
+    if row_index > 0:
+        persist_ok = update_row_fields_by_header(ws, row_index, row_payload, trace_id, PROCESSED_EVENT_SHEET_NAME)
+    else:
+        row = [
+            event_key,
+            marker,
+            trace_id,
+            safe_str(event.get("webhookEventId")),
+            safe_str(message.get("id")),
+            safe_str(event.get("replyToken")),
+            get_event_user_id(event),
+            get_event_type(event),
+        ]
+        try:
+            ws.append_row(row, value_input_option="USER_ENTERED")
+            values_cache = getattr(g, "_dt79_values_cache", None)
+            if isinstance(values_cache, dict):
+                values_cache.pop(PROCESSED_EVENT_SHEET_NAME, None)
+            records_cache = getattr(g, "_dt79_records_cache", None)
+            if isinstance(records_cache, dict):
+                records_cache.pop(PROCESSED_EVENT_SHEET_NAME, None)
+            logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_key={event_key}")
+            persist_ok = True
+        except Exception as e:
+            logger.exception(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
+            persist_ok = False
+
+    if not persist_ok:
+        return False, "processing_marker_write_failed", event_key
+
+    set_processed_event_runtime_state(event_key, "processing", trace_id)
+    logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_key={event_key} source={'reclaim' if row_index > 0 else 'new'}")
+    return True, "processing_started", event_key
+
+def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None:
+    event_key = get_event_unique_key(event)
+    if not event_key:
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_SKIPPED reason=missing_event_key")
+        return
+    lookup = get_persistent_processed_event_record(event_key, trace_id)
+    row_index = int(lookup.get("row_index", 0) or 0)
+    ws = ensure_processed_event_worksheet(trace_id)
+    marker = make_done_marker() if success else make_failed_marker()
+    target_status = "done" if success else "failed"
+
+    persist_ok = False
+    if ws and row_index > 0:
+        persist_ok = update_row_fields_by_header(ws, row_index, {"processed_at": marker, "trace_id": trace_id}, trace_id, PROCESSED_EVENT_SHEET_NAME)
+    elif ws and not row_index and success:
+        message = event.get("message") or {}
+        row = [
+            event_key,
+            marker,
+            trace_id,
+            safe_str(event.get("webhookEventId")),
+            safe_str(message.get("id")),
+            safe_str(event.get("replyToken")),
+            get_event_user_id(event),
+            get_event_type(event),
+        ]
+        try:
+            ws.append_row(row, value_input_option="USER_ENTERED")
+            persist_ok = True
+        except Exception as e:
+            logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
+            persist_ok = False
+
+    if success:
+        set_processed_event_runtime_state(event_key, target_status, trace_id)
+    else:
+        clear_processed_event_runtime_state(event_key, trace_id)
+
+    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_key={event_key} success={success} persist_ok={persist_ok}")
 
 # --- language state ---
 def prune_runtime_user_language_state(trace_id: str) -> None:
@@ -1489,19 +1655,20 @@ def callback():
         return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": 0, "results": [], "reason": "empty_events_verify_ok"}), 200
     results = []
     for event in events:
+        event_key = get_event_unique_key(event)
         try:
-            if is_duplicate_event(event, trace_id):
-                duplicate_event_key = get_event_unique_key(event)
-                logger.info(f"[{trace_id}] CALLBACK_EVENT_DUPLICATE_SKIP event_key={duplicate_event_key}")
-                results.append({"handled": False, "reason": "duplicate_event", "event_key": duplicate_event_key})
+            can_process, processing_reason, processing_event_key = begin_event_processing(event, trace_id)
+            if not can_process:
+                logger.info(f"[{trace_id}] CALLBACK_EVENT_DUPLICATE_SKIP event_key={processing_event_key} reason={processing_reason}")
+                results.append({"handled": False, "reason": processing_reason, "event_key": processing_event_key})
                 continue
             result = dispatch_line_event(event, trace_id)
-            if bool(result.get("handled")):
-                mark_event_processed(event, trace_id)
+            finalize_event_processing(event, trace_id, success=bool(result.get("handled")))
             results.append(result)
         except Exception as e:
-            logger.exception(f"[{trace_id}] CALLBACK_EVENT_EXCEPTION exception={type(e).__name__}:{e}")
-            results.append({"handled": False, "reason": "event_exception"})
+            finalize_event_processing(event, trace_id, success=False)
+            logger.exception(f"[{trace_id}] CALLBACK_EVENT_EXCEPTION event_key={event_key} exception={type(e).__name__}:{e}")
+            results.append({"handled": False, "reason": "event_exception", "event_key": event_key})
     latency_ms = ms_since(started)
     logger.info(f"[{trace_id}] CALLBACK_DONE events={len(events)} latency_ms={latency_ms}")
     return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": len(events), "results": results}), 200
