@@ -556,13 +556,20 @@ def is_processing_marker_fresh(marker_dt: Optional[datetime]) -> bool:
 def prune_processed_event_state(trace_id: str) -> None:
     now_ts = get_now_ts()
     expired_keys = []
-    for event_key, processed_at_ts in list(_PROCESSED_EVENT_STATE.items()):
-        if int(processed_at_ts or 0) <= 0 or (now_ts - int(processed_at_ts or 0)) > PROCESSED_EVENT_TTL_SECONDS:
+    for event_key, item in list(_PROCESSED_EVENT_STATE.items()):
+        if not isinstance(item, dict):
+            expired_keys.append(event_key)
+            continue
+        updated_at_ts = int(item.get("updated_at_ts", 0) or 0)
+        if updated_at_ts <= 0 or (now_ts - updated_at_ts) > PROCESSED_EVENT_TTL_SECONDS:
             expired_keys.append(event_key)
     for event_key in expired_keys:
         _PROCESSED_EVENT_STATE.pop(event_key, None)
     while len(_PROCESSED_EVENT_STATE) > PROCESSED_EVENT_MAX_KEYS:
-        oldest_key = min(_PROCESSED_EVENT_STATE.keys(), key=lambda x: int(_PROCESSED_EVENT_STATE.get(x, 0) or 0))
+        oldest_key = min(
+            _PROCESSED_EVENT_STATE.keys(),
+            key=lambda x: int((_PROCESSED_EVENT_STATE.get(x) or {}).get("updated_at_ts", 0) or 0),
+        )
         _PROCESSED_EVENT_STATE.pop(oldest_key, None)
     if expired_keys:
         logger.info(f"[{trace_id}] PROCESSED_EVENT_STATE_PRUNED removed={len(expired_keys)}")
