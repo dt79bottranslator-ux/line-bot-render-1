@@ -1378,31 +1378,37 @@ def _contains_any_phrase(text: str, phrases: List[str]) -> bool:
     return any(phrase in text for phrase in phrases)
 
 
-def _collect_phrase_hits(text: str, phrases: List[str]) -> List[str]:
-    return [phrase for phrase in phrases if phrase in text]
+def _collect_phrase_hits(text: str, phrases: List[str], label_prefix: str = "") -> List[str]:
+    hits = []
+    for phrase in phrases:
+        if phrase and phrase in text:
+            hits.append(f"{label_prefix}{phrase}" if label_prefix else phrase)
+    return hits
 
 
-def classify_default_intent(normalized_text: str) -> Tuple[str, Dict[str, object]]:
+def resolve_default_intent_details(normalized_text: str) -> dict:
     text = safe_str(normalized_text).lower()
     if not text:
-        return "general", {
-            "scores": {"leave": 0, "health": 0, "travel": 0},
-            "matched_rules": {"leave": [], "health": [], "travel": [], "negative": []},
+        return {
+            "intent": "general",
             "reason": "empty_text",
+            "scores": {"leave": 0, "health": 0, "travel": 0},
+            "matched_rules": {"leave": [], "health": [], "travel": [], "negative": [], "workflow": []},
+            "normalized": text,
         }
 
     leave_strong_phrases = [
         "xin nghỉ", "nghỉ phép", "nghi phep", "nghỉ làm", "báo nghỉ", "nghỉ ca", "không đi làm",
-        "xin nghi", "nghi lam", "bao nghi", "nghi ca",
+        "đơn xin nghỉ", "xin nghỉ 2 ngày", "xin nghỉ 1 ngày", "xin nghỉ một ngày",
         "request leave", "take leave", "day off work", "off work",
         "izin kerja", "cuti kerja",
         "ลางาน", "ขอลางาน",
         "請假", "休假", "不上班",
     ]
-    leave_soft_phrases = [
-        "nghỉ", "xin phep", "xin phép", "nghi",
+    leave_workflow_phrases = [
+        "có cần xin nghỉ không", "cần xin nghỉ không", "xin nghỉ không",
+        "cần báo theo mẫu nào", "theo mẫu nào", "đơn xin nghỉ", "mẫu nào",
     ]
-
     health_strong_phrases = [
         "bị ốm", "bi om", "đau đầu", "đau bụng", "sốt", "mệt", "không khỏe", "khong khoe",
         "khám bệnh", "đi bệnh viện", "nhức đầu", "ho", "bệnh",
@@ -1410,90 +1416,111 @@ def classify_default_intent(normalized_text: str) -> Tuple[str, Dict[str, object
         "ป่วย", "ไข้", "เจ็บ", "โรงพยาบาล",
         "生病", "發燒", "頭痛", "看醫生", "醫院",
     ]
-
-    travel_strong_phrases = [
-        "đi chơi", "về quê", "ra sân bay", "ở đâu", "lịch trình", "di chuyển",
-        "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan",
+    travel_hard_phrases = [
+        "về quê", "ra sân bay",
+        "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan", "đài bắc",
         "travel", "go to", "flight", "bus", "train",
         "pergi", "pulang", "berangkat", "naik",
         "ไป", "กลับ", "เดินทาง",
         "去", "回", "搭機", "坐車", "行程",
     ]
     travel_soft_phrases = [
-        "đi ", "về ", "bay", "qua ", "sang ", "tới ", "đến ", "chơi",
+        "đi ", "đi chơi", "về ", "bay", "qua ", "sang ", "tới ", "đến ", "ở đâu", "lịch trình",
     ]
-
-    conditional_travel_phrases = [
-        "nếu", "neu", "thì", "thi", "được nghỉ", "duoc nghi", "nếu được nghỉ", "neu duoc nghi",
+    conditional_phrases = [
+        "nếu", "thì", "được nghỉ", "nếu được nghỉ",
     ]
-
     leave_negative_guards = [
-        "được nghỉ", "duoc nghi", "nếu được nghỉ", "neu duoc nghi",
-        "nghỉ rồi đi", "nghi roi di", "nghỉ đi chơi", "nghi di choi", "nghỉ thì đi", "nghi thi di",
-        "đi chơi", "bay", "về ", "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan",
+        "được nghỉ", "nếu được nghỉ", "nghỉ thì đi", "nghỉ đi chơi", "nghỉ rồi đi",
     ]
-
-    leave_hits = _collect_phrase_hits(text, leave_strong_phrases)
-    leave_soft_hits = _collect_phrase_hits(text, leave_soft_phrases)
-    health_hits = _collect_phrase_hits(text, health_strong_phrases)
-    travel_hits = _collect_phrase_hits(text, travel_strong_phrases)
-    travel_soft_hits = _collect_phrase_hits(text, travel_soft_phrases)
-    conditional_hits = _collect_phrase_hits(text, conditional_travel_phrases)
-    negative_hits = _collect_phrase_hits(text, leave_negative_guards)
 
     scores = {"leave": 0, "health": 0, "travel": 0}
-    matched_rules = {"leave": [], "health": [], "travel": [], "negative": []}
+    matched_rules = {"leave": [], "health": [], "travel": [], "negative": [], "workflow": []}
 
-    if leave_hits:
-        scores["leave"] += 4 * len(leave_hits)
-        matched_rules["leave"].extend(leave_hits)
-    elif leave_soft_hits:
-        scores["leave"] += 1 * len(leave_soft_hits)
-        matched_rules["leave"].extend(leave_soft_hits)
+    leave_hits = _collect_phrase_hits(text, leave_strong_phrases)
+    workflow_hits = _collect_phrase_hits(text, leave_workflow_phrases)
+    health_hits = _collect_phrase_hits(text, health_strong_phrases)
+    travel_hard_hits = _collect_phrase_hits(text, travel_hard_phrases)
+    travel_soft_hits = _collect_phrase_hits(text, travel_soft_phrases, "soft:")
+    conditional_hits = _collect_phrase_hits(text, conditional_phrases, "conditional:")
+    negative_hits = _collect_phrase_hits(text, leave_negative_guards)
+
+    matched_rules["leave"].extend(leave_hits)
+    matched_rules["workflow"].extend(workflow_hits)
+    matched_rules["health"].extend(health_hits)
+    matched_rules["travel"].extend(travel_hard_hits + travel_soft_hits + conditional_hits)
+    matched_rules["negative"].extend(negative_hits)
+
+    scores["leave"] += 4 * len(leave_hits)
+    scores["leave"] += 6 * len(workflow_hits)
+    scores["health"] += 4 * len(health_hits)
+    scores["travel"] += 3 * len(travel_hard_hits)
+    scores["travel"] += 1 * len(travel_soft_hits)
+    scores["travel"] += 1 * len(conditional_hits)
+
+    has_explicit_leave = len(leave_hits) > 0
+    has_leave_workflow = len(workflow_hits) > 0
+    has_travel_context = (len(travel_hard_hits) + len(travel_soft_hits)) > 0
+
+    if has_explicit_leave and has_leave_workflow:
+        scores["leave"] += 8
+        matched_rules["workflow"].append("boost:explicit_leave_plus_workflow")
+
+    if has_explicit_leave and ("có cần" in text or "cần báo" in text or "theo mẫu" in text):
+        scores["leave"] += 5
+        matched_rules["workflow"].append("boost:leave_policy_question")
+
+    if has_explicit_leave and "bao theo mẫu nào" in text:
+        scores["leave"] += 3
+
+    if has_travel_context and _contains_any_phrase(text, leave_negative_guards) and not has_leave_workflow:
+        penalty = 4 + (2 * len(negative_hits))
+        scores["leave"] -= penalty
+        matched_rules["negative"].append(f"penalty:leave-{penalty}")
+
+    if has_leave_workflow and has_travel_context:
+        scores["leave"] += 4
+        matched_rules["workflow"].append("boost:workflow_over_context")
 
     if health_hits:
-        scores["health"] += 4 * len(health_hits)
-        matched_rules["health"].extend(health_hits)
+        intent = "health"
+        reason = "health_priority"
+    else:
+        ordered = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+        top_intent, top_score = ordered[0]
+        second_score = ordered[1][1]
+        if top_score <= 2 or (top_score - second_score) <= 1:
+            intent = "general"
+            reason = "uncertain_fallback"
+        else:
+            intent = top_intent
+            reason = f"{top_intent}_priority"
 
-    if travel_hits:
-        scores["travel"] += 4 * len(travel_hits)
-        matched_rules["travel"].extend(travel_hits)
-    if travel_soft_hits:
-        scores["travel"] += 2 * len(travel_soft_hits)
-        matched_rules["travel"].extend([f"soft:{x}" for x in travel_soft_hits])
+    return {
+        "intent": intent,
+        "reason": reason,
+        "scores": scores,
+        "matched_rules": matched_rules,
+        "normalized": text,
+    }
 
-    if conditional_hits and (travel_hits or travel_soft_hits):
-        scores["travel"] += 3
-        matched_rules["travel"].extend([f"conditional:{x}" for x in conditional_hits])
 
-    if negative_hits and (travel_hits or travel_soft_hits):
-        scores["leave"] -= 4 * len(negative_hits)
-        matched_rules["negative"].extend(negative_hits)
-
-    if scores["health"] >= 4 and scores["health"] >= scores["travel"] and scores["health"] >= scores["leave"]:
-        return "health", {"scores": scores, "matched_rules": matched_rules, "reason": "health_priority"}
-
-    if scores["travel"] >= 4 and scores["travel"] > scores["leave"]:
-        return "travel", {"scores": scores, "matched_rules": matched_rules, "reason": "travel_priority"}
-
-    if scores["leave"] >= 4 and scores["leave"] > scores["travel"]:
-        return "leave", {"scores": scores, "matched_rules": matched_rules, "reason": "leave_priority"}
-
-    if scores["travel"] >= 3 and scores["leave"] <= 0:
-        return "travel", {"scores": scores, "matched_rules": matched_rules, "reason": "travel_soft_priority"}
-
-    return "general", {"scores": scores, "matched_rules": matched_rules, "reason": "uncertain_fallback"}
+def classify_default_intent(normalized_text: str) -> str:
+    return resolve_default_intent_details(normalized_text).get("intent", "general")
 
 
 def build_default_intent_reply(text: str, language_group: str, trace_id: str) -> str:
     normalized = normalize_command_text(text)
-    intent, debug_info = classify_default_intent(normalized)
+    details = resolve_default_intent_details(normalized)
+    intent = safe_str(details.get("intent")) or "general"
+    reason = safe_str(details.get("reason")) or "unknown"
+    scores = details.get("scores") or {}
+    matched_rules = details.get("matched_rules") or {}
     logger.info(
         f"[{trace_id}] DEFAULT_INTENT_ROUTED "
-        f"intent={intent} "
-        f"reason={safe_str(debug_info.get('reason'))} "
-        f"scores={json.dumps(debug_info.get('scores', {}), ensure_ascii=False)} "
-        f"matched_rules={json.dumps(debug_info.get('matched_rules', {}), ensure_ascii=False)} "
+        f"intent={intent} reason={reason} "
+        f"scores={json.dumps(scores, ensure_ascii=False)} "
+        f"matched_rules={json.dumps(matched_rules, ensure_ascii=False)} "
         f"normalized={json.dumps(normalized, ensure_ascii=False)}"
     )
     key_map = {
@@ -1501,7 +1528,6 @@ def build_default_intent_reply(text: str, language_group: str, trace_id: str) ->
         "health": "default_health_intent",
         "travel": "default_travel_intent",
         "general": "default_general_intent",
-        "uncertain": "default_general_intent",
     }
     return t(language_group, key_map.get(intent, "default_general_intent"))
 
