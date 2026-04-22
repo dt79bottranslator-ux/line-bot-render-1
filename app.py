@@ -1449,6 +1449,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "có cần xin nghỉ không", "cần xin nghỉ không", "xin nghỉ không",
         "cần báo theo mẫu nào", "theo mẫu nào", "đơn xin nghỉ", "mẫu nào",
         "cần báo", "có cần báo", "báo theo mẫu", "mẫu xin nghỉ",
+        "ต้องแจ้งไหม", "ต้องแจ้ง", "แจ้งไหม",
     ]
     leave_action_phrases = [
         "xin nghỉ", "xin nghỉ 2 ngày", "xin nghỉ 1 ngày", "xin nghỉ một ngày",
@@ -1459,6 +1460,8 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "không cần xin nghỉ", "không phải xin nghỉ", "vẫn đi làm",
         "chỉ hỏi lịch trình", "chỉ hỏi thôi", "chưa nghỉ đâu",
         "không nghỉ phép", "không cần nghỉ", "vẫn làm việc", "quay lại làm việc",
+        "ไม่ได้ลางาน", "ยังไม่ลางาน", "ไม่ได้หยุดงาน", "ยังไม่หยุดงาน",
+        "กลับมาทํางาน", "กลับมาทำงาน", "ไปทํางานต่อ", "ไปทำงานต่อ",
     ]
 
     health_strong_phrases = [
