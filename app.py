@@ -1374,27 +1374,67 @@ def handle_state_clear_failed_message(language_group: str) -> str:
     return t(language_group, "state_clear_failed")
 
 
+def _strip_combining_marks(value: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", safe_str(value))
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def _normalize_match_text(value: str) -> str:
+    raw = safe_str(value).lower()
+    if not raw:
+        return ""
+    normalized = unicodedata.normalize("NFKC", raw)
+    normalized = _strip_combining_marks(normalized)
+    normalized = re.sub(r"[\u200B-\u200F\u2060\uFEFF]", "", normalized)
+    normalized = re.sub(r"[\t\r\n\f\v]+", " ", normalized)
+    normalized = re.sub(r"[^\w\s\u0E00-\u0E7F\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", " ", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _phrase_uses_contiguous_script(phrase: str) -> bool:
+    return bool(re.search(r"[\u0E00-\u0E7F\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", phrase or ""))
+
+
+def _phrase_present(text: str, phrase: str) -> bool:
+    normalized_text = _normalize_match_text(text)
+    normalized_phrase = _normalize_match_text(phrase)
+    if not normalized_text or not normalized_phrase:
+        return False
+    if _phrase_uses_contiguous_script(normalized_phrase):
+        return normalized_phrase in normalized_text
+    padded_text = f" {normalized_text} "
+    padded_phrase = f" {normalized_phrase} "
+    return padded_phrase in padded_text
+
+
 def _contains_any_phrase(text: str, phrases: List[str]) -> bool:
-    return any(phrase in text for phrase in phrases)
+    return any(_phrase_present(text, phrase) for phrase in phrases)
 
 
 def _collect_phrase_hits(text: str, phrases: List[str], label_prefix: str = "") -> List[str]:
     hits = []
+    seen = set()
     for phrase in phrases:
-        if phrase and phrase in text:
+        normalized_phrase = _normalize_match_text(phrase)
+        if not normalized_phrase:
+            continue
+        if _phrase_present(text, phrase) and normalized_phrase not in seen:
+            seen.add(normalized_phrase)
             hits.append(f"{label_prefix}{phrase}" if label_prefix else phrase)
     return hits
 
 
 def resolve_default_intent_details(normalized_text: str) -> dict:
-    text = safe_str(normalized_text).lower()
+    raw_text = safe_str(normalized_text).lower()
+    text = _normalize_match_text(raw_text)
     if not text:
         return {
             "intent": "general",
             "reason": "empty_text",
             "scores": {"leave": 0, "health": 0, "travel": 0},
             "matched_rules": {"leave": [], "health": [], "travel": [], "negative": [], "workflow": [], "action": []},
-            "normalized": text,
+            "normalized": raw_text,
         }
 
     leave_strong_phrases = [
@@ -1432,6 +1472,8 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "không bệnh", "không ốm", "không mệt", "không sốt", "không đau",
         "chưa bệnh", "chưa ốm", "chưa mệt", "chưa sốt", "chưa đau",
         "không phải bệnh", "không bị bệnh", "không bị ốm", "không bị sốt",
+        "tidak sakit", "tidak demam", "tidak pusing", "tidak batuk",
+        "ไม่ป่วย", "ไม่ไข้", "ไม่เจ็บ",
     ]
 
     travel_hard_phrases = [
@@ -1443,8 +1485,8 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "去", "回", "搭機", "坐車", "行程",
     ]
     travel_soft_phrases = [
-        "đi ", "đi chơi", "về ", "bay", "qua ", "sang ", "tới ", "đến ", "ở đâu", "lịch trình",
-        "cuối tuần", "quay lại",
+        "đi", "đi chơi", "về", "bay", "qua", "sang", "tới", "đến", "ở đâu", "lịch trình",
+        "cuối tuần", "quay lại", "balik", "masuk", "kerja lagi",
     ]
     conditional_phrases = ["nếu", "thì", "được nghỉ", "nếu được nghỉ"]
     travel_context_negative_guards = [
@@ -1565,7 +1607,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "reason": reason,
         "scores": scores,
         "matched_rules": matched_rules,
-        "normalized": text,
+        "normalized": raw_text,
     }
 
 def classify_default_intent(normalized_text: str) -> str:
