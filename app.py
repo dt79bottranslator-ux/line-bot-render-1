@@ -90,7 +90,7 @@ PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600"
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
 
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 
@@ -133,6 +133,25 @@ ADS_CLICK_LOG_SHEET_NAME = "ads_click_log"
 ADS_PHONE_LEADS_SHEET_NAME = "ads_phone_leads"
 TENANT_REGISTRY_SHEET_NAME = "TENANT_REGISTRY"
 SYSTEM_META_SHEET_NAME = "SYSTEM_META"
+
+BOT_CONFIG_SHEET_NAME = "BOT_CONFIG"
+INTENT_MASTER_SHEET_NAME = "INTENT_MASTER"
+SERVICE_MASTER_SHEET_NAME = "SERVICE_MASTER"
+PROVIDER_MASTER_SHEET_NAME = "PROVIDER_MASTER"
+ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
+ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
+ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
+    "vi": "Liên hệ LINE",
+    "id": "Kontak LINE",
+    "th": "ติดต่อ LINE",
+    "zh": "LINE 聯絡",
+}
+LOCATION_ALIAS_MAP = {
+    "台中": ["台中", "đài trung", "dai trung", "taichung", "taizhong"],
+    "台南": ["台南", "đài nam", "dai nam", "tainan"],
+    "高雄": ["高雄", "cao hùng", "cao hung", "kaohsiung"],
+    "台北": ["台北", "đài bắc", "dai bac", "taipei"],
+}
 
 ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
 ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
@@ -211,6 +230,9 @@ _SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 _WORKSHEET_VALUES_SHARED_CACHE: Dict[str, dict] = {}
 _WORKSHEET_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
+
+_ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
+_ROUTING_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 
 def _now_ts() -> float:
     return time.time()
@@ -474,6 +496,225 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
     except Exception as e:
         logger.exception(f"[{trace_id}] UPDATE_ROW_FIELDS_FAILED worksheet_name={worksheet_name} row_index={row_index} exception={type(e).__name__}:{e}")
         return False
+
+
+def open_routing_spreadsheet(trace_id: str):
+    cached = getattr(g, "_dt79_routing_spreadsheet", None)
+    if cached is not None:
+        logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_CACHE_HIT name={ROUTING_SPREADSHEET_NAME}")
+        return cached
+
+    shared = _ROUTING_SPREADSHEET_SHARED_CACHE.get("spreadsheet")
+    loaded_at_ts = float(_ROUTING_SPREADSHEET_SHARED_CACHE.get("loaded_at_ts", 0.0) or 0.0)
+    if shared is not None and _cache_is_fresh(loaded_at_ts, GSHEET_SPREADSHEET_CACHE_TTL_SECONDS):
+        g._dt79_routing_spreadsheet = shared
+        logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_SHARED_CACHE_HIT name={ROUTING_SPREADSHEET_NAME}")
+        return shared
+
+    client = get_gspread_client(trace_id)
+    if not client:
+        return shared
+    try:
+        spreadsheet = client.open(ROUTING_SPREADSHEET_NAME)
+        g._dt79_routing_spreadsheet = spreadsheet
+        _ROUTING_SPREADSHEET_SHARED_CACHE["spreadsheet"] = spreadsheet
+        _ROUTING_SPREADSHEET_SHARED_CACHE["loaded_at_ts"] = _now_ts()
+        logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_READY name={ROUTING_SPREADSHEET_NAME}")
+        return spreadsheet
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_SPREADSHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        if shared is not None and _is_gsheet_quota_error(e):
+            g._dt79_routing_spreadsheet = shared
+            logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_STALE_CACHE_FALLBACK name={ROUTING_SPREADSHEET_NAME}")
+            return shared
+        return None
+
+
+def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
+    worksheet_cache = getattr(g, "_dt79_routing_worksheets", None)
+    if worksheet_cache is None:
+        worksheet_cache = {}
+        g._dt79_routing_worksheets = worksheet_cache
+    if worksheet_name in worksheet_cache:
+        logger.info(f"[{trace_id}] ROUTING_WORKSHEET_CACHE_HIT worksheet_name={worksheet_name}")
+        return worksheet_cache[worksheet_name]
+    if worksheet_name in _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE:
+        ws = _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE[worksheet_name]
+        worksheet_cache[worksheet_name] = ws
+        logger.info(f"[{trace_id}] ROUTING_WORKSHEET_SHARED_CACHE_HIT worksheet_name={worksheet_name}")
+        return ws
+
+    spreadsheet = open_routing_spreadsheet(trace_id)
+    if not spreadsheet:
+        return None
+    try:
+        ws = spreadsheet.worksheet(worksheet_name)
+        worksheet_cache[worksheet_name] = ws
+        _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE[worksheet_name] = ws
+        logger.info(f"[{trace_id}] ROUTING_WORKSHEET_READY worksheet_name={worksheet_name}")
+        return ws
+    except gspread.WorksheetNotFound:
+        logger.error(f"[{trace_id}] ROUTING_WORKSHEET_NOT_FOUND worksheet_name={worksheet_name}")
+        return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_WORKSHEET_OPEN_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+        ws = _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE.get(worksheet_name)
+        if ws is not None and _is_gsheet_quota_error(e):
+            worksheet_cache[worksheet_name] = ws
+            logger.info(f"[{trace_id}] ROUTING_WORKSHEET_STALE_CACHE_FALLBACK worksheet_name={worksheet_name}")
+            return ws
+        return None
+
+
+def load_bot_config_map(trace_id: str) -> Dict[str, str]:
+    ws = get_routing_worksheet_by_name(trace_id, BOT_CONFIG_SHEET_NAME)
+    if not ws:
+        return {}
+    rows = get_records_safe(ws, trace_id, BOT_CONFIG_SHEET_NAME)
+    config_map = {}
+    for row in rows:
+        key = safe_str(row.get("Key") or row.get("key")).strip()
+        value = safe_str(row.get("Value") or row.get("value")).strip()
+        if key:
+            config_map[key] = value
+    logger.info(f"[{trace_id}] ROUTING_CONFIG_READY keys={json.dumps(sorted(config_map.keys()), ensure_ascii=False)}")
+    return config_map
+
+
+def normalize_routing_text(value: str) -> str:
+    normalized = _normalize_match_text(value)
+    normalized = normalized.replace("đ", "d").replace("Đ", "D").lower()
+    return normalized
+
+
+def extract_location_alias(text: str) -> str:
+    normalized = normalize_routing_text(text)
+    for canonical, aliases in LOCATION_ALIAS_MAP.items():
+        for alias in aliases:
+            if _phrase_present(normalized, alias):
+                return canonical
+    return ""
+
+
+def detect_routing_intent(text: str, intent_rows: List[dict]) -> Tuple[str, List[str]]:
+    normalized = normalize_routing_text(text)
+    best_intent = ""
+    best_hits: List[str] = []
+    best_score = 0
+    for row in intent_rows:
+        intent_name = safe_str(row.get("intent_name"))
+        keywords_raw = safe_str(row.get("keywords"))
+        if not intent_name or not keywords_raw:
+            continue
+        hits = []
+        for keyword in [safe_str(x) for x in keywords_raw.split(",") if safe_str(x)]:
+            if _phrase_present(normalized, keyword):
+                hits.append(keyword)
+        if not hits:
+            continue
+        score = max(len(normalize_routing_text(hit)) for hit in hits)
+        if score > best_score:
+            best_score = score
+            best_intent = intent_name
+            best_hits = hits
+    return best_intent, best_hits
+
+
+def filter_active_services(service_rows: List[dict]) -> List[dict]:
+    results = []
+    for row in service_rows:
+        status = safe_str(row.get("service_status")).lower()
+        if status and status != "active":
+            continue
+        if not safe_str(row.get("intent_name")):
+            continue
+        if not safe_str(row.get("contact_id")):
+            continue
+        results.append(row)
+    return results
+
+
+def choose_service_for_intent(intent_name: str, location_hint: str, service_rows: List[dict]) -> Optional[dict]:
+    normalized_location = safe_str(location_hint)
+    candidates = [row for row in filter_active_services(service_rows) if safe_str(row.get("intent_name")) == intent_name]
+    if not candidates:
+        return None
+
+    exact_matches = []
+    fallback_matches = []
+    for row in candidates:
+        location = safe_str(row.get("location"))
+        priority = parse_priority(row.get("priority"))
+        if normalized_location and location == normalized_location:
+            exact_matches.append((priority, row))
+        elif location == ROUTING_FALLBACK_LOCATION:
+            fallback_matches.append((priority, row))
+
+    if exact_matches:
+        exact_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
+        return exact_matches[0][1]
+    if fallback_matches:
+        fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
+        return fallback_matches[0][1]
+    return None
+
+
+def build_routing_reply(service_row: dict, language_group: str) -> str:
+    lang = normalize_language_group(language_group)
+    prefix = ROUTING_REPLY_PREFIX_BY_LANGUAGE.get(lang, ROUTING_REPLY_PREFIX_BY_LANGUAGE["vi"])
+    contact_id = safe_str(service_row.get("contact_id"))
+    service_name = safe_str(service_row.get("service_name"))
+    location = safe_str(service_row.get("location"))
+    scope = safe_str(service_row.get("service_scope"))
+    lines = [f"{prefix}: {contact_id}"]
+    if service_name:
+        lines.append(f"Dịch vụ: {service_name}")
+    if location:
+        lines.append(f"Khu vực: {location}")
+    if scope:
+        lines.append(f"Phạm vi: {scope}")
+    return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
+
+
+def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Optional[str]:
+    config_map = load_bot_config_map(trace_id)
+    intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
+    service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
+    fallback_location = safe_str(config_map.get("fallback_location")) or ROUTING_FALLBACK_LOCATION
+
+    intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
+    service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
+    if not intent_ws or not service_ws:
+        logger.warning(f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} service_ws={bool(service_ws)}")
+        return None
+
+    intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
+    service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
+    intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
+    if not intent_name:
+        logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
+        return None
+
+    location_hint = extract_location_alias(text)
+    service = choose_service_for_intent(intent_name, location_hint, service_rows)
+    if not service and location_hint != fallback_location:
+        service = choose_service_for_intent(intent_name, fallback_location, service_rows)
+    if not service:
+        logger.info(
+            f"[{trace_id}] ROUTING_SERVICE_MISS intent_name={intent_name} "
+            f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
+            f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
+        )
+        return None
+
+    logger.info(
+        f"[{trace_id}] ROUTING_MATCH_OK intent_name={intent_name} "
+        f"service_id={safe_str(service.get('service_id'))} "
+        f"contact_id={safe_str(service.get('contact_id'))} "
+        f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
+        f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
+    )
+    return build_routing_reply(service, language_group)
 
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
@@ -1958,11 +2199,21 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = "ads_detail_view"
     elif current_flow == FLOW_ADS:
         clear_user_flow(user_id, trace_id)
-        reply_text = build_default_intent_reply(text, current_language, trace_id)
-        flow_used = "ads_auto_cleared"
+        routing_reply = try_build_routing_reply(text, current_language, trace_id)
+        if routing_reply:
+            reply_text = routing_reply
+            flow_used = "ads_auto_cleared_routed"
+        else:
+            reply_text = build_default_intent_reply(text, current_language, trace_id)
+            flow_used = "ads_auto_cleared"
     else:
-        reply_text = build_default_intent_reply(text, current_language, trace_id)
-        flow_used = "default"
+        routing_reply = try_build_routing_reply(text, current_language, trace_id)
+        if routing_reply:
+            reply_text = routing_reply
+            flow_used = "routing"
+        else:
+            reply_text = build_default_intent_reply(text, current_language, trace_id)
+            flow_used = "default"
 
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
     return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_id": user_id, "reply_sent": reply_ok}
