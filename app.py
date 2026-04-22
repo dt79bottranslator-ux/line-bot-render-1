@@ -204,6 +204,52 @@ def is_ad_active_in_time_window(start_at: str, end_at: str) -> bool:
 
 _GSPREAD_CLIENT = None
 
+GSHEET_SPREADSHEET_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_SPREADSHEET_CACHE_TTL_SECONDS", "300").strip() or "300")
+GSHEET_VALUES_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_VALUES_CACHE_TTL_SECONDS", "45").strip() or "45")
+
+_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
+_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
+_WORKSHEET_VALUES_SHARED_CACHE: Dict[str, dict] = {}
+_WORKSHEET_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
+
+def _now_ts() -> float:
+    return time.time()
+
+def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
+    return bool(loaded_at_ts) and (_now_ts() - loaded_at_ts) < ttl_seconds
+
+def _is_gsheet_quota_error(exc: Exception) -> bool:
+    text = safe_str(exc)
+    return "429" in text or "Quota exceeded" in text or "Read requests per minute per user" in text
+
+def _values_to_records(values: List[List[str]]) -> List[dict]:
+    if not values:
+        return []
+    headers = [safe_str(v) for v in (values[0] if values else [])]
+    if not headers:
+        return []
+    records: List[dict] = []
+    for row in values[1:]:
+        if not any(safe_str(cell) for cell in row):
+            continue
+        item = {}
+        for idx, header in enumerate(headers):
+            if not header:
+                continue
+            item[header] = safe_str(row[idx]) if idx < len(row) else ""
+        records.append(item)
+    return records
+
+def _invalidate_worksheet_caches(worksheet_name: str) -> None:
+    values_cache = getattr(g, "_dt79_values_cache", None)
+    if isinstance(values_cache, dict):
+        values_cache.pop(worksheet_name, None)
+    records_cache = getattr(g, "_dt79_records_cache", None)
+    if isinstance(records_cache, dict):
+        records_cache.pop(worksheet_name, None)
+    _WORKSHEET_VALUES_SHARED_CACHE.pop(worksheet_name, None)
+    _WORKSHEET_RECORDS_SHARED_CACHE.pop(worksheet_name, None)
+
 def get_google_credentials(trace_id: str):
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         logger.error(f"[{trace_id}] GSHEET_CREDENTIALS_MISSING")
@@ -244,16 +290,30 @@ def open_spreadsheet(trace_id: str):
     if cached is not None:
         logger.info(f"[{trace_id}] SPREADSHEET_CACHE_HIT name={PHASE1_SPREADSHEET_NAME}")
         return cached
+
+    shared = _SPREADSHEET_SHARED_CACHE.get("spreadsheet")
+    loaded_at_ts = float(_SPREADSHEET_SHARED_CACHE.get("loaded_at_ts", 0.0) or 0.0)
+    if shared is not None and _cache_is_fresh(loaded_at_ts, GSHEET_SPREADSHEET_CACHE_TTL_SECONDS):
+        g._dt79_spreadsheet = shared
+        logger.info(f"[{trace_id}] SPREADSHEET_SHARED_CACHE_HIT name={PHASE1_SPREADSHEET_NAME}")
+        return shared
+
     client = get_gspread_client(trace_id)
     if not client:
-        return None
+        return shared
     try:
         spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
         g._dt79_spreadsheet = spreadsheet
+        _SPREADSHEET_SHARED_CACHE["spreadsheet"] = spreadsheet
+        _SPREADSHEET_SHARED_CACHE["loaded_at_ts"] = _now_ts()
         logger.info(f"[{trace_id}] SPREADSHEET_READY name={PHASE1_SPREADSHEET_NAME}")
         return spreadsheet
     except Exception as e:
         logger.exception(f"[{trace_id}] SPREADSHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        if shared is not None and _is_gsheet_quota_error(e):
+            g._dt79_spreadsheet = shared
+            logger.info(f"[{trace_id}] SPREADSHEET_STALE_CACHE_FALLBACK name={PHASE1_SPREADSHEET_NAME}")
+            return shared
         return None
 
 def normalize_header_key(value: str) -> str:
@@ -275,6 +335,11 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
     if worksheet_name in worksheet_cache:
         logger.info(f"[{trace_id}] WORKSHEET_CACHE_HIT worksheet_name={worksheet_name}")
         return worksheet_cache[worksheet_name]
+    if worksheet_name in _WORKSHEET_OBJECT_SHARED_CACHE:
+        ws = _WORKSHEET_OBJECT_SHARED_CACHE[worksheet_name]
+        worksheet_cache[worksheet_name] = ws
+        logger.info(f"[{trace_id}] WORKSHEET_SHARED_CACHE_HIT worksheet_name={worksheet_name}")
+        return ws
 
     spreadsheet = open_spreadsheet(trace_id)
     if not spreadsheet:
@@ -282,6 +347,7 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
     try:
         ws = spreadsheet.worksheet(worksheet_name)
         worksheet_cache[worksheet_name] = ws
+        _WORKSHEET_OBJECT_SHARED_CACHE[worksheet_name] = ws
         logger.info(f"[{trace_id}] WORKSHEET_READY worksheet_name={worksheet_name}")
         return ws
     except gspread.WorksheetNotFound:
@@ -289,6 +355,11 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
         return None
     except Exception as e:
         logger.exception(f"[{trace_id}] WORKSHEET_OPEN_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+        ws = _WORKSHEET_OBJECT_SHARED_CACHE.get(worksheet_name)
+        if ws is not None and _is_gsheet_quota_error(e):
+            worksheet_cache[worksheet_name] = ws
+            logger.info(f"[{trace_id}] WORKSHEET_STALE_CACHE_FALLBACK worksheet_name={worksheet_name}")
+            return ws
         return None
 
 def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str]]:
@@ -300,13 +371,28 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
         values = values_cache[worksheet_name]
         logger.info(f"[{trace_id}] WORKSHEET_VALUES_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
         return values
+
+    shared_entry = _WORKSHEET_VALUES_SHARED_CACHE.get(worksheet_name)
+    if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
+        values = shared_entry.get("values", []) or []
+        values_cache[worksheet_name] = values
+        logger.info(f"[{trace_id}] WORKSHEET_VALUES_SHARED_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
+        return values
+
     try:
         values = ws.get_all_values()
         values_cache[worksheet_name] = values
+        _WORKSHEET_VALUES_SHARED_CACHE[worksheet_name] = {"values": values, "loaded_at_ts": _now_ts()}
+        _WORKSHEET_RECORDS_SHARED_CACHE[worksheet_name] = {"records": _values_to_records(values), "loaded_at_ts": _now_ts()}
         logger.info(f"[{trace_id}] WORKSHEET_READ_OK worksheet_name={worksheet_name} row_count={len(values)}")
         return values
     except Exception as e:
         logger.exception(f"[{trace_id}] WORKSHEET_READ_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+        if shared_entry:
+            values = shared_entry.get("values", []) or []
+            values_cache[worksheet_name] = values
+            logger.info(f"[{trace_id}] WORKSHEET_VALUES_STALE_CACHE_FALLBACK worksheet_name={worksheet_name} row_count={len(values)}")
+            return values
         return []
 
 def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
@@ -318,14 +404,20 @@ def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
         records = records_cache[worksheet_name]
         logger.info(f"[{trace_id}] WORKSHEET_RECORDS_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
         return records
-    try:
-        records = ws.get_all_records()
+
+    shared_entry = _WORKSHEET_RECORDS_SHARED_CACHE.get(worksheet_name)
+    if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
+        records = shared_entry.get("records", []) or []
         records_cache[worksheet_name] = records
-        logger.info(f"[{trace_id}] WORKSHEET_RECORDS_OK worksheet_name={worksheet_name} count={len(records)}")
+        logger.info(f"[{trace_id}] WORKSHEET_RECORDS_SHARED_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
         return records
-    except Exception as e:
-        logger.exception(f"[{trace_id}] WORKSHEET_RECORDS_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
-        return []
+
+    values = get_all_values_safe(ws, trace_id, worksheet_name)
+    records = _values_to_records(values)
+    records_cache[worksheet_name] = records
+    _WORKSHEET_RECORDS_SHARED_CACHE[worksheet_name] = {"records": records, "loaded_at_ts": _now_ts()}
+    logger.info(f"[{trace_id}] WORKSHEET_RECORDS_DERIVED_OK worksheet_name={worksheet_name} count={len(records)}")
+    return records
 
 def find_first_row_index_by_column_value(ws, column_name: str, expected_value: str, trace_id: str, worksheet_name: str) -> int:
     values = get_all_values_safe(ws, trace_id, worksheet_name)
@@ -372,12 +464,7 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
 
     try:
         ws.update(target_range, [row_values], value_input_option="USER_ENTERED")
-        values_cache = getattr(g, "_dt79_values_cache", None)
-        if isinstance(values_cache, dict):
-            values_cache.pop(worksheet_name, None)
-        records_cache = getattr(g, "_dt79_records_cache", None)
-        if isinstance(records_cache, dict):
-            records_cache.pop(worksheet_name, None)
+        _invalidate_worksheet_caches(worksheet_name)
         logger.info(
             f"[{trace_id}] UPDATE_ROW_FIELDS_OK worksheet_name={worksheet_name} row_index={row_index} "
             f"columns={json.dumps([name for _, name, _ in normalized_items], ensure_ascii=False)} "
@@ -744,12 +831,7 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         ]
         try:
             ws.append_row(row, value_input_option="USER_ENTERED")
-            values_cache = getattr(g, "_dt79_values_cache", None)
-            if isinstance(values_cache, dict):
-                values_cache.pop(PROCESSED_EVENT_SHEET_NAME, None)
-            records_cache = getattr(g, "_dt79_records_cache", None)
-            if isinstance(records_cache, dict):
-                records_cache.pop(PROCESSED_EVENT_SHEET_NAME, None)
+            _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
             logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_key={event_key}")
             persist_ok = True
         except Exception as e:
