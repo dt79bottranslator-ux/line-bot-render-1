@@ -1450,6 +1450,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "cần báo theo mẫu nào", "theo mẫu nào", "đơn xin nghỉ", "mẫu nào",
         "cần báo", "có cần báo", "báo theo mẫu", "mẫu xin nghỉ",
         "ต้องแจ้งไหม", "ต้องแจ้ง", "แจ้งไหม",
+        "perlu lapor tidak", "perlu lapor", "lapor tidak",
     ]
     leave_action_phrases = [
         "xin nghỉ", "xin nghỉ 2 ngày", "xin nghỉ 1 ngày", "xin nghỉ một ngày",
@@ -1460,6 +1461,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "không cần xin nghỉ", "không phải xin nghỉ", "vẫn đi làm",
         "chỉ hỏi lịch trình", "chỉ hỏi thôi", "chưa nghỉ đâu",
         "không nghỉ phép", "không cần nghỉ", "vẫn làm việc", "quay lại làm việc",
+        "belum izin kerja", "tidak izin kerja", "tidak perlu izin kerja",
         "ไม่ได้ลางาน", "ยังไม่ลางาน", "ไม่ได้หยุดงาน", "ยังไม่หยุดงาน",
         "กลับมาทํางาน", "กลับมาทำงาน", "ไปทํางานต่อ", "ไปทำงานต่อ",
     ]
@@ -1490,6 +1492,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     travel_soft_phrases = [
         "đi", "đi chơi", "về", "bay", "qua", "sang", "tới", "đến", "ở đâu", "lịch trình",
         "cuối tuần", "quay lại", "balik", "masuk", "kerja lagi",
+        "jadwal pulang", "mau pulang", "akhir minggu", "2 hari",
     ]
     conditional_phrases = ["nếu", "thì", "được nghỉ", "nếu được nghỉ"]
     travel_context_negative_guards = [
