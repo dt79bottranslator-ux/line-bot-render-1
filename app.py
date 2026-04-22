@@ -1418,7 +1418,9 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "không xin nghỉ", "chưa xin nghỉ", "không nghỉ", "chưa nghỉ",
         "không cần xin nghỉ", "không phải xin nghỉ", "vẫn đi làm",
         "chỉ hỏi lịch trình", "chỉ hỏi thôi", "chưa nghỉ đâu",
+        "không nghỉ phép", "không cần nghỉ", "vẫn làm việc", "quay lại làm việc",
     ]
+
     health_strong_phrases = [
         "bị ốm", "bi om", "đau đầu", "đau bụng", "sốt", "mệt", "không khỏe", "khong khoe",
         "khám bệnh", "đi bệnh viện", "nhức đầu", "ho", "bệnh",
@@ -1426,6 +1428,12 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "ป่วย", "ไข้", "เจ็บ", "โรงพยาบาล",
         "生病", "發燒", "頭痛", "看醫生", "醫院",
     ]
+    health_negation_phrases = [
+        "không bệnh", "không ốm", "không mệt", "không sốt", "không đau",
+        "chưa bệnh", "chưa ốm", "chưa mệt", "chưa sốt", "chưa đau",
+        "không phải bệnh", "không bị bệnh", "không bị ốm", "không bị sốt",
+    ]
+
     travel_hard_phrases = [
         "về quê", "ra sân bay",
         "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan", "đài bắc",
@@ -1436,10 +1444,9 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     ]
     travel_soft_phrases = [
         "đi ", "đi chơi", "về ", "bay", "qua ", "sang ", "tới ", "đến ", "ở đâu", "lịch trình",
+        "cuối tuần", "quay lại",
     ]
-    conditional_phrases = [
-        "nếu", "thì", "được nghỉ", "nếu được nghỉ",
-    ]
+    conditional_phrases = ["nếu", "thì", "được nghỉ", "nếu được nghỉ"]
     travel_context_negative_guards = [
         "được nghỉ", "nếu được nghỉ", "nghỉ thì đi", "nghỉ đi chơi", "nghỉ rồi đi",
     ]
@@ -1450,8 +1457,9 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     leave_hits = _collect_phrase_hits(text, leave_strong_phrases)
     workflow_hits = _collect_phrase_hits(text, leave_workflow_phrases)
     action_hits = _collect_phrase_hits(text, leave_action_phrases)
-    negation_hits = _collect_phrase_hits(text, leave_negation_phrases)
+    leave_negation_hits = _collect_phrase_hits(text, leave_negation_phrases)
     health_hits = _collect_phrase_hits(text, health_strong_phrases)
+    health_negation_hits = _collect_phrase_hits(text, health_negation_phrases)
     travel_hard_hits = _collect_phrase_hits(text, travel_hard_phrases)
     travel_soft_hits = _collect_phrase_hits(text, travel_soft_phrases, "soft:")
     conditional_hits = _collect_phrase_hits(text, conditional_phrases, "conditional:")
@@ -1462,7 +1470,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     matched_rules["action"].extend(action_hits)
     matched_rules["health"].extend(health_hits)
     matched_rules["travel"].extend(travel_hard_hits + travel_soft_hits + conditional_hits)
-    matched_rules["negative"].extend(negation_hits + context_negative_hits)
+    matched_rules["negative"].extend(leave_negation_hits + health_negation_hits + context_negative_hits)
 
     scores["leave"] += 4 * len(leave_hits)
     scores["leave"] += 5 * len(workflow_hits)
@@ -1475,7 +1483,9 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     has_explicit_leave = len(leave_hits) > 0
     has_leave_workflow = len(workflow_hits) > 0
     has_leave_action = len(action_hits) > 0
-    has_leave_negation = len(negation_hits) > 0
+    has_leave_negation = len(leave_negation_hits) > 0
+    has_health_signal = len(health_hits) > 0
+    has_health_negation = len(health_negation_hits) > 0
     has_travel_context = (len(travel_hard_hits) + len(travel_soft_hits)) > 0
 
     if has_explicit_leave and has_leave_workflow:
@@ -1500,7 +1510,7 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         matched_rules["negative"].append(f"penalty:leave_context-{penalty}")
 
     if has_leave_negation:
-        penalty = 20 + (4 * len(negation_hits))
+        penalty = 20 + (4 * len(leave_negation_hits))
         scores["leave"] -= penalty
         matched_rules["negative"].append(f"penalty:leave_negation-{penalty}")
 
@@ -1512,27 +1522,43 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         scores["leave"] -= 6
         matched_rules["negative"].append("boost:general_from_negated_leave")
 
-    if health_hits:
-        intent = "health"
-        reason = "health_priority"
-    else:
-        ordered = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
-        top_intent, top_score = ordered[0]
-        second_score = ordered[1][1]
-        if top_score <= 2 or (top_score - second_score) <= 1:
-            intent = "general"
-            reason = "uncertain_fallback"
-        else:
-            intent = top_intent
-            reason = f"{top_intent}_priority"
+    if has_health_negation:
+        penalty = 20 + (4 * len(health_negation_hits))
+        scores["health"] -= penalty
+        matched_rules["negative"].append(f"penalty:health_negation-{penalty}")
+        if has_travel_context:
+            scores["travel"] += 2
+            matched_rules["negative"].append("boost:travel_from_negated_health")
+        elif not has_leave_action and not has_leave_workflow:
+            scores["health"] -= 4
+            matched_rules["negative"].append("boost:general_from_negated_health")
 
-        if has_leave_negation and intent == "leave":
-            if has_travel_context:
-                intent = "travel"
-                reason = "negated_leave_travel_priority"
-            else:
-                intent = "general"
-                reason = "negated_leave_general_priority"
+    ordered = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
+    top_intent, top_score = ordered[0]
+    second_score = ordered[1][1]
+
+    if top_score <= 2 or (top_score - second_score) <= 1:
+        intent = "general"
+        reason = "uncertain_fallback"
+    else:
+        intent = top_intent
+        reason = f"{top_intent}_priority"
+
+    if has_leave_negation and intent == "leave":
+        if has_travel_context:
+            intent = "travel"
+            reason = "negated_leave_travel_priority"
+        else:
+            intent = "general"
+            reason = "negated_leave_general_priority"
+
+    if has_health_negation and intent == "health":
+        if has_travel_context:
+            intent = "travel"
+            reason = "negated_health_travel_priority"
+        else:
+            intent = "general"
+            reason = "negated_health_general_priority"
 
     return {
         "intent": intent,
@@ -1541,7 +1567,6 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "matched_rules": matched_rules,
         "normalized": text,
     }
-
 
 def classify_default_intent(normalized_text: str) -> str:
     return resolve_default_intent_details(normalized_text).get("intent", "general")
