@@ -1549,6 +1549,10 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         scores["leave"] += 4
         matched_rules["workflow"].append("boost:workflow_over_context")
 
+    if has_leave_negation and has_travel_context and has_leave_workflow and not has_leave_action:
+        scores["travel"] += 3
+        matched_rules["negative"].append("boost:travel_from_negated_leave_workflow")
+
     if has_travel_context and _contains_any_phrase(text, travel_context_negative_guards) and not has_leave_workflow:
         penalty = 4 + (2 * len(context_negative_hits))
         scores["leave"] -= penalty
@@ -1596,6 +1600,10 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         else:
             intent = "general"
             reason = "negated_leave_general_priority"
+
+    if intent == "general" and has_leave_negation and has_travel_context and has_leave_workflow and not has_leave_action:
+        intent = "travel"
+        reason = "negated_leave_travel_workflow_tiebreak"
 
     if has_health_negation and intent == "health":
         if has_travel_context:
