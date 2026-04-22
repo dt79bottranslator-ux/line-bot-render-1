@@ -1449,12 +1449,16 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "có cần xin nghỉ không", "cần xin nghỉ không", "xin nghỉ không",
         "cần báo theo mẫu nào", "theo mẫu nào", "đơn xin nghỉ", "mẫu nào",
         "cần báo", "có cần báo", "báo theo mẫu", "mẫu xin nghỉ",
-        "ต้องแจ้งไหม", "ต้องแจ้ง", "แจ้งไหม",
+        "ต้องแจ้งไหม", "ต้องแจ้ง", "แจ้งไหม", "ต้องลางานไหม", "ลางานไหม",
         "perlu lapor tidak", "perlu lapor", "lapor tidak",
+        "apakah perlu izin kerja", "perlu izin kerja",
+        "perlu isi formulir apa", "isi formulir apa", "formulir apa",
     ]
     leave_action_phrases = [
         "xin nghỉ", "xin nghỉ 2 ngày", "xin nghỉ 1 ngày", "xin nghỉ một ngày",
         "nghỉ phép", "nghỉ làm", "báo nghỉ", "đơn xin nghỉ",
+        "izin kerja", "izin kerja 2 hari",
+        "ลางาน", "ขอลางาน", "ลางาน 2 วัน",
     ]
     leave_negation_phrases = [
         "không xin nghỉ", "chưa xin nghỉ", "không nghỉ", "chưa nghỉ",
