@@ -606,18 +606,29 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
         return fallback_matches[0][1]
     return None
 def build_routing_reply(service_row: dict, language_group: str) -> str:
-    lang = normalize_language_group(language_group)
-    prefix = ROUTING_REPLY_PREFIX_BY_LANGUAGE.get(lang, ROUTING_REPLY_PREFIX_BY_LANGUAGE["vi"])
-    labels = ROUTING_LABELS_BY_LANGUAGE.get(lang, ROUTING_LABELS_BY_LANGUAGE["vi"])
     contact_id = safe_str(service_row.get("contact_id"))
     location = safe_str(service_row.get("location"))
-    scope = safe_str(service_row.get("service_scope")) or safe_str(service_row.get("service_name"))
-    display_location = LOCATION_DISPLAY_MAP.get(location, location)
-    lines = [f"{prefix}: {contact_id}"]
-    if display_location:
-        lines.append(f"{labels['location']}: {display_location}")
-    if scope:
-        lines.append(f"{labels['service']}: {scope}")
+    scope = safe_str(service_row.get("service_scope"))
+    service_name = safe_str(service_row.get("service_name"))
+
+    location_vi = LOCATION_DISPLAY_MAP.get(location, location)
+
+    normalized_scope = normalize_routing_text(scope)
+    normalized_service_name = normalize_routing_text(service_name)
+
+    if "phong" in normalized_scope or "phong" in normalized_service_name:
+        title = f"Tìm phòng trọ tại {location_vi}"
+    else:
+        title = scope or service_name
+
+    lines = []
+    if title:
+        lines.append(f"Dịch vụ: {title}")
+    if location_vi:
+        lines.append(f"Khu vực: {location_vi}")
+    if contact_id:
+        lines.append(f"Liên hệ LINE: {contact_id}")
+
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
 def parse_sim_entities(text: str) -> Tuple[str, str, str]:
