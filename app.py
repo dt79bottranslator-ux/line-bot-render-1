@@ -660,6 +660,26 @@ def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, 
         logger.exception(f"[{trace_id}] ROUTING_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
+def log_routing_reply_result(
+    trace_id: str,
+    user_id: str,
+    intent_name: str,
+    service_row: dict,
+    location_hint: str,
+    reply_text: str,
+    reply_ok: bool,
+) -> None:
+    logger.info(
+        f"[{trace_id}] ROUTING_REPLY_RESULT "
+        f"user_id={safe_str(user_id)} "
+        f"intent_name={safe_str(intent_name)} "
+        f"service_id={safe_str(service_row.get('service_id'))} "
+        f"location={json.dumps(safe_str(location_hint) or safe_str(service_row.get('location')), ensure_ascii=False)} "
+        f"reply_ok={reply_ok} "
+        f"reply_preview={json.dumps(safe_str(reply_text)[:160], ensure_ascii=False)}"
+    )
+
+
 def build_routing_reply(service_row: dict, language_group: str) -> str:
     contact_id = safe_str(service_row.get("contact_id"))
     contact_link = safe_str(service_row.get("contact_link"))
@@ -749,7 +769,7 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
         lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
-def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_id: str = "") -> Optional[str]:
+def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_id: str = "") -> Optional[dict]:
     config_map = load_bot_config_map(trace_id)
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
     service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
@@ -797,16 +817,10 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
         f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
     )
-    append_routing_log_event(
-        user_id=user_id,
-        intent_name=intent_name,
-        service_row=service,
-        location_hint=location_hint,
-        message=text,
-        trace_id=trace_id,
-    )
 
     service_id = safe_str(service.get("service_id"))
+    final_reply_text = build_routing_reply(service, language_group)
+
     if service_id == "SIM_TW_001" and variant_rows:
         network, duration, variant_type = parse_sim_entities(text)
         if network and duration:
@@ -816,13 +830,20 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                     f"[{trace_id}] SIM_VARIANT_MATCH_OK service_id={service_id} network={network} "
                     f"duration={duration} type={variant_type} price={safe_str(variant.get('price'))}"
                 )
-                return build_sim_variant_reply(service, variant, language_group)
-            logger.info(
-                f"[{trace_id}] SIM_VARIANT_MISS service_id={service_id} network={network} "
-                f"duration={duration} type={variant_type}"
-            )
+                final_reply_text = build_sim_variant_reply(service, variant, language_group)
+            else:
+                logger.info(
+                    f"[{trace_id}] SIM_VARIANT_MISS service_id={service_id} network={network} "
+                    f"duration={duration} type={variant_type}"
+                )
 
-    return build_routing_reply(service, language_group)
+    return {
+        "reply_text": final_reply_text,
+        "intent_name": intent_name,
+        "service_row": service,
+        "location_hint": location_hint,
+        "matched_keywords": matched_keywords,
+    }
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
 _ADS_DETAIL_CACHE: Dict[str, dict] = {}
@@ -2068,6 +2089,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     current_flow = resolve_user_flow(user_id, trace_id)
     current_language = resolve_user_language(user_id, trace_id)
     requested_language = parse_lang_command(text)
+    routing_result = None
     logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} normalized={json.dumps(normalized, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
     reply_language = current_language
     if normalized == WORKER_ENTRY_COMMAND:
@@ -2136,22 +2158,43 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = "ads_detail_view"
     elif current_flow == FLOW_ADS:
         clear_user_flow(user_id, trace_id)
-        routing_reply = try_build_routing_reply(text, current_language, trace_id, user_id)
-        if routing_reply:
-            reply_text = routing_reply
+        routing_result = try_build_routing_reply(text, current_language, trace_id, user_id)
+        if routing_result:
+            reply_text = routing_result["reply_text"]
             flow_used = "ads_auto_cleared_routed"
         else:
             reply_text = build_default_intent_reply(text, current_language, trace_id)
             flow_used = "ads_auto_cleared"
     else:
-        routing_reply = try_build_routing_reply(text, current_language, trace_id, user_id)
-        if routing_reply:
-            reply_text = routing_reply
+        routing_result = try_build_routing_reply(text, current_language, trace_id, user_id)
+        if routing_result:
+            reply_text = routing_result["reply_text"]
             flow_used = "routing"
         else:
             reply_text = build_default_intent_reply(text, current_language, trace_id)
             flow_used = "default"
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
+    if routing_result:
+        log_routing_reply_result(
+            trace_id=trace_id,
+            user_id=user_id,
+            intent_name=routing_result["intent_name"],
+            service_row=routing_result["service_row"],
+            location_hint=routing_result["location_hint"],
+            reply_text=reply_text,
+            reply_ok=reply_ok,
+        )
+        if reply_ok:
+            append_routing_log_event(
+                user_id=user_id,
+                intent_name=routing_result["intent_name"],
+                service_row=routing_result["service_row"],
+                location_hint=routing_result["location_hint"],
+                message=text,
+                trace_id=trace_id,
+            )
+        else:
+            logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=reply_failed")
     return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_id": user_id, "reply_sent": reply_ok}
 def dispatch_line_event(event: dict, trace_id: str) -> dict:
     event_type = get_event_type(event)
@@ -2226,7 +2269,8 @@ def callback():
                 results.append({"handled": False, "reason": processing_reason, "event_key": processing_event_key})
                 continue
             result = dispatch_line_event(event, trace_id)
-            finalize_event_processing(event, trace_id, success=bool(result.get("handled")))
+            event_success = bool(result.get("handled")) and bool(result.get("reply_sent", True))
+            finalize_event_processing(event, trace_id, success=event_success)
             results.append(result)
         except Exception as e:
             finalize_event_processing(event, trace_id, success=False)
