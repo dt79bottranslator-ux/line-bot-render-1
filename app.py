@@ -607,6 +607,7 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
     return None
 def build_routing_reply(service_row: dict, language_group: str) -> str:
     contact_id = safe_str(service_row.get("contact_id"))
+    contact_link = safe_str(service_row.get("contact_link"))
     location = safe_str(service_row.get("location"))
     scope = safe_str(service_row.get("service_scope"))
     service_name = safe_str(service_row.get("service_name"))
@@ -626,7 +627,9 @@ def build_routing_reply(service_row: dict, language_group: str) -> str:
         lines.append(f"Dịch vụ: {title}")
     if location_vi:
         lines.append(f"Khu vực: {location_vi}")
-    if contact_id:
+    if contact_link:
+        lines.append(f"Nhắn trực tiếp: {contact_link}")
+    elif contact_id:
         lines.append(f"Liên hệ LINE: {contact_id}")
 
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
@@ -673,6 +676,7 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
     prefix = ROUTING_REPLY_PREFIX_BY_LANGUAGE.get(lang, ROUTING_REPLY_PREFIX_BY_LANGUAGE["vi"])
     labels = ROUTING_LABELS_BY_LANGUAGE.get(lang, ROUTING_LABELS_BY_LANGUAGE["vi"])
     contact_id = safe_str(service_row.get("contact_id"))
+    contact_link = safe_str(service_row.get("contact_link"))
     network = safe_str(variant_row.get("network"))
     duration = safe_str(variant_row.get("duration"))
     price = safe_str(variant_row.get("price"))
@@ -684,7 +688,10 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
     lines = [f"{labels['service']}: SIM {network} {duration_label} ({type_label})"]
     if price:
         lines.append(f"{labels['price']}: {price} TWD")
-    lines.append(f"{prefix}: {contact_id}")
+    if contact_link:
+        lines.append(f"Nhắn trực tiếp: {contact_link}")
+    else:
+        lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
 def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Optional[str]:
