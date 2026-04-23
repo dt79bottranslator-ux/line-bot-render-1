@@ -1266,6 +1266,30 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
         lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
+def select_candidate_aliases_for_reply(candidates: Optional[List[dict]] = None, max_items: int = 2, score_window: int = 5) -> List[str]:
+    ranked = candidates or []
+    if not ranked:
+        return []
+    top_score = int((ranked[0] or {}).get("score", 0) or 0)
+    aliases: List[str] = []
+    seen = set()
+    for item in ranked:
+        alias = safe_str(item.get("matched_alias")).strip()
+        score = int(item.get("score", 0) or 0)
+        if not alias:
+            continue
+        if score < (top_score - score_window):
+            continue
+        key = alias.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(alias)
+        if len(aliases) >= max_items:
+            break
+    return aliases
+
+
 def format_candidate_aliases_for_reply(candidate_aliases: Optional[List[str]] = None) -> str:
     aliases = []
     seen = set()
@@ -1279,7 +1303,7 @@ def format_candidate_aliases_for_reply(candidate_aliases: Optional[List[str]] = 
             continue
         seen.add(key)
         aliases.append(display)
-    return " / ".join(aliases[:3])
+    return " / ".join(aliases[:2])
 
 
 def build_routing_smart_fallback_reply(intent_name: str, language_group: str, reason_code: str = "", location_token_guess: str = "", candidate_aliases: Optional[List[str]] = None) -> str:
@@ -1414,6 +1438,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     second_alias = safe_str((candidate_decision.get("candidates") or [{}, {}])[1].get("matched_alias")) if len(candidate_decision.get("candidates") or []) > 1 else ""
     top_score = int(candidate_decision.get('top_score', 0) or 0)
     second_score = int(candidate_decision.get('second_score', 0) or 0)
+    reply_candidate_aliases = select_candidate_aliases_for_reply(candidate_decision.get("candidates"), max_items=2, score_window=5)
     logger.info(
         f"[{trace_id}] ROUTING_CANDIDATE_DECISION "
         f"decision={safe_str(candidate_decision.get('decision'))} "
@@ -1458,7 +1483,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                 language_group,
                 reason_code=reason_code,
                 location_token_guess=location_token_guess,
-                candidate_aliases=[safe_str(item.get("matched_alias")) for item in candidate_decision.get("candidates", [])],
+                candidate_aliases=reply_candidate_aliases,
             ),
             "intent_name": intent_name,
             "service_row": None,
