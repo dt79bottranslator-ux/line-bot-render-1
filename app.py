@@ -788,45 +788,28 @@ def score_location_candidate(alias: str, item: dict, normalized_text: str, token
     return score
 
 
-def collect_routing_location_candidates(text: str, alias_rows: List[dict], matched_keywords: Optional[List[str]] = None) -> List[dict]:
+def collect_routing_location_candidates(text: str, alias_rows: List[dict]) -> List[dict]:
     normalized = normalize_routing_text(text)
     alias_index = build_location_alias_index(alias_rows or [])
     results: List[dict] = []
     seen = set()
 
-    matched_keywords = matched_keywords or []
-    token_guesses = build_location_token_guesses(text, matched_keywords)
-    token_guess_skeletons = [build_phonetic_skeleton(x) for x in token_guesses if x]
+    token_guesses: List[str] = []
+    split_candidates = re.split(r"\b(?:hoac|or|hay|va|gan|khu)\b", normalized)
+    for part in split_candidates:
+        part = safe_str(part).strip(" ,.-")
+        if len(part) >= 3:
+            token_guesses.append(part[:80])
+    token_guesses.append(normalized)
 
     for alias, items in alias_index.items():
         alias_match = _phrase_present(normalized, alias)
         fuzzy_ratio = 0.0
-        skeleton_ratio = 0.0
-
         if not alias_match:
-            fuzzy_ratio = max(
-                (difflib.SequenceMatcher(None, guess, alias).ratio() for guess in token_guesses if guess),
-                default=0.0,
-            )
-
-            alias_skeleton = build_phonetic_skeleton(alias)
-            skeleton_ratio = max(
-                (
-                    difflib.SequenceMatcher(None, skeleton, alias_skeleton).ratio()
-                    for skeleton in token_guess_skeletons
-                    if skeleton and alias_skeleton
-                ),
-                default=0.0,
-            )
-
-            alias_match = (
-                (fuzzy_ratio >= 0.72 and len(alias) >= 4)
-                or (skeleton_ratio >= 0.78 and len(alias) >= 4)
-            )
-
+            fuzzy_ratio = max((difflib.SequenceMatcher(None, guess, alias).ratio() for guess in token_guesses if guess), default=0.0)
+            alias_match = fuzzy_ratio >= 0.72 and len(alias) >= 4
         if not alias_match:
             continue
-
         for item in items:
             target_key = safe_str(item.get("target_key"))
             target_type = safe_str(item.get("target_type"))
@@ -834,23 +817,13 @@ def collect_routing_location_candidates(text: str, alias_rows: List[dict], match
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
-
             score = score_location_candidate(alias, item, normalized, token_guesses)
-
             if fuzzy_ratio >= 0.92:
                 score += 10
             elif fuzzy_ratio >= 0.82:
                 score += 6
             elif fuzzy_ratio >= 0.72:
                 score += 3
-
-            if skeleton_ratio >= 0.92:
-                score += 12
-            elif skeleton_ratio >= 0.84:
-                score += 8
-            elif skeleton_ratio >= 0.78:
-                score += 4
-
             results.append({
                 "matched_alias": alias,
                 "target_key": target_key,
@@ -860,14 +833,9 @@ def collect_routing_location_candidates(text: str, alias_rows: List[dict], match
                 "score": score,
             })
 
-    results.sort(
-        key=lambda item: (
-            -int(item.get("score", 0) or 0),
-            -len(safe_str(item.get("matched_alias"))),
-            safe_str(item.get("target_key")),
-        )
-    )
+    results.sort(key=lambda item: (-int(item.get("score", 0) or 0), -len(safe_str(item.get("matched_alias"))), safe_str(item.get("target_key"))))
     return results
+
 
 def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> dict:
     if not candidates:
@@ -1265,10 +1233,35 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
         lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
-def build_routing_smart_fallback_reply(intent_name: str, language_group: str, reason_code: str = "", location_token_guess: str = "") -> str:
+def format_candidate_aliases_for_reply(candidate_aliases: Optional[List[str]] = None) -> str:
+    aliases = []
+    seen = set()
+    for alias in candidate_aliases or []:
+        cleaned = safe_str(alias).strip()
+        if not cleaned:
+            continue
+        display = cleaned.title() if re.search(r"[a-zA-Z]", cleaned) else cleaned
+        key = display.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(display)
+    return " / ".join(aliases[:3])
+
+
+def build_routing_smart_fallback_reply(intent_name: str, language_group: str, reason_code: str = "", location_token_guess: str = "", candidate_aliases: Optional[List[str]] = None) -> str:
     lang = normalize_language_group(language_group)
     token = safe_str(location_token_guess)
+    candidate_hint = format_candidate_aliases_for_reply(candidate_aliases)
     if intent_name == "thue_phong_tro" and reason_code in {"missing_location", "weak_location_match", "multi_location"}:
+        if reason_code == "multi_location" and candidate_hint:
+            if lang == "id":
+                return f"Saya menerima kebutuhan cari kamar, tetapi saat ini terdeteksi lebih dari satu area: {candidate_hint}. Kirim lagi satu area yang benar, nama distrik, atau lokasi dekat pabrik."[:LINE_TEXT_HARD_LIMIT]
+            if lang == "th":
+                return f"ฉันได้รับคำขอหาห้องแล้ว แต่ตอนนี้พบได้มากกว่าหนึ่งพื้นที่: {candidate_hint} กรุณาส่งมาใหม่เพียงหนึ่งพื้นที่ หรือจุดใกล้โรงงาน"[:LINE_TEXT_HARD_LIMIT]
+            if lang == "zh":
+                return f"我已收到找房需求，但目前辨識到不只一個地區：{candidate_hint}。請再發一次正確的單一地區，或工廠附近地點。"[:LINE_TEXT_HARD_LIMIT]
+            return f"Tôi đã nhận nhu cầu tìm phòng, nhưng hiện đang thấy hơn 1 khu vực nghi vấn: {candidate_hint}. Bạn gửi lại đúng 1 khu vực, quận/huyện, hoặc địa danh gần nhà máy."[:LINE_TEXT_HARD_LIMIT]
         if lang == "id":
             return "Saya sudah menerima kebutuhan cari kamar, tetapi belum bisa memastikan area. Kirim lagi nama area, nama distrik, atau lokasi dekat pabrik."[:LINE_TEXT_HARD_LIMIT]
         if lang == "th":
@@ -1280,7 +1273,7 @@ def build_routing_smart_fallback_reply(intent_name: str, language_group: str, re
         return "Tôi đã nhận nhu cầu tìm phòng, nhưng chưa xác định rõ khu vực. Bạn gửi lại tên khu vực, quận/huyện, hoặc địa danh gần nhà máy."[:LINE_TEXT_HARD_LIMIT]
     if intent_name == "sim_mang_di_dong" and reason_code in {"missing_variant", "missing_service_row"}:
         if lang == "id":
-            return "Saya sudah menerima kebutuhan SIM, tetapi paketnya belum cukup rõ. Kirim lagi dengan format: jaringan + durasi, misalnya OK 6 bulan atau Chunghwa 12 bulan."[:LINE_TEXT_HARD_LIMIT]
+            return "Saya sudah menerima kebutuhan SIM, tetapi paketnya belum đủ rõ. Kirim lagi dengan format: jaringan + durasi, misalnya OK 6 bulan atau Chunghwa 12 bulan."[:LINE_TEXT_HARD_LIMIT]
         if lang == "th":
             return "ฉันรับคำขอซิมแล้ว แต่ข้อมูลแพ็กเกจยังไม่พอ กรุณาส่งใหม่ในรูปแบบ: เครือข่าย + ระยะเวลา เช่น OK 6 เดือน หรือ Chunghwa 12 เดือน"[:LINE_TEXT_HARD_LIMIT]
         if lang == "zh":
@@ -1384,12 +1377,19 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         "second_score": 0,
         "candidates": [],
     }
+    top_alias = safe_str((candidate_decision.get("candidates") or [{}])[0].get("matched_alias")) if candidate_decision.get("candidates") else ""
+    second_alias = safe_str((candidate_decision.get("candidates") or [{}, {}])[1].get("matched_alias")) if len(candidate_decision.get("candidates") or []) > 1 else ""
+    top_score = int(candidate_decision.get('top_score', 0) or 0)
+    second_score = int(candidate_decision.get('second_score', 0) or 0)
     logger.info(
         f"[{trace_id}] ROUTING_CANDIDATE_DECISION "
         f"decision={safe_str(candidate_decision.get('decision'))} "
         f"confidence={safe_str(candidate_decision.get('confidence'))} "
-        f"top_score={int(candidate_decision.get('top_score', 0) or 0)} "
-        f"second_score={int(candidate_decision.get('second_score', 0) or 0)}"
+        f"top_alias={json.dumps(top_alias, ensure_ascii=False)} "
+        f"second_alias={json.dumps(second_alias, ensure_ascii=False)} "
+        f"top_score={top_score} "
+        f"second_score={second_score} "
+        f"gap={top_score-second_score}"
     )
 
     selected_candidate = candidate_decision.get("selected_candidate") or {}
@@ -1420,7 +1420,13 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             trace_id=trace_id,
         )
         return {
-            "reply_text": build_routing_smart_fallback_reply(intent_name, language_group, reason_code=reason_code, location_token_guess=location_token_guess),
+            "reply_text": build_routing_smart_fallback_reply(
+                intent_name,
+                language_group,
+                reason_code=reason_code,
+                location_token_guess=location_token_guess,
+                candidate_aliases=[safe_str(item.get("matched_alias")) for item in candidate_decision.get("candidates", [])],
+            ),
             "intent_name": intent_name,
             "service_row": None,
             "location_hint": "",
