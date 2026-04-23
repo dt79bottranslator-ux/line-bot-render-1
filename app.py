@@ -71,7 +71,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V3_VARIANT_CLEAN__ROUTING_LOG_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V2_CANONICAL_REGION__AUDIT_V2"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -529,24 +529,100 @@ def normalize_routing_text(value: str) -> str:
     normalized = _normalize_match_text(value)
     normalized = normalized.replace("đ", "d").replace("Đ", "D").lower()
     return normalized
-def build_location_alias_index(alias_rows: List[dict]) -> Dict[str, List[str]]:
-    alias_index: Dict[str, List[str]] = {}
+
+def build_location_alias_index(alias_rows: List[dict]) -> Dict[str, List[dict]]:
+    alias_index: Dict[str, List[dict]] = {}
     for row in alias_rows:
-        root_location = safe_str(row.get("root_location"))
         normalized_alias = normalize_routing_text(row.get("normalized_alias") or row.get("alias_text"))
-        if not root_location or not normalized_alias:
+        if not normalized_alias:
             continue
-        alias_index.setdefault(root_location, [])
-        if normalized_alias not in alias_index[root_location]:
-            alias_index[root_location].append(normalized_alias)
+        if safe_str(row.get("location_id")):
+            target_key = safe_str(row.get("location_id"))
+            item = {
+                "target_key": target_key,
+                "target_type": "location_id",
+                "normalized_alias": normalized_alias,
+                "lang_group": safe_str(row.get("lang_group")),
+                "alias_type": safe_str(row.get("alias_type")),
+            }
+        else:
+            target_key = safe_str(row.get("root_location"))
+            if not target_key:
+                continue
+            item = {
+                "target_key": target_key,
+                "target_type": "root_location",
+                "normalized_alias": normalized_alias,
+                "lang_group": safe_str(row.get("lang_group")),
+                "alias_type": safe_str(row.get("alias_type")),
+            }
+        alias_index.setdefault(normalized_alias, [])
+        if not any(existing.get("target_key") == item["target_key"] and existing.get("target_type") == item["target_type"] for existing in alias_index[normalized_alias]):
+            alias_index[normalized_alias].append(item)
     return alias_index
+
+def build_canonical_location_index(canonical_rows: List[dict]) -> Dict[str, dict]:
+    result: Dict[str, dict] = {}
+    for row in canonical_rows:
+        location_id = safe_str(row.get("location_id"))
+        if not location_id:
+            continue
+        result[location_id] = row
+    return result
+
+def build_region_map_index(region_rows: List[dict]) -> Dict[str, dict]:
+    result: Dict[str, dict] = {}
+    for row in region_rows:
+        location_id = safe_str(row.get("location_id"))
+        if not location_id:
+            continue
+        result[location_id] = row
+    return result
+
+def resolve_location_from_v2(text: str, alias_rows: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> Optional[dict]:
+    normalized = normalize_routing_text(text)
+    alias_index = build_location_alias_index(alias_rows or [])
+    canonical_index = build_canonical_location_index(canonical_rows or [])
+    region_index = build_region_map_index(region_rows or [])
+    matched_alias = ""
+    matched_item = None
+    for alias, items in alias_index.items():
+        if _phrase_present(normalized, alias):
+            matched_alias = alias
+            matched_item = items[0] if items else None
+            break
+    if not matched_item:
+        return None
+    if matched_item.get("target_type") == "root_location":
+        return {
+            "location_id": "",
+            "service_region_key": safe_str(matched_item.get("target_key")),
+            "matched_alias": matched_alias,
+            "target_type": "root_location",
+        }
+    location_id = safe_str(matched_item.get("target_key"))
+    canonical_row = canonical_index.get(location_id) or {}
+    region_row = region_index.get(location_id) or {}
+    service_region_key = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
+    if not service_region_key:
+        return None
+    return {
+        "location_id": location_id,
+        "service_region_key": service_region_key,
+        "matched_alias": matched_alias,
+        "canonical_zh": safe_str(canonical_row.get("canonical_zh")),
+        "canonical_en": safe_str(canonical_row.get("canonical_en")),
+        "district_town_zh": safe_str(canonical_row.get("district_town_zh")),
+        "county_city_zh": safe_str(canonical_row.get("county_city_zh")),
+        "target_type": "location_id",
+    }
+
 def extract_location_alias(text: str, alias_rows: Optional[List[dict]] = None) -> str:
     normalized = normalize_routing_text(text)
     alias_index = build_location_alias_index(alias_rows or [])
-    for canonical, aliases in alias_index.items():
-        for alias in aliases:
-            if _phrase_present(normalized, alias):
-                return canonical
+    for alias, items in alias_index.items():
+        if _phrase_present(normalized, alias) and items:
+            return safe_str(items[0].get("target_key"))
     for canonical, aliases in LOCATION_ALIAS_MAP.items():
         for alias in aliases:
             if _phrase_present(normalized, alias):
@@ -594,11 +670,11 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
     exact_matches = []
     fallback_matches = []
     for row in candidates:
-        location = safe_str(row.get("location"))
+        row_region = safe_str(row.get("service_region_key")) or safe_str(row.get("location"))
         priority = parse_priority(row.get("priority"))
-        if normalized_location and location == normalized_location:
+        if normalized_location and row_region == normalized_location:
             exact_matches.append((priority, row))
-        elif location == ROUTING_FALLBACK_LOCATION:
+        elif row_region == ROUTING_FALLBACK_LOCATION:
             fallback_matches.append((priority, row))
     if exact_matches:
         exact_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
@@ -635,17 +711,18 @@ def ensure_routing_log_worksheet(trace_id: str):
             return None
     return ws
 
-def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, location_hint: str, message: str, trace_id: str) -> bool:
+def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, location_hint: str, location_id: str, message: str, trace_id: str) -> bool:
     ws = ensure_routing_log_worksheet(trace_id)
     if not ws:
         logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=worksheet_unavailable")
         return False
+    resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     row = [
         now_tw_iso(),
         safe_str(user_id),
         safe_str(intent_name),
         safe_str(service_row.get("service_id")),
-        safe_str(location_hint) or safe_str(service_row.get("location")),
+        resolved_location,
         sanitize_incoming_text(message)[:500],
     ]
     try:
@@ -653,7 +730,9 @@ def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, 
         _invalidate_worksheet_caches(ROUTING_LOG_SHEET_NAME)
         logger.info(
             f"[{trace_id}] ROUTING_LOG_APPEND_OK user_id={safe_str(user_id)} intent_name={safe_str(intent_name)} "
-            f"service_id={safe_str(service_row.get('service_id'))} location={json.dumps(safe_str(location_hint) or safe_str(service_row.get('location')), ensure_ascii=False)}"
+            f"service_id={safe_str(service_row.get('service_id'))} "
+            f"location={json.dumps(resolved_location, ensure_ascii=False)} "
+            f"location_id={json.dumps(safe_str(location_id), ensure_ascii=False)}"
         )
         return True
     except Exception as e:
@@ -666,24 +745,27 @@ def log_routing_reply_result(
     intent_name: str,
     service_row: dict,
     location_hint: str,
+    location_id: str,
     reply_text: str,
     reply_ok: bool,
 ) -> None:
+    resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     logger.info(
         f"[{trace_id}] ROUTING_REPLY_RESULT "
         f"user_id={safe_str(user_id)} "
         f"intent_name={safe_str(intent_name)} "
         f"service_id={safe_str(service_row.get('service_id'))} "
-        f"location={json.dumps(safe_str(location_hint) or safe_str(service_row.get('location')), ensure_ascii=False)} "
+        f"location={json.dumps(resolved_location, ensure_ascii=False)} "
+        f"location_id={json.dumps(safe_str(location_id), ensure_ascii=False)} "
         f"reply_ok={reply_ok} "
         f"reply_preview={json.dumps(safe_str(reply_text)[:160], ensure_ascii=False)}"
     )
 
 
-def build_routing_reply(service_row: dict, language_group: str) -> str:
+def build_routing_reply(service_row: dict, language_group: str, resolved_region_key: str = "") -> str:
     contact_id = safe_str(service_row.get("contact_id"))
     contact_link = safe_str(service_row.get("contact_link"))
-    location = safe_str(service_row.get("location"))
+    location = safe_str(resolved_region_key) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     scope = safe_str(service_row.get("service_scope"))
     service_name = safe_str(service_row.get("service_name"))
 
@@ -708,7 +790,6 @@ def build_routing_reply(service_row: dict, language_group: str) -> str:
         lines.append(f"Liên hệ LINE: {contact_id}")
 
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
-
 def parse_sim_entities(text: str) -> Tuple[str, str, str]:
     normalized = normalize_routing_text(text)
 
@@ -774,12 +855,16 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
     service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
     alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+    canonical_sheet_name = safe_str(config_map.get("location_canonical_sheet"))
+    region_map_sheet_name = safe_str(config_map.get("location_region_map_sheet"))
     variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
     fallback_location = safe_str(config_map.get("fallback_location")) or ROUTING_FALLBACK_LOCATION
 
     intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
     service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
     alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
+    canonical_ws = get_routing_worksheet_by_name(trace_id, canonical_sheet_name) if canonical_sheet_name else None
+    region_map_ws = get_routing_worksheet_by_name(trace_id, region_map_sheet_name) if region_map_sheet_name else None
     variant_ws = get_routing_worksheet_by_name(trace_id, variant_sheet_name)
     if not intent_ws or not service_ws:
         logger.warning(
@@ -791,6 +876,8 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
     service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
     alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
+    canonical_rows = get_records_safe(canonical_ws, trace_id, canonical_sheet_name) if canonical_ws and canonical_sheet_name else []
+    region_rows = get_records_safe(region_map_ws, trace_id, region_map_sheet_name) if region_map_ws and region_map_sheet_name else []
     variant_rows = get_records_safe(variant_ws, trace_id, variant_sheet_name) if variant_ws else []
 
     intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
@@ -798,7 +885,26 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
         return None
 
-    location_hint = extract_location_alias(text, alias_rows)
+    location_id = ""
+    service_region_key = ""
+    location_hint = ""
+    location_resolution = None
+    if alias_rows and any(safe_str(row.get("location_id")) for row in alias_rows):
+        location_resolution = resolve_location_from_v2(text, alias_rows, canonical_rows, region_rows)
+        if location_resolution:
+            location_id = safe_str(location_resolution.get("location_id"))
+            service_region_key = safe_str(location_resolution.get("service_region_key"))
+            location_hint = service_region_key
+            logger.info(
+                f"[{trace_id}] ROUTING_LOCATION_V2_MATCH "
+                f"matched_alias={json.dumps(safe_str(location_resolution.get('matched_alias')), ensure_ascii=False)} "
+                f"location_id={json.dumps(location_id, ensure_ascii=False)} "
+                f"service_region_key={json.dumps(service_region_key, ensure_ascii=False)}"
+            )
+    if not location_hint:
+        location_hint = extract_location_alias(text, alias_rows)
+        service_region_key = location_hint
+
     service = choose_service_for_intent(intent_name, location_hint, service_rows)
     if not service and location_hint != fallback_location:
         service = choose_service_for_intent(intent_name, fallback_location, service_rows)
@@ -806,6 +912,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         logger.info(
             f"[{trace_id}] ROUTING_SERVICE_MISS intent_name={intent_name} "
             f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
+            f"location_id={json.dumps(location_id, ensure_ascii=False)} "
             f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
         )
         return None
@@ -815,11 +922,12 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         f"service_id={safe_str(service.get('service_id'))} "
         f"contact_id={safe_str(service.get('contact_id'))} "
         f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
+        f"location_id={json.dumps(location_id, ensure_ascii=False)} "
         f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
     )
 
     service_id = safe_str(service.get("service_id"))
-    final_reply_text = build_routing_reply(service, language_group)
+    final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key)
 
     if service_id == "SIM_TW_001" and variant_rows:
         network, duration, variant_type = parse_sim_entities(text)
@@ -842,6 +950,8 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         "intent_name": intent_name,
         "service_row": service,
         "location_hint": location_hint,
+        "location_id": location_id,
+        "service_region_key": service_region_key,
         "matched_keywords": matched_keywords,
     }
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
@@ -2181,6 +2291,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             intent_name=routing_result["intent_name"],
             service_row=routing_result["service_row"],
             location_hint=routing_result["location_hint"],
+            location_id=routing_result.get("location_id", ""),
             reply_text=reply_text,
             reply_ok=reply_ok,
         )
@@ -2190,6 +2301,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 intent_name=routing_result["intent_name"],
                 service_row=routing_result["service_row"],
                 location_hint=routing_result["location_hint"],
+                location_id=routing_result.get("location_id", ""),
                 message=text,
                 trace_id=trace_id,
             )
