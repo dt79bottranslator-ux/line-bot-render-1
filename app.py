@@ -116,6 +116,10 @@ LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER"
 SERVICE_VARIANT_MASTER_SHEET_NAME = "SERVICE_VARIANT_MASTER"
 ROUTING_LOG_SHEET_NAME = "ROUTING_LOG"
 ROUTING_LOG_HEADERS = ["timestamp", "user_id", "intent", "service_id", "location", "message"]
+ROUTING_MISS_HARVEST_SHEET_NAME = "ROUTING_MISS_HARVEST"
+ROUTING_MISS_HARVEST_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_guess", "location_token_guess", "candidate_aliases", "miss_type", "recommended_fix", "status", "reviewer_notes"]
+ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
+ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -215,6 +219,8 @@ _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 _ROUTING_CONFIG_SHARED_CACHE = {"config_map": None, "loaded_at_ts": 0.0}
 _ROUTING_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+_ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+_ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 def _now_ts() -> float:
     return time.time()
 def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
@@ -701,6 +707,183 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
         fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
         return fallback_matches[0][1]
     return None
+def collect_routing_location_candidates(text: str, alias_rows: List[dict]) -> List[dict]:
+    normalized = normalize_routing_text(text)
+    alias_index = build_location_alias_index(alias_rows or [])
+    results: List[dict] = []
+    seen = set()
+    for alias, items in alias_index.items():
+        if not _phrase_present(normalized, alias):
+            continue
+        for item in items:
+            target_key = safe_str(item.get("target_key"))
+            target_type = safe_str(item.get("target_type"))
+            dedupe_key = (alias, target_key, target_type)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            results.append({
+                "matched_alias": alias,
+                "target_key": target_key,
+                "target_type": target_type,
+            })
+    return results
+
+def extract_location_token_guess(text: str, matched_keywords: List[str]) -> str:
+    normalized = normalize_routing_text(text)
+    for keyword in sorted((matched_keywords or []), key=lambda x: len(safe_str(x)), reverse=True):
+        normalized_keyword = normalize_routing_text(keyword)
+        if not normalized_keyword:
+            continue
+        if normalized_keyword in normalized:
+            tail = normalized.split(normalized_keyword, 1)[1].strip(" ,.-")
+            if tail:
+                return tail[:80]
+    return ""
+
+def _ensure_generic_routing_queue_worksheet(trace_id: str, worksheet_name: str, headers: List[str], ready_cache: dict):
+    spreadsheet = open_routing_spreadsheet(trace_id)
+    if not spreadsheet:
+        return None
+    try:
+        ws = spreadsheet.worksheet(worksheet_name)
+    except gspread.WorksheetNotFound:
+        try:
+            ws = spreadsheet.add_worksheet(title=worksheet_name, rows=5000, cols=max(len(headers), 12))
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+            ready_cache["verified"] = True
+            ready_cache["loaded_at_ts"] = _now_ts()
+            logger.info(f"[{trace_id}] ROUTING_QUEUE_SHEET_CREATED worksheet_name={worksheet_name}")
+            return ws
+        except Exception as e:
+            logger.exception(f"[{trace_id}] ROUTING_QUEUE_SHEET_CREATE_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+            return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_QUEUE_SHEET_OPEN_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+        return None
+
+    verified = bool(ready_cache.get("verified"))
+    verified_loaded_at_ts = float(ready_cache.get("loaded_at_ts", 0.0) or 0.0)
+    if verified and _cache_is_fresh(verified_loaded_at_ts, GSHEET_VALUES_CACHE_TTL_SECONDS):
+        logger.info(f"[{trace_id}] ROUTING_QUEUE_WORKSHEET_READY_CACHE_HIT worksheet_name={worksheet_name}")
+        return ws
+
+    values = get_all_values_safe(ws, trace_id, worksheet_name)
+    if not values:
+        try:
+            ws.append_row(headers, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] ROUTING_QUEUE_HEADERS_INIT_OK worksheet_name={worksheet_name}")
+        except Exception as e:
+            logger.exception(f"[{trace_id}] ROUTING_QUEUE_HEADERS_INIT_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+            return None
+
+    ready_cache["verified"] = True
+    ready_cache["loaded_at_ts"] = _now_ts()
+    return ws
+
+def ensure_routing_miss_harvest_worksheet(trace_id: str):
+    return _ensure_generic_routing_queue_worksheet(
+        trace_id=trace_id,
+        worksheet_name=ROUTING_MISS_HARVEST_SHEET_NAME,
+        headers=ROUTING_MISS_HARVEST_HEADERS,
+        ready_cache=_ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE,
+    )
+
+def ensure_routing_slowpath_queue_worksheet(trace_id: str):
+    return _ensure_generic_routing_queue_worksheet(
+        trace_id=trace_id,
+        worksheet_name=ROUTING_SLOWPATH_QUEUE_SHEET_NAME,
+        headers=ROUTING_SLOWPATH_QUEUE_HEADERS,
+        ready_cache=_ROUTING_SLOWPATH_WORKSHEET_READY_CACHE,
+    )
+
+def append_routing_miss_event(
+    user_id: str,
+    raw_text: str,
+    normalized_text: str,
+    intent_guess: str,
+    location_token_guess: str,
+    candidate_aliases: List[str],
+    miss_type: str,
+    recommended_fix: str,
+    trace_id: str,
+    reviewer_notes: str = "",
+) -> bool:
+    ws = ensure_routing_miss_harvest_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_SKIPPED reason=worksheet_unavailable")
+        return False
+    row = [
+        now_tw_iso(),
+        safe_str(trace_id),
+        safe_str(user_id),
+        sanitize_incoming_text(raw_text)[:500],
+        safe_str(normalized_text)[:500],
+        safe_str(intent_guess),
+        safe_str(location_token_guess),
+        json.dumps(candidate_aliases or [], ensure_ascii=False),
+        safe_str(miss_type),
+        safe_str(recommended_fix),
+        "new",
+        safe_str(reviewer_notes),
+    ]
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(ROUTING_MISS_HARVEST_SHEET_NAME)
+        logger.info(
+            f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_OK user_id={safe_str(user_id)} intent_guess={safe_str(intent_guess)} "
+            f"miss_type={safe_str(miss_type)} recommended_fix={safe_str(recommended_fix)} "
+            f"location_token_guess={json.dumps(safe_str(location_token_guess), ensure_ascii=False)}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+def append_routing_slowpath_event(
+    user_id: str,
+    raw_text: str,
+    normalized_text: str,
+    detected_intent: str,
+    candidate_locations: List[str],
+    candidate_location_ids: List[str],
+    reason_code: str,
+    confidence: str,
+    action_needed: str,
+    trace_id: str,
+    reviewer_notes: str = "",
+) -> bool:
+    ws = ensure_routing_slowpath_queue_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] ROUTING_SLOWPATH_APPEND_SKIPPED reason=worksheet_unavailable")
+        return False
+    row = [
+        now_tw_iso(),
+        safe_str(trace_id),
+        safe_str(user_id),
+        sanitize_incoming_text(raw_text)[:500],
+        safe_str(normalized_text)[:500],
+        safe_str(detected_intent),
+        json.dumps(candidate_locations or [], ensure_ascii=False),
+        json.dumps(candidate_location_ids or [], ensure_ascii=False),
+        safe_str(reason_code),
+        safe_str(confidence),
+        safe_str(action_needed),
+        "new",
+        safe_str(reviewer_notes),
+    ]
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(ROUTING_SLOWPATH_QUEUE_SHEET_NAME)
+        logger.info(
+            f"[{trace_id}] ROUTING_SLOWPATH_APPEND_OK user_id={safe_str(user_id)} detected_intent={safe_str(detected_intent)} "
+            f"reason_code={safe_str(reason_code)} confidence={safe_str(confidence)} action_needed={safe_str(action_needed)}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_SLOWPATH_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
 def ensure_routing_log_worksheet(trace_id: str):
     spreadsheet = open_routing_spreadsheet(trace_id)
     if not spreadsheet:
@@ -890,6 +1073,8 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
     fallback_location = safe_str(config_map.get("fallback_location")) or ROUTING_FALLBACK_LOCATION
 
+    normalized_text = normalize_routing_text(text)
+
     intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
     service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
     if not intent_ws or not service_ws:
@@ -902,6 +1087,17 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
     intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
     if not intent_name:
+        append_routing_miss_event(
+            user_id=user_id,
+            raw_text=text,
+            normalized_text=normalized_text,
+            intent_guess="",
+            location_token_guess="",
+            candidate_aliases=[],
+            miss_type="intent_unclear",
+            recommended_fix="expand_intent_keywords",
+            trace_id=trace_id,
+        )
         logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
         return None
 
@@ -909,6 +1105,8 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
 
     alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
     alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
+    candidate_matches = collect_routing_location_candidates(text, alias_rows) if alias_rows else []
+    candidate_aliases = [safe_str(item.get("matched_alias")) for item in candidate_matches if safe_str(item.get("matched_alias"))]
 
     location_id = ""
     service_region_key = ""
@@ -941,10 +1139,61 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         location_hint = extract_location_alias(text, alias_rows)
         service_region_key = location_hint
 
+    location_token_guess = extract_location_token_guess(text, matched_keywords)
+
+    if intent_name == "thue_phong_tro" and not location_hint:
+        append_routing_miss_event(
+            user_id=user_id,
+            raw_text=text,
+            normalized_text=normalized_text,
+            intent_guess=intent_name,
+            location_token_guess=location_token_guess,
+            candidate_aliases=candidate_aliases,
+            miss_type="alias_missing",
+            recommended_fix="add_alias",
+            trace_id=trace_id,
+        )
+        append_routing_slowpath_event(
+            user_id=user_id,
+            raw_text=text,
+            normalized_text=normalized_text,
+            detected_intent=intent_name,
+            candidate_locations=[],
+            candidate_location_ids=[],
+            reason_code="missing_location",
+            confidence="low",
+            action_needed="review_alias",
+            trace_id=trace_id,
+        )
+
     service = choose_service_for_intent(intent_name, location_hint, service_rows)
     if not service and location_hint != fallback_location:
         service = choose_service_for_intent(intent_name, fallback_location, service_rows)
     if not service:
+        if location_hint or location_id:
+            append_routing_slowpath_event(
+                user_id=user_id,
+                raw_text=text,
+                normalized_text=normalized_text,
+                detected_intent=intent_name,
+                candidate_locations=[service_region_key or location_hint] if (service_region_key or location_hint) else [],
+                candidate_location_ids=[location_id] if location_id else [],
+                reason_code="missing_service_row",
+                confidence="medium" if location_hint else "low",
+                action_needed="review_service",
+                trace_id=trace_id,
+            )
+            append_routing_miss_event(
+                user_id=user_id,
+                raw_text=text,
+                normalized_text=normalized_text,
+                intent_guess=intent_name,
+                location_token_guess=location_token_guess,
+                candidate_aliases=candidate_aliases,
+                miss_type="service_missing",
+                recommended_fix="add_service_row",
+                trace_id=trace_id,
+            )
         logger.info(
             f"[{trace_id}] ROUTING_SERVICE_MISS intent_name={intent_name} "
             f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
@@ -982,6 +1231,17 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                 )
                 final_reply_text = build_sim_variant_reply(service, variant, language_group)
             else:
+                append_routing_miss_event(
+                    user_id=user_id,
+                    raw_text=text,
+                    normalized_text=normalized_text,
+                    intent_guess=intent_name,
+                    location_token_guess=location_token_guess,
+                    candidate_aliases=candidate_aliases,
+                    miss_type="variant_missing",
+                    recommended_fix="add_variant_row",
+                    trace_id=trace_id,
+                )
                 logger.info(
                     f"[{trace_id}] SIM_VARIANT_MISS service_id={service_id} network={network} "
                     f"duration={duration} type={variant_type}"
