@@ -1063,6 +1063,37 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
         lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
+def build_routing_smart_fallback_reply(intent_name: str, language_group: str, reason_code: str = "", location_token_guess: str = "") -> str:
+    lang = normalize_language_group(language_group)
+    token = safe_str(location_token_guess)
+    if intent_name == "thue_phong_tro" and reason_code in {"missing_location", "weak_location_match", "multi_location"}:
+        if lang == "id":
+            return "Saya sudah menerima kebutuhan cari kamar, tetapi belum bisa memastikan area. Kirim lagi nama area, nama distrik, atau lokasi dekat pabrik."[:LINE_TEXT_HARD_LIMIT]
+        if lang == "th":
+            return "ฉันรับคำขอหาห้องแล้ว แต่ยังระบุพื้นที่ไม่ชัดเจน กรุณาส่งชื่อเขต พื้นที่ หรือจุดใกล้โรงงานอีกครั้ง"[:LINE_TEXT_HARD_LIMIT]
+        if lang == "zh":
+            return "我已收到找房需求，但目前還無法確認地區。請再發一次地區名稱、行政區，或工廠附近地點。"[:LINE_TEXT_HARD_LIMIT]
+        if token:
+            return f"Tôi đã nhận nhu cầu tìm phòng, nhưng chưa xác định được khu vực '{token}'. Bạn gửi lại tên khu vực, quận/huyện, hoặc địa danh gần nhà máy."[:LINE_TEXT_HARD_LIMIT]
+        return "Tôi đã nhận nhu cầu tìm phòng, nhưng chưa xác định rõ khu vực. Bạn gửi lại tên khu vực, quận/huyện, hoặc địa danh gần nhà máy."[:LINE_TEXT_HARD_LIMIT]
+    if intent_name == "sim_mang_di_dong" and reason_code in {"missing_variant", "missing_service_row"}:
+        if lang == "id":
+            return "Saya sudah menerima kebutuhan SIM, tetapi paketnya belum cukup rõ. Kirim lagi dengan format: jaringan + durasi, misalnya OK 6 bulan atau Chunghwa 12 bulan."[:LINE_TEXT_HARD_LIMIT]
+        if lang == "th":
+            return "ฉันรับคำขอซิมแล้ว แต่ข้อมูลแพ็กเกจยังไม่พอ กรุณาส่งใหม่ในรูปแบบ: เครือข่าย + ระยะเวลา เช่น OK 6 เดือน หรือ Chunghwa 12 เดือน"[:LINE_TEXT_HARD_LIMIT]
+        if lang == "zh":
+            return "我已收到 SIM 需求，但套餐資訊還不夠。請依格式重發：電信商 + 期限，例如 OK 6 個月 或 Chunghwa 12 個月。"[:LINE_TEXT_HARD_LIMIT]
+        return "Tôi đã nhận nhu cầu SIM, nhưng chưa đủ thông tin gói. Bạn gửi lại theo mẫu: mạng + thời hạn, ví dụ OK 6 tháng hoặc Chunghwa 12 tháng."[:LINE_TEXT_HARD_LIMIT]
+    if reason_code in {"multi_intent", "short_ambiguous_text", "intent_unclear", "fallback_triggered"}:
+        if lang == "id":
+            return "Tôi thấy bạn đang hỏi chưa đủ rõ hoặc nhiều nhu cầu cùng lúc. Bạn gửi từng nhu cầu riêng giúp tôi: phòng hoặc SIM trước."[:LINE_TEXT_HARD_LIMIT]
+        if lang == "th":
+            return "ข้อความนี้ยังไม่ชัดเจนหรือมีหลายความต้องการพร้อมกัน กรุณาส่งทีละเรื่องก่อน: ห้องพัก หรือ SIM"[:LINE_TEXT_HARD_LIMIT]
+        if lang == "zh":
+            return "你的需求目前還不夠明確，或同時包含多個需求。請先分開發送：找房或 SIM。"[:LINE_TEXT_HARD_LIMIT]
+        return "Tôi thấy bạn đang hỏi chưa đủ rõ hoặc nhiều nhu cầu cùng lúc. Bạn gửi từng nhu cầu riêng giúp tôi: phòng hoặc SIM trước."[:LINE_TEXT_HARD_LIMIT]
+    return "Tôi đã nhận yêu cầu, nhưng chưa đủ dữ liệu để xử lý chính xác. Bạn gửi lại rõ hơn giúp tôi."[:LINE_TEXT_HARD_LIMIT]
+
 def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_id: str = "") -> Optional[dict]:
     config_map = load_bot_config_map(trace_id)
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
@@ -1099,7 +1130,16 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             trace_id=trace_id,
         )
         logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
-        return None
+        return {
+            "reply_text": build_routing_smart_fallback_reply("", language_group, reason_code="intent_unclear"),
+            "intent_name": "",
+            "service_row": None,
+            "location_hint": "",
+            "location_id": "",
+            "service_region_key": "",
+            "matched_keywords": [],
+            "result_type": "smart_fallback",
+        }
 
     service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
 
@@ -1141,7 +1181,10 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
 
     location_token_guess = extract_location_token_guess(text, matched_keywords)
 
+    smart_fallback_reply = ""
+
     if intent_name == "thue_phong_tro" and not location_hint:
+        smart_fallback_reply = build_routing_smart_fallback_reply(intent_name, language_group, reason_code="missing_location", location_token_guess=location_token_guess)
         append_routing_miss_event(
             user_id=user_id,
             raw_text=text,
@@ -1200,7 +1243,16 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             f"location_id={json.dumps(location_id, ensure_ascii=False)} "
             f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
         )
-        return None
+        return {
+            "reply_text": smart_fallback_reply or build_routing_smart_fallback_reply(intent_name, language_group, reason_code="fallback_triggered", location_token_guess=location_token_guess),
+            "intent_name": intent_name,
+            "service_row": None,
+            "location_hint": location_hint,
+            "location_id": location_id,
+            "service_region_key": service_region_key,
+            "matched_keywords": matched_keywords,
+            "result_type": "smart_fallback",
+        }
 
     logger.info(
         f"[{trace_id}] ROUTING_MATCH_OK intent_name={intent_name} "
@@ -1242,6 +1294,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                     recommended_fix="add_variant_row",
                     trace_id=trace_id,
                 )
+                final_reply_text = build_routing_smart_fallback_reply(intent_name, language_group, reason_code="missing_variant")
                 logger.info(
                     f"[{trace_id}] SIM_VARIANT_MISS service_id={service_id} network={network} "
                     f"duration={duration} type={variant_type}"
@@ -1255,6 +1308,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         "location_id": location_id,
         "service_region_key": service_region_key,
         "matched_keywords": matched_keywords,
+        "result_type": "routed",
     }
 
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
@@ -2587,7 +2641,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             reply_text = build_default_intent_reply(text, current_language, trace_id)
             flow_used = "default"
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
-    if routing_result:
+    if routing_result and routing_result.get("service_row"):
         log_routing_reply_result(
             trace_id=trace_id,
             user_id=user_id,
