@@ -708,6 +708,46 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
         fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
         return fallback_matches[0][1]
     return None
+def build_location_token_guesses(text: str, matched_keywords: List[str]) -> List[str]:
+    normalized = normalize_routing_text(text)
+    base_segment = extract_location_token_guess(text, matched_keywords) or normalized
+    raw_parts = re.split(r"\b(?:hoac la|hoac|or|hay|va)\b|[,/;]+", base_segment)
+    fillers_pattern = r"^(?:khu|o|tai|gan|quan|huyen|xa|phuong|thi tran|thi xa|tp)\s+"
+    token_guesses: List[str] = []
+    seen = set()
+    for part in raw_parts:
+        part = safe_str(part).strip(" ,.-")
+        part = re.sub(fillers_pattern, "", part).strip(" ,.-")
+        if len(part) < 3:
+            continue
+        variants = [part, part.replace(" ", "")]
+        for variant in variants:
+            variant = safe_str(variant)
+            if not variant or variant in seen:
+                continue
+            seen.add(variant)
+            token_guesses.append(variant[:80])
+    if normalized and normalized not in seen:
+        token_guesses.append(normalized[:80])
+    return token_guesses
+
+
+def build_phonetic_skeleton(value: str) -> str:
+    normalized = normalize_routing_text(value)
+    replacements = [
+        ("ph", "f"),
+        ("th", "t"),
+        ("kh", "k"),
+        ("qu", "q"),
+        ("sh", "s"),
+        ("zh", "z"),
+        ("ch", "c"),
+    ]
+    for src, dst in replacements:
+        normalized = normalized.replace(src, dst)
+    return "".join(ch for ch in normalized if ch not in "aeiouy ")
+
+
 def score_location_candidate(alias: str, item: dict, normalized_text: str, token_guesses: List[str]) -> int:
     alias_type = safe_str(item.get("alias_type")).lower()
     base_score_map = {
@@ -1286,7 +1326,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         if region_map_ws and region_map_sheet_name:
             region_rows = get_records_safe(region_map_ws, trace_id, region_map_sheet_name)
 
-    candidate_matches = collect_routing_location_candidates(text, alias_rows) if alias_rows else []
+    candidate_matches = collect_routing_location_candidates(text, alias_rows, matched_keywords) if alias_rows else []
     candidate_aliases = [safe_str(item.get("matched_alias")) for item in candidate_matches if safe_str(item.get("matched_alias"))]
     for candidate in candidate_matches:
         logger.info(
