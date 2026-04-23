@@ -11,93 +11,72 @@ import logging
 import unicodedata
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Tuple, Optional, List
-
 import requests
 import gspread
 from google.oauth2.service_account import Credentials
 from flask import Flask, request, jsonify, g
-
 app = Flask(__name__)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
 @app.route("/", methods=["GET", "HEAD"])
 def root_health():
     return "OK", 200
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "ok": True,
         "app_version": APP_VERSION,
     }), 200
-
 def safe_str(v) -> str:
     return str(v).strip() if v else ""
-
 def sanitize_incoming_text(text: str) -> str:
     raw = safe_str(text)
     if not raw:
         return ""
-
     normalized = unicodedata.normalize("NFKC", raw)
     normalized = re.sub(r"[\u200B-\u200F\u2060\uFEFF]", "", normalized)
     normalized = "".join(ch for ch in normalized if ch == "\n" or unicodedata.category(ch)[0] != "C")
     normalized = re.sub(r"[ \t\r\f\v]+", " ", normalized)
     normalized = re.sub(r"[¥\\]+$", "", normalized).strip()
     return normalized
-
 def is_supported_flow(value: str) -> bool:
     normalized = safe_str(value)
     return normalized in {FLOW_WORKER, FLOW_ADS}
-
 def is_persistent_flow_expired(updated_at_value: str) -> bool:
     updated_at_dt = parse_iso_datetime(updated_at_value)
     if not updated_at_dt:
         return True
     age_seconds = int((now_tw_dt() - updated_at_dt).total_seconds())
     return age_seconds > PERSISTENT_FLOW_TTL_SECONDS
-
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "").strip()
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "").strip()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "").strip()
-
 LINE_RICH_MENU_ID_VI = os.getenv("LINE_RICH_MENU_ID_VI", "").strip()
 LINE_RICH_MENU_ID_ID = os.getenv("LINE_RICH_MENU_ID_ID", "").strip()
 LINE_RICH_MENU_ID_TH = os.getenv("LINE_RICH_MENU_ID_TH", "").strip()
 LINE_RICH_MENU_ID_ZH = os.getenv("LINE_RICH_MENU_ID_ZH", "").strip()
-
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
 INTERNAL_SYNC_TOKEN = os.getenv("INTERNAL_SYNC_TOKEN", "").strip()
 USER_STATE_SHEET_NAME = "user_state"
-
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").strip()
 ADMIN_LIST = [x.strip() for x in ADMIN_IDS.split(",") if x.strip()]
-
 ALL_COOLDOWN_SECONDS = int(os.getenv("ALL_COOLDOWN_SECONDS", "15").strip() or "15")
 MAX_ALL_CHARS = int(os.getenv("MAX_ALL_CHARS", "500").strip() or "500")
-
 RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
-
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V2_ALIAS_UI"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
-
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
 OUTBOUND_TIMEOUT = (CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS)
-
 FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 LINE_TEXT_HARD_LIMIT = 5000
 RATE_LIMIT_STORE_MAX_KEYS = 5000
@@ -105,10 +84,8 @@ ERROR_BODY_LOG_LIMIT = 800
 PROCESSED_EVENT_TTL_SECONDS = int(os.getenv("PROCESSED_EVENT_TTL_SECONDS", "21600").strip() or "21600")
 PROCESSED_EVENT_MAX_KEYS = int(os.getenv("PROCESSED_EVENT_MAX_KEYS", "10000").strip() or "10000")
 PROCESSED_EVENT_SHEET_NAME = os.getenv("PROCESSED_EVENT_SHEET_NAME", "processed_event_state").strip() or "processed_event_state"
-
 LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
-
 WORKER_ENTRY_COMMAND = "/worker"
 ADS_ENTRY_COMMAND = "/ads"
 RESET_ENTRY_COMMAND = "/reset"
@@ -117,14 +94,12 @@ STATUS_ENTRY_COMMAND = "/status"
 HELP_ENTRY_COMMAND = "/help"
 LANG_COMMAND_PREFIX = "/lang"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th", "zh"}
-
 RICH_MENU_ID_BY_LANGUAGE = {
     "vi": LINE_RICH_MENU_ID_VI,
     "id": LINE_RICH_MENU_ID_ID,
     "th": LINE_RICH_MENU_ID_TH,
     "zh": LINE_RICH_MENU_ID_ZH,
 }
-
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
 OWNER_ADS_INPUT_SHEET_NAME = "OWNER_ADS_INPUT"
 OWNER_SETTINGS_SHEET_NAME = "OWNER_SETTINGS"
@@ -133,11 +108,11 @@ ADS_CLICK_LOG_SHEET_NAME = "ads_click_log"
 ADS_PHONE_LEADS_SHEET_NAME = "ads_phone_leads"
 TENANT_REGISTRY_SHEET_NAME = "TENANT_REGISTRY"
 SYSTEM_META_SHEET_NAME = "SYSTEM_META"
-
 BOT_CONFIG_SHEET_NAME = "BOT_CONFIG"
 INTENT_MASTER_SHEET_NAME = "INTENT_MASTER"
 SERVICE_MASTER_SHEET_NAME = "SERVICE_MASTER"
 PROVIDER_MASTER_SHEET_NAME = "PROVIDER_MASTER"
+LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER"
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -146,26 +121,41 @@ ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
     "th": "ติดต่อ LINE",
     "zh": "LINE 聯絡",
 }
+ROUTING_LABELS_BY_LANGUAGE = {
+    "vi": {"location": "Khu vực phục vụ", "service": "Dịch vụ"},
+    "id": {"location": "Area layanan", "service": "Layanan"},
+    "th": {"location": "พื้นที่ให้บริการ", "service": "บริการ"},
+    "zh": {"location": "服務區域", "service": "服務"},
+}
 LOCATION_ALIAS_MAP = {
-    "台中": ["台中", "đài trung", "dai trung", "taichung", "taizhong"],
+    "台中": ["台中", "đài trung", "dai trung", "taichung", "taizhong", "xitun", "taiping"],
     "台南": ["台南", "đài nam", "dai nam", "tainan"],
     "高雄": ["高雄", "cao hùng", "cao hung", "kaohsiung"],
     "台北": ["台北", "đài bắc", "dai bac", "taipei"],
+    "桃園": ["桃園", "đào viên", "dao vien", "taoyuan", "zhongli"],
 }
-
+LOCATION_DISPLAY_MAP = {
+    "TW_ALL": "Toàn Đài Loan",
+    "台中": "Đài Trung",
+    "台南": "Đài Nam",
+    "高雄": "Cao Hùng",
+    "台北": "Đài Bắc",
+    "桃園": "Đào Viên",
+    "新北": "Tân Bắc",
+    "屏東": "Bình Đông",
+    "嘉義": "Gia Nghĩa",
+    "雲林": "Vân Lâm",
+}
 ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
 ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
 ADS_VIEW_TTL_SECONDS = int(os.getenv("ADS_VIEW_TTL_SECONDS", "300").strip() or "300")
 ADS_DETAIL_TTL_SECONDS = int(os.getenv("ADS_DETAIL_TTL_SECONDS", "300").strip() or "300")
 WORKSPACE_VALIDATION_CACHE_TTL_SECONDS = int(os.getenv("WORKSPACE_VALIDATION_CACHE_TTL_SECONDS", "30").strip() or "30")
-
 ADS_TYPE_JOB_OPENING = "job_opening"
 ADS_TYPE_SERVICE_OFFER = "service_offer"
-
 VISIBILITY_SAME_LANGUAGE_ONLY = "same_language_only"
 VISIBILITY_CROSS_LANGUAGE_ALLOWED = "cross_language_allowed"
 VISIBILITY_VIEWER_LOCALIZED = "viewer_localized"
-
 ACTIVE_AD_STATUSES = {"active"}
 SUPPORTED_AD_TYPES = {ADS_TYPE_JOB_OPENING, ADS_TYPE_SERVICE_OFFER}
 SUPPORTED_VISIBILITY_POLICIES = {
@@ -173,31 +163,23 @@ SUPPORTED_VISIBILITY_POLICIES = {
     VISIBILITY_CROSS_LANGUAGE_ALLOWED,
     VISIBILITY_VIEWER_LOCALIZED,
 }
-
 FLOW_WORKER = "worker"
 FLOW_ADS = "ads"
-
 def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
-
 def now_tw_dt() -> datetime:
     return datetime.now(TW_TZ)
-
 def make_trace_id() -> str:
     return f"trc_{uuid.uuid4().hex[:12]}"
-
 def get_now_ts() -> int:
     return int(time.time())
-
 def ms_since(start_perf: float) -> int:
     return int((time.perf_counter() - start_perf) * 1000)
-
 def normalize_language_group(value: str) -> str:
     lang = safe_str(value).lower()
     if lang in SUPPORTED_LANGUAGE_GROUPS:
         return lang
     return DEFAULT_LANGUAGE_GROUP if DEFAULT_LANGUAGE_GROUP in SUPPORTED_LANGUAGE_GROUPS else "vi"
-
 def parse_iso_datetime(value: str) -> Optional[datetime]:
     raw = safe_str(value)
     if not raw:
@@ -210,7 +192,6 @@ def parse_iso_datetime(value: str) -> Optional[datetime]:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=TW_TZ)
     return dt.astimezone(TW_TZ)
-
 def is_ad_active_in_time_window(start_at: str, end_at: str) -> bool:
     now_dt = now_tw_dt()
     start_dt = parse_iso_datetime(start_at)
@@ -220,30 +201,22 @@ def is_ad_active_in_time_window(start_at: str, end_at: str) -> bool:
     if end_dt and now_dt > end_dt:
         return False
     return True
-
 _GSPREAD_CLIENT = None
-
 GSHEET_SPREADSHEET_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_SPREADSHEET_CACHE_TTL_SECONDS", "300").strip() or "300")
 GSHEET_VALUES_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_VALUES_CACHE_TTL_SECONDS", "45").strip() or "45")
-
 _SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 _WORKSHEET_VALUES_SHARED_CACHE: Dict[str, dict] = {}
 _WORKSHEET_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
-
 _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
-
 def _now_ts() -> float:
     return time.time()
-
 def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
     return bool(loaded_at_ts) and (_now_ts() - loaded_at_ts) < ttl_seconds
-
 def _is_gsheet_quota_error(exc: Exception) -> bool:
     text = safe_str(exc)
     return "429" in text or "Quota exceeded" in text or "Read requests per minute per user" in text
-
 def _values_to_records(values: List[List[str]]) -> List[dict]:
     if not values:
         return []
@@ -261,7 +234,6 @@ def _values_to_records(values: List[List[str]]) -> List[dict]:
             item[header] = safe_str(row[idx]) if idx < len(row) else ""
         records.append(item)
     return records
-
 def _invalidate_worksheet_caches(worksheet_name: str) -> None:
     values_cache = getattr(g, "_dt79_values_cache", None)
     if isinstance(values_cache, dict):
@@ -271,7 +243,6 @@ def _invalidate_worksheet_caches(worksheet_name: str) -> None:
         records_cache.pop(worksheet_name, None)
     _WORKSHEET_VALUES_SHARED_CACHE.pop(worksheet_name, None)
     _WORKSHEET_RECORDS_SHARED_CACHE.pop(worksheet_name, None)
-
 def get_google_credentials(trace_id: str):
     if not GOOGLE_SERVICE_ACCOUNT_JSON:
         logger.error(f"[{trace_id}] GSHEET_CREDENTIALS_MISSING")
@@ -291,7 +262,6 @@ def get_google_credentials(trace_id: str):
     except Exception as e:
         logger.exception(f"[{trace_id}] GSHEET_CREDENTIALS_INVALID exception={type(e).__name__}:{e}")
         return None
-
 def get_gspread_client(trace_id: str):
     global _GSPREAD_CLIENT
     if _GSPREAD_CLIENT is not None:
@@ -306,20 +276,17 @@ def get_gspread_client(trace_id: str):
     except Exception as e:
         logger.exception(f"[{trace_id}] GSHEET_CLIENT_INIT_FAILED exception={type(e).__name__}:{e}")
         return None
-
 def open_spreadsheet(trace_id: str):
     cached = getattr(g, "_dt79_spreadsheet", None)
     if cached is not None:
         logger.info(f"[{trace_id}] SPREADSHEET_CACHE_HIT name={PHASE1_SPREADSHEET_NAME}")
         return cached
-
     shared = _SPREADSHEET_SHARED_CACHE.get("spreadsheet")
     loaded_at_ts = float(_SPREADSHEET_SHARED_CACHE.get("loaded_at_ts", 0.0) or 0.0)
     if shared is not None and _cache_is_fresh(loaded_at_ts, GSHEET_SPREADSHEET_CACHE_TTL_SECONDS):
         g._dt79_spreadsheet = shared
         logger.info(f"[{trace_id}] SPREADSHEET_SHARED_CACHE_HIT name={PHASE1_SPREADSHEET_NAME}")
         return shared
-
     client = get_gspread_client(trace_id)
     if not client:
         return shared
@@ -337,10 +304,8 @@ def open_spreadsheet(trace_id: str):
             logger.info(f"[{trace_id}] SPREADSHEET_STALE_CACHE_FALLBACK name={PHASE1_SPREADSHEET_NAME}")
             return shared
         return None
-
 def normalize_header_key(value: str) -> str:
     return safe_str(value).strip().lower()
-
 def build_header_index_map(headers: List[str]) -> Dict[str, int]:
     result = {}
     for idx, header in enumerate(headers):
@@ -348,7 +313,6 @@ def build_header_index_map(headers: List[str]) -> Dict[str, int]:
         if key and key not in result:
             result[key] = idx
     return result
-
 def get_worksheet_by_name(trace_id: str, worksheet_name: str):
     worksheet_cache = getattr(g, "_dt79_worksheets", None)
     if worksheet_cache is None:
@@ -362,7 +326,6 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
         worksheet_cache[worksheet_name] = ws
         logger.info(f"[{trace_id}] WORKSHEET_SHARED_CACHE_HIT worksheet_name={worksheet_name}")
         return ws
-
     spreadsheet = open_spreadsheet(trace_id)
     if not spreadsheet:
         return None
@@ -383,7 +346,6 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
             logger.info(f"[{trace_id}] WORKSHEET_STALE_CACHE_FALLBACK worksheet_name={worksheet_name}")
             return ws
         return None
-
 def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str]]:
     values_cache = getattr(g, "_dt79_values_cache", None)
     if values_cache is None:
@@ -393,14 +355,12 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
         values = values_cache[worksheet_name]
         logger.info(f"[{trace_id}] WORKSHEET_VALUES_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
         return values
-
     shared_entry = _WORKSHEET_VALUES_SHARED_CACHE.get(worksheet_name)
     if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
         values = shared_entry.get("values", []) or []
         values_cache[worksheet_name] = values
         logger.info(f"[{trace_id}] WORKSHEET_VALUES_SHARED_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
         return values
-
     try:
         values = ws.get_all_values()
         values_cache[worksheet_name] = values
@@ -416,7 +376,6 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
             logger.info(f"[{trace_id}] WORKSHEET_VALUES_STALE_CACHE_FALLBACK worksheet_name={worksheet_name} row_count={len(values)}")
             return values
         return []
-
 def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
     records_cache = getattr(g, "_dt79_records_cache", None)
     if records_cache is None:
@@ -426,21 +385,18 @@ def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
         records = records_cache[worksheet_name]
         logger.info(f"[{trace_id}] WORKSHEET_RECORDS_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
         return records
-
     shared_entry = _WORKSHEET_RECORDS_SHARED_CACHE.get(worksheet_name)
     if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
         records = shared_entry.get("records", []) or []
         records_cache[worksheet_name] = records
         logger.info(f"[{trace_id}] WORKSHEET_RECORDS_SHARED_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
         return records
-
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     records = _values_to_records(values)
     records_cache[worksheet_name] = records
     _WORKSHEET_RECORDS_SHARED_CACHE[worksheet_name] = {"records": records, "loaded_at_ts": _now_ts()}
     logger.info(f"[{trace_id}] WORKSHEET_RECORDS_DERIVED_OK worksheet_name={worksheet_name} count={len(records)}")
     return records
-
 def find_first_row_index_by_column_value(ws, column_name: str, expected_value: str, trace_id: str, worksheet_name: str) -> int:
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
@@ -459,7 +415,6 @@ def find_first_row_index_by_column_value(ws, column_name: str, expected_value: s
             return row_idx
     logger.info(f"[{trace_id}] FIND_ROW_NOT_FOUND worksheet_name={worksheet_name} column_name={column_name} expected_value={expected_value}")
     return 0
-
 def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str) -> bool:
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
@@ -473,17 +428,14 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
             logger.error(f"[{trace_id}] UPDATE_ROW_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
             return False
         normalized_items.append((col_idx, column_name, safe_str(value)))
-
     min_col_idx = min(col_idx for col_idx, _, _ in normalized_items)
     max_col_idx = max(col_idx for col_idx, _, _ in normalized_items)
     row_values = [""] * (max_col_idx - min_col_idx + 1)
     for col_idx, _, value in normalized_items:
         row_values[col_idx - min_col_idx] = value
-
     start_col_letter = chr(ord("A") + min_col_idx)
     end_col_letter = chr(ord("A") + max_col_idx)
     target_range = f"{start_col_letter}{row_index}:{end_col_letter}{row_index}"
-
     try:
         ws.update(target_range, [row_values], value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(worksheet_name)
@@ -496,21 +448,17 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
     except Exception as e:
         logger.exception(f"[{trace_id}] UPDATE_ROW_FIELDS_FAILED worksheet_name={worksheet_name} row_index={row_index} exception={type(e).__name__}:{e}")
         return False
-
-
 def open_routing_spreadsheet(trace_id: str):
     cached = getattr(g, "_dt79_routing_spreadsheet", None)
     if cached is not None:
         logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_CACHE_HIT name={ROUTING_SPREADSHEET_NAME}")
         return cached
-
     shared = _ROUTING_SPREADSHEET_SHARED_CACHE.get("spreadsheet")
     loaded_at_ts = float(_ROUTING_SPREADSHEET_SHARED_CACHE.get("loaded_at_ts", 0.0) or 0.0)
     if shared is not None and _cache_is_fresh(loaded_at_ts, GSHEET_SPREADSHEET_CACHE_TTL_SECONDS):
         g._dt79_routing_spreadsheet = shared
         logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_SHARED_CACHE_HIT name={ROUTING_SPREADSHEET_NAME}")
         return shared
-
     client = get_gspread_client(trace_id)
     if not client:
         return shared
@@ -528,8 +476,6 @@ def open_routing_spreadsheet(trace_id: str):
             logger.info(f"[{trace_id}] ROUTING_SPREADSHEET_STALE_CACHE_FALLBACK name={ROUTING_SPREADSHEET_NAME}")
             return shared
         return None
-
-
 def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
     worksheet_cache = getattr(g, "_dt79_routing_worksheets", None)
     if worksheet_cache is None:
@@ -543,7 +489,6 @@ def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
         worksheet_cache[worksheet_name] = ws
         logger.info(f"[{trace_id}] ROUTING_WORKSHEET_SHARED_CACHE_HIT worksheet_name={worksheet_name}")
         return ws
-
     spreadsheet = open_routing_spreadsheet(trace_id)
     if not spreadsheet:
         return None
@@ -564,8 +509,6 @@ def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
             logger.info(f"[{trace_id}] ROUTING_WORKSHEET_STALE_CACHE_FALLBACK worksheet_name={worksheet_name}")
             return ws
         return None
-
-
 def load_bot_config_map(trace_id: str) -> Dict[str, str]:
     ws = get_routing_worksheet_by_name(trace_id, BOT_CONFIG_SHEET_NAME)
     if not ws:
@@ -579,23 +522,33 @@ def load_bot_config_map(trace_id: str) -> Dict[str, str]:
             config_map[key] = value
     logger.info(f"[{trace_id}] ROUTING_CONFIG_READY keys={json.dumps(sorted(config_map.keys()), ensure_ascii=False)}")
     return config_map
-
-
 def normalize_routing_text(value: str) -> str:
     normalized = _normalize_match_text(value)
     normalized = normalized.replace("đ", "d").replace("Đ", "D").lower()
     return normalized
-
-
-def extract_location_alias(text: str) -> str:
+def build_location_alias_index(alias_rows: List[dict]) -> Dict[str, List[str]]:
+    alias_index: Dict[str, List[str]] = {}
+    for row in alias_rows:
+        root_location = safe_str(row.get("root_location"))
+        normalized_alias = normalize_routing_text(row.get("normalized_alias") or row.get("alias_text"))
+        if not root_location or not normalized_alias:
+            continue
+        alias_index.setdefault(root_location, [])
+        if normalized_alias not in alias_index[root_location]:
+            alias_index[root_location].append(normalized_alias)
+    return alias_index
+def extract_location_alias(text: str, alias_rows: Optional[List[dict]] = None) -> str:
     normalized = normalize_routing_text(text)
+    alias_index = build_location_alias_index(alias_rows or [])
+    for canonical, aliases in alias_index.items():
+        for alias in aliases:
+            if _phrase_present(normalized, alias):
+                return canonical
     for canonical, aliases in LOCATION_ALIAS_MAP.items():
         for alias in aliases:
             if _phrase_present(normalized, alias):
                 return canonical
     return ""
-
-
 def detect_routing_intent(text: str, intent_rows: List[dict]) -> Tuple[str, List[str]]:
     normalized = normalize_routing_text(text)
     best_intent = ""
@@ -618,8 +571,6 @@ def detect_routing_intent(text: str, intent_rows: List[dict]) -> Tuple[str, List
             best_intent = intent_name
             best_hits = hits
     return best_intent, best_hits
-
-
 def filter_active_services(service_rows: List[dict]) -> List[dict]:
     results = []
     for row in service_rows:
@@ -632,14 +583,11 @@ def filter_active_services(service_rows: List[dict]) -> List[dict]:
             continue
         results.append(row)
     return results
-
-
 def choose_service_for_intent(intent_name: str, location_hint: str, service_rows: List[dict]) -> Optional[dict]:
     normalized_location = safe_str(location_hint)
     candidates = [row for row in filter_active_services(service_rows) if safe_str(row.get("intent_name")) == intent_name]
     if not candidates:
         return None
-
     exact_matches = []
     fallback_matches = []
     for row in candidates:
@@ -649,7 +597,6 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
             exact_matches.append((priority, row))
         elif location == ROUTING_FALLBACK_LOCATION:
             fallback_matches.append((priority, row))
-
     if exact_matches:
         exact_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
         return exact_matches[0][1]
@@ -657,45 +604,43 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
         fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
         return fallback_matches[0][1]
     return None
-
-
 def build_routing_reply(service_row: dict, language_group: str) -> str:
     lang = normalize_language_group(language_group)
     prefix = ROUTING_REPLY_PREFIX_BY_LANGUAGE.get(lang, ROUTING_REPLY_PREFIX_BY_LANGUAGE["vi"])
+    labels = ROUTING_LABELS_BY_LANGUAGE.get(lang, ROUTING_LABELS_BY_LANGUAGE["vi"])
     contact_id = safe_str(service_row.get("contact_id"))
-    service_name = safe_str(service_row.get("service_name"))
     location = safe_str(service_row.get("location"))
-    scope = safe_str(service_row.get("service_scope"))
+    scope = safe_str(service_row.get("service_scope")) or safe_str(service_row.get("service_name"))
+    display_location = LOCATION_DISPLAY_MAP.get(location, location)
     lines = [f"{prefix}: {contact_id}"]
-    if service_name:
-        lines.append(f"Dịch vụ: {service_name}")
-    if location:
-        lines.append(f"Khu vực: {location}")
+    if display_location:
+        lines.append(f"{labels['location']}: {display_location}")
     if scope:
-        lines.append(f"Phạm vi: {scope}")
-    return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
-
-
+        lines.append(f"{labels['service']}: {scope}")
+__PLACEHOLDER__
 def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Optional[str]:
     config_map = load_bot_config_map(trace_id)
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
     service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
+    alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
     fallback_location = safe_str(config_map.get("fallback_location")) or ROUTING_FALLBACK_LOCATION
-
     intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
     service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
+    alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
     if not intent_ws or not service_ws:
-        logger.warning(f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} service_ws={bool(service_ws)}")
+        logger.warning(
+            f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} "
+            f"service_ws={bool(service_ws)} alias_ws={bool(alias_ws)}"
+        )
         return None
-
     intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
     service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
+    alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
     intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
     if not intent_name:
         logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
         return None
-
-    location_hint = extract_location_alias(text)
+    location_hint = extract_location_alias(text, alias_rows)
     service = choose_service_for_intent(intent_name, location_hint, service_rows)
     if not service and location_hint != fallback_location:
         service = choose_service_for_intent(intent_name, fallback_location, service_rows)
@@ -706,7 +651,6 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Op
             f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
         )
         return None
-
     logger.info(
         f"[{trace_id}] ROUTING_MATCH_OK intent_name={intent_name} "
         f"service_id={safe_str(service.get('service_id'))} "
@@ -715,20 +659,16 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Op
         f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
     )
     return build_routing_reply(service, language_group)
-
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
 _ADS_DETAIL_CACHE: Dict[str, dict] = {}
 _WORKSPACE_VALIDATION_CACHE = {"result": None, "loaded_at_ts": 0}
 _USER_FLOW_STATE: Dict[str, dict] = {}
-
 USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
 PROCESSED_EVENT_HEADERS = ["event_key", "processed_at", "trace_id", "webhook_event_id", "message_id", "reply_token", "user_id", "event_type"]
 EVENT_PROCESSING_LOCK_SECONDS = int(os.getenv("EVENT_PROCESSING_LOCK_SECONDS", "120").strip() or "120")
-
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
 _PROCESSED_EVENT_STATE: Dict[str, dict] = {}
-
 LOCALIZED_TEXT = {
     "vi": {
         "busy": "Hệ thống bận, thử lại sau.",
@@ -859,21 +799,16 @@ LOCALIZED_TEXT = {
         "rich_menu_switch_failed": "語言已儲存，但切換選單失敗。",
     },
 }
-
 def t(language_group: str, key: str, **kwargs) -> str:
     lang = normalize_language_group(language_group)
     template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
     return template.format(**kwargs)
-
 def make_processing_marker() -> str:
     return f"PROCESSING::{now_tw_iso()}"
-
 def make_done_marker() -> str:
     return f"DONE::{now_tw_iso()}"
-
 def make_failed_marker() -> str:
     return f"FAILED::{now_tw_iso()}"
-
 def parse_processed_state_marker(value: str) -> Tuple[str, Optional[datetime]]:
     raw = safe_str(value)
     if not raw:
@@ -888,15 +823,12 @@ def parse_processed_state_marker(value: str) -> Tuple[str, Optional[datetime]]:
     if legacy_dt:
         return "done", legacy_dt
     return "done", None
-
 def is_processing_marker_fresh(marker_dt: Optional[datetime]) -> bool:
     if not marker_dt:
         return False
     age_seconds = int((now_tw_dt() - marker_dt).total_seconds())
     return age_seconds <= EVENT_PROCESSING_LOCK_SECONDS
-
 # --- processed event state ---
-
 def prune_processed_event_state(trace_id: str) -> None:
     now_ts = get_now_ts()
     expired_keys = []
@@ -917,7 +849,6 @@ def prune_processed_event_state(trace_id: str) -> None:
         _PROCESSED_EVENT_STATE.pop(oldest_key, None)
     if expired_keys:
         logger.info(f"[{trace_id}] PROCESSED_EVENT_STATE_PRUNED removed={len(expired_keys)}")
-
 def ensure_processed_event_worksheet(trace_id: str):
     spreadsheet = open_spreadsheet(trace_id)
     if not spreadsheet:
@@ -936,7 +867,6 @@ def ensure_processed_event_worksheet(trace_id: str):
     except Exception as e:
         logger.exception(f"[{trace_id}] PROCESSED_EVENT_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
         return None
-
     values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME)
     if not values:
         try:
@@ -947,7 +877,6 @@ def ensure_processed_event_worksheet(trace_id: str):
             return None
         return ws
     return ws
-
 def get_event_unique_key(event: dict) -> str:
     webhook_event_id = safe_str(event.get("webhookEventId"))
     if webhook_event_id:
@@ -960,7 +889,6 @@ def get_event_unique_key(event: dict) -> str:
     if reply_token:
         return f"reply:{reply_token}"
     return ""
-
 def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict:
     empty_result = {"status": "", "row_index": 0, "processed_at_value": ""}
     if not event_key:
@@ -980,7 +908,6 @@ def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict
     if event_key_idx is None or processed_at_idx is None:
         logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_COLUMN_MISSING event_key={event_key}")
         return empty_result
-
     for row_index, row in enumerate(values[1:], start=2):
         current_event_key = safe_str(row[event_key_idx]) if event_key_idx < len(row) else ""
         if current_event_key != event_key:
@@ -993,30 +920,25 @@ def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict
             status = marker_status
         logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP event_key={event_key} status={status} row_index={row_index}")
         return {"status": status, "row_index": row_index, "processed_at_value": processed_at_value}
-
     logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_MISS event_key={event_key}")
     return empty_result
-
 def set_processed_event_runtime_state(event_key: str, status: str, trace_id: str) -> None:
     if not event_key:
         return
     prune_processed_event_state(trace_id)
     _PROCESSED_EVENT_STATE[event_key] = {"status": safe_str(status), "updated_at_ts": get_now_ts()}
     logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_SET event_key={event_key} status={status}")
-
 def clear_processed_event_runtime_state(event_key: str, trace_id: str) -> None:
     if not event_key:
         return
     existed = event_key in _PROCESSED_EVENT_STATE
     _PROCESSED_EVENT_STATE.pop(event_key, None)
     logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_CLEARED event_key={event_key} existed={existed}")
-
 def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     event_key = get_event_unique_key(event)
     if not event_key:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_SKIPPED reason=missing_event_key")
         return True, "missing_event_key", ""
-
     prune_processed_event_state(trace_id)
     runtime_item = _PROCESSED_EVENT_STATE.get(event_key) or {}
     runtime_status = safe_str(runtime_item.get("status"))
@@ -1027,7 +949,6 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     if runtime_status == "processing" and (get_now_ts() - runtime_updated_at_ts) <= EVENT_PROCESSING_LOCK_SECONDS:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=runtime_processing")
         return False, "duplicate_processing_runtime", event_key
-
     lookup = get_persistent_processed_event_record(event_key, trace_id)
     persistent_status = safe_str(lookup.get("status"))
     row_index = int(lookup.get("row_index", 0) or 0)
@@ -1035,7 +956,6 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     if not ws:
         logger.error(f"[{trace_id}] EVENT_PROCESSING_BEGIN_FAILED reason=worksheet_unavailable event_key={event_key}")
         return False, "worksheet_unavailable", event_key
-
     if persistent_status == "done":
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=persistent_done")
         set_processed_event_runtime_state(event_key, "done", trace_id)
@@ -1044,7 +964,6 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=persistent_processing")
         set_processed_event_runtime_state(event_key, "processing", trace_id)
         return False, "duplicate_processing_persistent", event_key
-
     message = event.get("message") or {}
     marker = make_processing_marker()
     row_payload = {
@@ -1056,7 +975,6 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         "user_id": get_event_user_id(event),
         "event_type": get_event_type(event),
     }
-
     if row_index > 0:
         persist_ok = update_row_fields_by_header(ws, row_index, row_payload, trace_id, PROCESSED_EVENT_SHEET_NAME)
     else:
@@ -1078,14 +996,11 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         except Exception as e:
             logger.exception(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
             persist_ok = False
-
     if not persist_ok:
         return False, "processing_marker_write_failed", event_key
-
     set_processed_event_runtime_state(event_key, "processing", trace_id)
     logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_key={event_key} source={'reclaim' if row_index > 0 else 'new'}")
     return True, "processing_started", event_key
-
 def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None:
     event_key = get_event_unique_key(event)
     if not event_key:
@@ -1096,7 +1011,6 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
     ws = ensure_processed_event_worksheet(trace_id)
     marker = make_done_marker() if success else make_failed_marker()
     target_status = "done" if success else "failed"
-
     persist_ok = False
     if ws and row_index > 0:
         persist_ok = update_row_fields_by_header(ws, row_index, {"processed_at": marker, "trace_id": trace_id}, trace_id, PROCESSED_EVENT_SHEET_NAME)
@@ -1118,14 +1032,11 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
         except Exception as e:
             logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
             persist_ok = False
-
     if success:
         set_processed_event_runtime_state(event_key, target_status, trace_id)
     else:
         clear_processed_event_runtime_state(event_key, trace_id)
-
     logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_key={event_key} success={success} persist_ok={persist_ok}")
-
 # --- language state ---
 def prune_runtime_user_language_state(trace_id: str) -> None:
     now_ts = get_now_ts()
@@ -1141,7 +1052,6 @@ def prune_runtime_user_language_state(trace_id: str) -> None:
         _USER_LANGUAGE_STATE.pop(oldest_key, None)
     if expired_keys:
         logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_PRUNED removed={len(expired_keys)}")
-
 def get_runtime_user_language(user_id: str, trace_id: str) -> str:
     prune_runtime_user_language_state(trace_id)
     item = _USER_LANGUAGE_STATE.get(safe_str(user_id))
@@ -1151,7 +1061,6 @@ def get_runtime_user_language(user_id: str, trace_id: str) -> str:
     language_group = safe_str(item.get("language_group"))
     logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_HIT user_id={user_id} language_group={language_group}")
     return language_group
-
 def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) -> None:
     normalized_user_id = safe_str(user_id)
     normalized_language = normalize_language_group(language_group)
@@ -1161,10 +1070,8 @@ def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) 
     prune_runtime_user_language_state(trace_id)
     _USER_LANGUAGE_STATE[normalized_user_id] = {"language_group": normalized_language, "updated_at_ts": get_now_ts()}
     logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_SET user_id={normalized_user_id} language_group={normalized_language}")
-
 def ensure_user_language_worksheet(trace_id: str):
     return ensure_user_state_worksheet(trace_id)
-
 def get_persistent_user_language(user_id: str, trace_id: str) -> str:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -1181,7 +1088,6 @@ def get_persistent_user_language(user_id: str, trace_id: str) -> str:
             return language_group
     logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_MISS user_id={normalized_user_id}")
     return ""
-
 def set_persistent_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
     normalized_language = normalize_language_group(language_group)
@@ -1203,7 +1109,6 @@ def set_persistent_user_language(user_id: str, language_group: str, trace_id: st
     except Exception as e:
         logger.exception(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
-
 def resolve_user_language(user_id: str, trace_id: str) -> str:
     runtime_language = get_runtime_user_language(user_id, trace_id)
     if runtime_language:
@@ -1214,7 +1119,6 @@ def resolve_user_language(user_id: str, trace_id: str) -> str:
         logger.info(f"[{trace_id}] USER_LANGUAGE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} language_group={persistent_language}")
         return persistent_language
     return DEFAULT_LANGUAGE_GROUP
-
 def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_language = normalize_language_group(language_group)
     persist_ok = set_persistent_user_language(user_id, normalized_language, trace_id)
@@ -1224,7 +1128,6 @@ def persist_user_language(user_id: str, language_group: str, trace_id: str) -> b
         _USER_LANGUAGE_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
     return persist_ok
-
 # --- user state ---
 def ensure_user_state_worksheet(trace_id: str):
     spreadsheet = open_spreadsheet(trace_id)
@@ -1254,7 +1157,6 @@ def ensure_user_state_worksheet(trace_id: str):
             return None
         return ws
     return ws
-
 def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -1281,7 +1183,6 @@ def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
         return flow
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_id={normalized_user_id}")
     return ""
-
 def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
     normalized_flow = safe_str(flow)
@@ -1303,7 +1204,6 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     except Exception as e:
         logger.exception(f"[{trace_id}] USER_STATE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
-
 def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -1321,7 +1221,6 @@ def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
     if ok:
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_id={normalized_user_id} row_index={row_index}")
     return ok
-
 def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
     normalized_user_id = safe_str(user_id)
     if not normalized_user_id:
@@ -1330,14 +1229,12 @@ def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
     existed = normalized_user_id in _USER_FLOW_STATE
     _USER_FLOW_STATE.pop(normalized_user_id, None)
     logger.info(f"[{trace_id}] USER_FLOW_STATE_CLEARED user_id={normalized_user_id} existed={existed}")
-
 def clear_user_flow(user_id: str, trace_id: str) -> bool:
     persist_ok = clear_persistent_user_flow(user_id, trace_id)
     if persist_ok:
         clear_runtime_user_flow(user_id, trace_id)
     logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
     return persist_ok
-
 def prune_runtime_user_flow_state(trace_id: str) -> None:
     now_ts = get_now_ts()
     expired_keys = []
@@ -1352,7 +1249,6 @@ def prune_runtime_user_flow_state(trace_id: str) -> None:
         _USER_FLOW_STATE.pop(oldest_key, None)
     if expired_keys:
         logger.info(f"[{trace_id}] USER_FLOW_STATE_PRUNED removed={len(expired_keys)}")
-
 def get_runtime_user_flow(user_id: str, trace_id: str) -> str:
     prune_runtime_user_flow_state(trace_id)
     item = _USER_FLOW_STATE.get(safe_str(user_id))
@@ -1362,7 +1258,6 @@ def get_runtime_user_flow(user_id: str, trace_id: str) -> str:
     flow = safe_str(item.get("flow"))
     logger.info(f"[{trace_id}] USER_FLOW_STATE_HIT user_id={user_id} flow={flow}")
     return flow
-
 def set_runtime_user_flow(user_id: str, flow: str, trace_id: str) -> None:
     normalized_user_id = safe_str(user_id)
     normalized_flow = safe_str(flow)
@@ -1372,7 +1267,6 @@ def set_runtime_user_flow(user_id: str, flow: str, trace_id: str) -> None:
     prune_runtime_user_flow_state(trace_id)
     _USER_FLOW_STATE[normalized_user_id] = {"flow": normalized_flow, "updated_at_ts": get_now_ts()}
     logger.info(f"[{trace_id}] USER_FLOW_STATE_SET user_id={normalized_user_id} flow={normalized_flow}")
-
 def resolve_user_flow(user_id: str, trace_id: str) -> str:
     runtime_flow = get_runtime_user_flow(user_id, trace_id)
     if runtime_flow:
@@ -1383,7 +1277,6 @@ def resolve_user_flow(user_id: str, trace_id: str) -> str:
         logger.info(f"[{trace_id}] USER_STATE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} flow={persistent_flow}")
         return persistent_flow
     return ""
-
 def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     persist_ok = set_persistent_user_flow(user_id, flow, trace_id)
     if persist_ok:
@@ -1392,7 +1285,6 @@ def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
         _USER_FLOW_STATE.pop(safe_str(user_id), None)
     logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
     return persist_ok
-
 # --- ads catalog helpers ---
 def reset_ads_runtime_caches(trace_id: str) -> None:
     _ADS_CATALOG_CACHE["loaded_at_ts"] = 0
@@ -1401,35 +1293,29 @@ def reset_ads_runtime_caches(trace_id: str) -> None:
     _ADS_VIEW_CACHE.clear()
     _ADS_DETAIL_CACHE.clear()
     logger.info(f"[{trace_id}] ADS_RUNTIME_CACHES_RESET")
-
 def normalize_ad_status(value: str) -> str:
     raw = safe_str(value).lower()
     return raw if raw else "draft"
-
 def normalize_visibility_policy(value: str) -> str:
     raw = safe_str(value).lower()
     if raw in SUPPORTED_VISIBILITY_POLICIES:
         return raw
     return VISIBILITY_SAME_LANGUAGE_ONLY
-
 def parse_priority(value) -> int:
     try:
         return int(str(value).strip())
     except Exception:
         return 0
-
 def parse_sortable_time(value: str) -> int:
     dt = parse_iso_datetime(value)
     if not dt:
         return 0
     return int(dt.timestamp())
-
 def normalize_ad_type(category_code: str) -> str:
     code = safe_str(category_code).lower()
     if code in SUPPORTED_AD_TYPES:
         return code
     return ADS_TYPE_SERVICE_OFFER
-
 def open_ads_catalog_worksheet(trace_id: str):
     client = get_gspread_client(trace_id)
     if not client:
@@ -1445,7 +1331,6 @@ def open_ads_catalog_worksheet(trace_id: str):
     except Exception as e:
         logger.exception(f"[{trace_id}] ADS_CATALOG_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
         return None
-
 def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
     now_ts = get_now_ts()
     if int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) > 0 and now_ts - int(_ADS_CATALOG_CACHE["loaded_at_ts"] or 0) < ADS_CACHE_TTL_SECONDS:
@@ -1504,11 +1389,9 @@ def load_ads_catalog_rows(trace_id: str) -> Tuple[List[dict], bool]:
     _ADS_CATALOG_CACHE["last_read_ok"] = True
     logger.info(f"[{trace_id}] ADS_CACHE_REFRESH_OK rows={len(rows)} skipped_inactive_time={skipped_inactive_time}")
     return rows, True
-
 # --- workspace validation / publish sync sections omitted for brevity in canvas preview? no, continue in actual file below ---
 # The canvas now contains the cleaned V46 source for direct copy. If you need the remaining lower half,
 # scroll further in the canvas code panel and copy all content directly from there.
-
 def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> bool:
     secret = safe_str(LINE_CHANNEL_SECRET)
     if not secret:
@@ -1526,8 +1409,6 @@ def verify_line_signature(raw_body: bytes, signature: str, trace_id: str) -> boo
     except Exception as e:
         logger.exception(f"[{trace_id}] LINE_SIGNATURE_EXCEPTION exception={type(e).__name__}:{e}")
         return False
-
-
 def parse_line_webhook_payload(raw_body: bytes, trace_id: str) -> dict:
     try:
         payload = json.loads(raw_body.decode("utf-8"))
@@ -1536,31 +1417,19 @@ def parse_line_webhook_payload(raw_body: bytes, trace_id: str) -> dict:
     except Exception as e:
         logger.exception(f"[{trace_id}] LINE_PAYLOAD_PARSE_FAILED exception={type(e).__name__}:{e}")
         return {}
-
-
 def get_event_user_id(event: dict) -> str:
     source = event.get("source") or {}
     return safe_str(source.get("userId"))
-
-
 def get_event_type(event: dict) -> str:
     return safe_str(event.get("type")).lower()
-
-
 def get_message_type(event: dict) -> str:
     message = event.get("message") or {}
     return safe_str(message.get("type")).lower()
-
-
 def get_message_text(event: dict) -> str:
     message = event.get("message") or {}
     return sanitize_incoming_text(message.get("text"))
-
-
 def get_reply_token(event: dict) -> str:
     return safe_str(event.get("replyToken"))
-
-
 def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: str = "vi") -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN:
         logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_ACCESS_TOKEN")
@@ -1579,31 +1448,24 @@ def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: 
     except Exception as e:
         logger.exception(f"[{trace_id}] LINE_REPLY_EXCEPTION exception={type(e).__name__}:{e}")
         return False
-
-
 def switch_user_rich_menu(user_id: str, language_group: str, trace_id: str) -> bool:
     normalized_user_id = safe_str(user_id)
     normalized_language = normalize_language_group(language_group)
     rich_menu_id = safe_str(RICH_MENU_ID_BY_LANGUAGE.get(normalized_language))
-
     if not normalized_user_id:
         logger.error(f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED reason=missing_user_id")
         return False
-
     if not LINE_CHANNEL_ACCESS_TOKEN:
         logger.error(f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED reason=missing_access_token")
         return False
-
     if not rich_menu_id:
         logger.error(
             f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED "
             f"reason=missing_rich_menu_id language_group={normalized_language}"
         )
         return False
-
     url = f"https://api.line.me/v2/bot/user/{normalized_user_id}/richmenu/{rich_menu_id}"
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}
-
     try:
         resp = requests.post(url, headers=headers, timeout=OUTBOUND_TIMEOUT)
         body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
@@ -1617,28 +1479,16 @@ def switch_user_rich_menu(user_id: str, language_group: str, trace_id: str) -> b
     except Exception as e:
         logger.exception(f"[{trace_id}] RICH_MENU_SWITCH_EXCEPTION exception={type(e).__name__}:{e}")
         return False
-
-
 def handle_worker_entry(language_group: str) -> str:
     return t(language_group, "worker_entry")
-
-
 def handle_worker_message(text: str, language_group: str) -> str:
     return t(language_group, "worker_message", text=text)
-
-
 def handle_ads_entry(language_group: str) -> str:
     return t(language_group, "ads_entry")
-
-
 def handle_reset_message(language_group: str) -> str:
     return t(language_group, "reset")
-
-
 def handle_exit_message(language_group: str) -> str:
     return t(language_group, "exit")
-
-
 def handle_status_message(flow: str, language_group: str) -> str:
     normalized = safe_str(flow)
     if normalized == FLOW_WORKER:
@@ -1646,8 +1496,6 @@ def handle_status_message(flow: str, language_group: str) -> str:
     if normalized == FLOW_ADS:
         return t(language_group, "status_ads")
     return t(language_group, "status_none")
-
-
 def handle_help_message(language_group: str) -> str:
     return "\n".join([
         t(language_group, "help_title"),
@@ -1662,14 +1510,10 @@ def handle_help_message(language_group: str) -> str:
         "/lang th",
         "/lang zh",
     ])
-
-
 def normalize_command_text(text: str) -> str:
     normalized = sanitize_incoming_text(text).lower()
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
-
-
 def parse_lang_command(text: str) -> str:
     normalized = normalize_command_text(text)
     parts = normalized.split(" ") if normalized else []
@@ -1678,30 +1522,18 @@ def parse_lang_command(text: str) -> str:
     if parts[0] != LANG_COMMAND_PREFIX:
         return ""
     return normalize_language_group(parts[1]) if parts[1] in SUPPORTED_LANGUAGE_GROUPS else ""
-
-
 def handle_lang_message(language_group: str) -> str:
     normalized = normalize_language_group(language_group)
     return t(normalized, "lang_changed", lang=normalized)
-
-
 def handle_lang_invalid_message(language_group: str) -> str:
     return t(language_group, "lang_invalid")
-
-
 def handle_state_save_failed_message(language_group: str) -> str:
     return t(language_group, "state_save_failed")
-
-
 def handle_state_clear_failed_message(language_group: str) -> str:
     return t(language_group, "state_clear_failed")
-
-
 def _strip_combining_marks(value: str) -> str:
     decomposed = unicodedata.normalize("NFKD", safe_str(value))
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
-
-
 def _normalize_match_text(value: str) -> str:
     raw = safe_str(value).lower()
     if not raw:
@@ -1713,12 +1545,8 @@ def _normalize_match_text(value: str) -> str:
     normalized = re.sub(r"[^\w\s\u0E00-\u0E7F\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", " ", normalized)
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return normalized
-
-
 def _phrase_uses_contiguous_script(phrase: str) -> bool:
     return bool(re.search(r"[\u0E00-\u0E7F\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", phrase or ""))
-
-
 def _phrase_present(text: str, phrase: str) -> bool:
     normalized_text = _normalize_match_text(text)
     normalized_phrase = _normalize_match_text(phrase)
@@ -1729,12 +1557,8 @@ def _phrase_present(text: str, phrase: str) -> bool:
     padded_text = f" {normalized_text} "
     padded_phrase = f" {normalized_phrase} "
     return padded_phrase in padded_text
-
-
 def _contains_any_phrase(text: str, phrases: List[str]) -> bool:
     return any(_phrase_present(text, phrase) for phrase in phrases)
-
-
 def _collect_phrase_hits(text: str, phrases: List[str], label_prefix: str = "") -> List[str]:
     hits = []
     seen = set()
@@ -1746,8 +1570,6 @@ def _collect_phrase_hits(text: str, phrases: List[str], label_prefix: str = "") 
             seen.add(normalized_phrase)
             hits.append(f"{label_prefix}{phrase}" if label_prefix else phrase)
     return hits
-
-
 def resolve_default_intent_details(normalized_text: str) -> dict:
     raw_text = safe_str(normalized_text).lower()
     text = _normalize_match_text(raw_text)
@@ -1759,7 +1581,6 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
             "matched_rules": {"leave": [], "health": [], "travel": [], "negative": [], "workflow": [], "action": []},
             "normalized": raw_text,
         }
-
     leave_strong_phrases = [
         "xin nghỉ", "nghỉ phép", "nghi phep", "nghỉ làm", "báo nghỉ", "nghỉ ca", "không đi làm",
         "đơn xin nghỉ", "xin nghỉ 2 ngày", "xin nghỉ 1 ngày", "xin nghỉ một ngày",
@@ -1792,7 +1613,6 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "ไม่ได้ลางาน", "ยังไม่ลางาน", "ไม่ได้หยุดงาน", "ยังไม่หยุดงาน",
         "กลับมาทํางาน", "กลับมาทำงาน", "ไปทํางานต่อ", "ไปทำงานต่อ",
     ]
-
     health_strong_phrases = [
         "bị ốm", "bi om", "đau đầu", "đau bụng", "sốt", "mệt", "không khỏe", "khong khoe",
         "khám bệnh", "đi bệnh viện", "nhức đầu", "ho", "bệnh",
@@ -1807,7 +1627,6 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "tidak sakit", "tidak demam", "tidak pusing", "tidak batuk",
         "ไม่ป่วย", "ไม่ไข้", "ไม่เจ็บ",
     ]
-
     travel_hard_phrases = [
         "về quê", "ra sân bay",
         "quảng ninh", "hà nội", "hạ long", "quảng bình", "đài loan", "đài bắc",
@@ -1825,10 +1644,8 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     travel_context_negative_guards = [
         "được nghỉ", "nếu được nghỉ", "nghỉ thì đi", "nghỉ đi chơi", "nghỉ rồi đi",
     ]
-
     scores = {"leave": 0, "health": 0, "travel": 0}
     matched_rules = {"leave": [], "health": [], "travel": [], "negative": [], "workflow": [], "action": []}
-
     leave_hits = _collect_phrase_hits(text, leave_strong_phrases)
     workflow_hits = _collect_phrase_hits(text, leave_workflow_phrases)
     action_hits = _collect_phrase_hits(text, leave_action_phrases)
@@ -1839,14 +1656,12 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     travel_soft_hits = _collect_phrase_hits(text, travel_soft_phrases, "soft:")
     conditional_hits = _collect_phrase_hits(text, conditional_phrases, "conditional:")
     context_negative_hits = _collect_phrase_hits(text, travel_context_negative_guards)
-
     matched_rules["leave"].extend(leave_hits)
     matched_rules["workflow"].extend(workflow_hits)
     matched_rules["action"].extend(action_hits)
     matched_rules["health"].extend(health_hits)
     matched_rules["travel"].extend(travel_hard_hits + travel_soft_hits + conditional_hits)
     matched_rules["negative"].extend(leave_negation_hits + health_negation_hits + context_negative_hits)
-
     scores["leave"] += 4 * len(leave_hits)
     scores["leave"] += 5 * len(workflow_hits)
     scores["leave"] += 6 * len(action_hits)
@@ -1854,7 +1669,6 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     scores["travel"] += 3 * len(travel_hard_hits)
     scores["travel"] += 1 * len(travel_soft_hits)
     scores["travel"] += 1 * len(conditional_hits)
-
     has_explicit_leave = len(leave_hits) > 0
     has_leave_workflow = len(workflow_hits) > 0
     has_leave_action = len(action_hits) > 0
@@ -1862,45 +1676,35 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
     has_health_signal = len(health_hits) > 0
     has_health_negation = len(health_negation_hits) > 0
     has_travel_context = (len(travel_hard_hits) + len(travel_soft_hits)) > 0
-
     if has_explicit_leave and has_leave_workflow:
         scores["leave"] += 8
         matched_rules["workflow"].append("boost:explicit_leave_plus_workflow")
-
     if has_explicit_leave and ("có cần" in text or "cần báo" in text or "theo mẫu" in text):
         scores["leave"] += 5
         matched_rules["workflow"].append("boost:leave_policy_question")
-
     if has_leave_action and has_travel_context:
         scores["leave"] += 12
         matched_rules["action"].append("boost:action_over_travel_context")
-
     if has_leave_workflow and has_travel_context:
         scores["leave"] += 4
         matched_rules["workflow"].append("boost:workflow_over_context")
-
     if has_leave_negation and has_travel_context and has_leave_workflow and not has_leave_action:
         scores["travel"] += 3
         matched_rules["negative"].append("boost:travel_from_negated_leave_workflow")
-
     if has_travel_context and _contains_any_phrase(text, travel_context_negative_guards) and not has_leave_workflow:
         penalty = 4 + (2 * len(context_negative_hits))
         scores["leave"] -= penalty
         matched_rules["negative"].append(f"penalty:leave_context-{penalty}")
-
     if has_leave_negation:
         penalty = 20 + (4 * len(leave_negation_hits))
         scores["leave"] -= penalty
         matched_rules["negative"].append(f"penalty:leave_negation-{penalty}")
-
     if has_leave_negation and has_travel_context:
         scores["travel"] += 4
         matched_rules["negative"].append("boost:travel_from_negated_leave")
-
     if has_leave_negation and not has_travel_context:
         scores["leave"] -= 6
         matched_rules["negative"].append("boost:general_from_negated_leave")
-
     if has_health_negation:
         penalty = 20 + (4 * len(health_negation_hits))
         scores["health"] -= penalty
@@ -1911,18 +1715,15 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         elif not has_leave_action and not has_leave_workflow:
             scores["health"] -= 4
             matched_rules["negative"].append("boost:general_from_negated_health")
-
     ordered = sorted(scores.items(), key=lambda x: (-x[1], x[0]))
     top_intent, top_score = ordered[0]
     second_score = ordered[1][1]
-
     if top_score <= 2 or (top_score - second_score) <= 1:
         intent = "general"
         reason = "uncertain_fallback"
     else:
         intent = top_intent
         reason = f"{top_intent}_priority"
-
     if has_leave_negation and intent == "leave":
         if has_travel_context:
             intent = "travel"
@@ -1930,11 +1731,9 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         else:
             intent = "general"
             reason = "negated_leave_general_priority"
-
     if intent == "general" and has_leave_negation and has_travel_context and has_leave_workflow and not has_leave_action:
         intent = "travel"
         reason = "negated_leave_travel_workflow_tiebreak"
-
     if has_health_negation and intent == "health":
         if has_travel_context:
             intent = "travel"
@@ -1942,7 +1741,6 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         else:
             intent = "general"
             reason = "negated_health_general_priority"
-
     return {
         "intent": intent,
         "reason": reason,
@@ -1950,11 +1748,8 @@ def resolve_default_intent_details(normalized_text: str) -> dict:
         "matched_rules": matched_rules,
         "normalized": raw_text,
     }
-
 def classify_default_intent(normalized_text: str) -> str:
     return resolve_default_intent_details(normalized_text).get("intent", "general")
-
-
 def build_default_intent_reply(text: str, language_group: str, trace_id: str) -> str:
     normalized = normalize_command_text(text)
     details = resolve_default_intent_details(normalized)
@@ -1976,15 +1771,11 @@ def build_default_intent_reply(text: str, language_group: str, trace_id: str) ->
         "general": "default_general_intent",
     }
     return t(language_group, key_map.get(intent, "default_general_intent"))
-
-
 def truncate_text(value: str, max_len: int) -> str:
     raw = safe_str(value)
     if len(raw) <= max_len:
         return raw
     return raw[: max_len - 3].rstrip() + "..."
-
-
 def filter_ads_rows_for_viewer(rows: list, language_group: str) -> list:
     viewer_language = normalize_language_group(language_group)
     filtered = []
@@ -1995,12 +1786,8 @@ def filter_ads_rows_for_viewer(rows: list, language_group: str) -> list:
             continue
         filtered.append(row)
     return filtered
-
-
 def build_ads_fallback_rows(rows: list) -> list:
     return [row for row in rows if normalize_language_group(row.get("author_language_group")) == DEFAULT_LANGUAGE_GROUP]
-
-
 def build_ads_catalog_reply(language_group: str, ads_rows: list) -> str:
     if not ads_rows:
         return t(language_group, "ads_empty")
@@ -2021,14 +1808,10 @@ def build_ads_catalog_reply(language_group: str, ads_rows: list) -> str:
         if idx < max_items:
             lines.append("")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
-
-
 def set_ads_view_cache(user_id: str, language_group: str, rows: list, trace_id: str) -> None:
     cache_key = f"{safe_str(user_id)}::{normalize_language_group(language_group)}"
     _ADS_VIEW_CACHE[cache_key] = {"rows": rows, "loaded_at_ts": get_now_ts()}
     logger.info(f"[{trace_id}] ADS_VIEW_CACHE_SET cache_key={cache_key} rows={len(rows)}")
-
-
 def get_ads_view_cache(user_id: str, language_group: str, trace_id: str) -> list:
     cache_key = f"{safe_str(user_id)}::{normalize_language_group(language_group)}"
     item = _ADS_VIEW_CACHE.get(cache_key) or {}
@@ -2039,8 +1822,6 @@ def get_ads_view_cache(user_id: str, language_group: str, trace_id: str) -> list
     rows = item.get("rows") or []
     logger.info(f"[{trace_id}] ADS_VIEW_CACHE_HIT cache_key={cache_key} rows={len(rows)}")
     return rows
-
-
 def append_ads_click_log_row(ad_row: dict, viewer_user_id: str, viewer_language_group: str, action_type: str, trace_id: str) -> bool:
     ws = get_worksheet_by_name(trace_id, ADS_CLICK_LOG_SHEET_NAME)
     if not ws:
@@ -2062,8 +1843,6 @@ def append_ads_click_log_row(ad_row: dict, viewer_user_id: str, viewer_language_
     except Exception as e:
         logger.exception(f"[{trace_id}] ADS_CLICK_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
-
-
 def handle_ads_numeric_selection(user_id: str, normalized_text: str, language_group: str, trace_id: str) -> str:
     cached_rows = get_ads_view_cache(user_id, language_group, trace_id)
     if not cached_rows:
@@ -2088,8 +1867,6 @@ def handle_ads_numeric_selection(user_id: str, normalized_text: str, language_gr
     if ad_id:
         lines.append(f"{t(language_group, 'ads_id_label')}: {ad_id}")
     return "\n".join([x for x in lines if x])[:LINE_TEXT_HARD_LIMIT]
-
-
 def load_ads_reply_message(user_id: str, language_group: str, trace_id: str) -> tuple:
     rows, read_ok = load_ads_catalog_rows(trace_id)
     if not read_ok:
@@ -2119,8 +1896,6 @@ def load_ads_reply_message(user_id: str, language_group: str, trace_id: str) -> 
             trace_id=trace_id,
         )
     return build_ads_catalog_reply(language_group, limited_rows), True
-
-
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -2130,9 +1905,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     current_language = resolve_user_language(user_id, trace_id)
     requested_language = parse_lang_command(text)
     logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} normalized={json.dumps(normalized, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
-
     reply_language = current_language
-
     if normalized == WORKER_ENTRY_COMMAND:
         persist_ok = persist_user_flow(user_id, FLOW_WORKER, trace_id)
         if not persist_ok:
@@ -2214,11 +1987,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         else:
             reply_text = build_default_intent_reply(text, current_language, trace_id)
             flow_used = "default"
-
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
     return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_id": user_id, "reply_sent": reply_ok}
-
-
 def dispatch_line_event(event: dict, trace_id: str) -> dict:
     event_type = get_event_type(event)
     logger.info(f"[{trace_id}] LINE_EVENT_DISPATCH event_type={event_type}")
@@ -2228,8 +1998,6 @@ def dispatch_line_event(event: dict, trace_id: str) -> dict:
     if message_type != "text":
         return {"handled": False, "event_type": event_type, "message_type": message_type, "reason": "unsupported_message_type"}
     return dispatch_text_event(event, trace_id)
-
-
 def verify_internal_sync_token(trace_id: str) -> bool:
     expected = safe_str(INTERNAL_SYNC_TOKEN)
     provided = safe_str(request.headers.get("X-Internal-Sync-Token"))
@@ -2242,13 +2010,10 @@ def verify_internal_sync_token(trace_id: str) -> bool:
     ok = hmac.compare_digest(provided, expected)
     logger.info(f"[{trace_id}] INTERNAL_SYNC_TOKEN_CHECK ok={ok}")
     return ok
-
-
 @app.route("/internal/publish-sync", methods=["POST"])
 def internal_publish_sync():
     trace_id = make_trace_id()
     started = time.perf_counter()
-
     if not verify_internal_sync_token(trace_id):
         payload = {
             "ok": False,
@@ -2258,7 +2023,6 @@ def internal_publish_sync():
             "error": "unauthorized",
         }
         return jsonify(payload), 401
-
     sync_result = run_publish_sync_once(trace_id)
     status_code = resolve_publish_sync_status_code(sync_result)
     payload = {
@@ -2269,8 +2033,6 @@ def internal_publish_sync():
         "result": sync_result,
     }
     return jsonify(payload), status_code
-
-
 @app.route("/callback", methods=["POST"])
 def callback():
     trace_id = make_trace_id()
@@ -2309,7 +2071,5 @@ def callback():
     latency_ms = ms_since(started)
     logger.info(f"[{trace_id}] CALLBACK_DONE events={len(events)} latency_ms={latency_ms}")
     return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": len(events), "results": results}), 200
-
-
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
