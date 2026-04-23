@@ -624,7 +624,7 @@ def parse_sim_entities(text: str) -> Tuple[str, str, str]:
     normalized = normalize_routing_text(text)
 
     network = ""
-    if _phrase_present(normalized, "chunghwa") or _phrase_present(normalized, "trung hoa") or _phrase_present(normalized, "中華"):
+    if any(_phrase_present(normalized, p) for p in ["chunghwa", "trung hoa", "trung hoa telecom", "中華", "中華電信"]):
         network = "Chunghwa"
     elif _phrase_present(normalized, "if"):
         network = "IF"
@@ -632,9 +632,9 @@ def parse_sim_entities(text: str) -> Tuple[str, str, str]:
         network = "OK"
 
     duration = ""
-    if any(_phrase_present(normalized, p) for p in ["12m", "12 thang", "1 nam", "sim nam", "1 year", "mot nam"]):
+    if any(_phrase_present(normalized, p) for p in ["12m", "12 thang", "12 tháng", "1 nam", "1 năm", "sim nam", "sim năm", "1 year", "mot nam", "mot năm"]):
         duration = "12m"
-    elif any(_phrase_present(normalized, p) for p in ["6m", "6 thang", "6 month", "sau thang"]):
+    elif any(_phrase_present(normalized, p) for p in ["6m", "6 thang", "6 tháng", "6 month", "sau thang", "sau tháng"]):
         duration = "6m"
 
     variant_type = "renew" if any(_phrase_present(normalized, p) for p in ["gia han", "gia han sim", "renew", "gia hạn", "延長"]) else "new"
