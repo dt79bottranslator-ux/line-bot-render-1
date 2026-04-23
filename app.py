@@ -788,28 +788,46 @@ def score_location_candidate(alias: str, item: dict, normalized_text: str, token
     return score
 
 
-def collect_routing_location_candidates(text: str, alias_rows: List[dict]) -> List[dict]:
+
+def collect_routing_location_candidates(text: str, alias_rows: List[dict], matched_keywords: Optional[List[str]] = None) -> List[dict]:
     normalized = normalize_routing_text(text)
     alias_index = build_location_alias_index(alias_rows or [])
     results: List[dict] = []
     seen = set()
 
-    token_guesses: List[str] = []
-    split_candidates = re.split(r"\b(?:hoac|or|hay|va|gan|khu)\b", normalized)
-    for part in split_candidates:
-        part = safe_str(part).strip(" ,.-")
-        if len(part) >= 3:
-            token_guesses.append(part[:80])
-    token_guesses.append(normalized)
+    matched_keywords = matched_keywords or []
+    token_guesses = build_location_token_guesses(text, matched_keywords)
+    token_guess_skeletons = [build_phonetic_skeleton(x) for x in token_guesses if x]
 
     for alias, items in alias_index.items():
         alias_match = _phrase_present(normalized, alias)
         fuzzy_ratio = 0.0
+        skeleton_ratio = 0.0
+
         if not alias_match:
-            fuzzy_ratio = max((difflib.SequenceMatcher(None, guess, alias).ratio() for guess in token_guesses if guess), default=0.0)
-            alias_match = fuzzy_ratio >= 0.72 and len(alias) >= 4
+            fuzzy_ratio = max(
+                (difflib.SequenceMatcher(None, guess, alias).ratio() for guess in token_guesses if guess),
+                default=0.0,
+            )
+
+            alias_skeleton = build_phonetic_skeleton(alias)
+            skeleton_ratio = max(
+                (
+                    difflib.SequenceMatcher(None, skeleton, alias_skeleton).ratio()
+                    for skeleton in token_guess_skeletons
+                    if skeleton and alias_skeleton
+                ),
+                default=0.0,
+            )
+
+            alias_match = (
+                (fuzzy_ratio >= 0.72 and len(alias) >= 4)
+                or (skeleton_ratio >= 0.78 and len(alias) >= 4)
+            )
+
         if not alias_match:
             continue
+
         for item in items:
             target_key = safe_str(item.get("target_key"))
             target_type = safe_str(item.get("target_type"))
@@ -817,13 +835,23 @@ def collect_routing_location_candidates(text: str, alias_rows: List[dict]) -> Li
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
+
             score = score_location_candidate(alias, item, normalized, token_guesses)
+
             if fuzzy_ratio >= 0.92:
                 score += 10
             elif fuzzy_ratio >= 0.82:
                 score += 6
             elif fuzzy_ratio >= 0.72:
                 score += 3
+
+            if skeleton_ratio >= 0.92:
+                score += 12
+            elif skeleton_ratio >= 0.84:
+                score += 8
+            elif skeleton_ratio >= 0.78:
+                score += 4
+
             results.append({
                 "matched_alias": alias,
                 "target_key": target_key,
@@ -833,9 +861,14 @@ def collect_routing_location_candidates(text: str, alias_rows: List[dict]) -> Li
                 "score": score,
             })
 
-    results.sort(key=lambda item: (-int(item.get("score", 0) or 0), -len(safe_str(item.get("matched_alias"))), safe_str(item.get("target_key"))))
+    results.sort(
+        key=lambda item: (
+            -int(item.get("score", 0) or 0),
+            -len(safe_str(item.get("matched_alias"))),
+            safe_str(item.get("target_key")),
+        )
+    )
     return results
-
 
 def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> dict:
     if not candidates:
