@@ -71,7 +71,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V2_ALIAS_UI"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V3_VARIANT_CLEAN"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -113,6 +113,7 @@ INTENT_MASTER_SHEET_NAME = "INTENT_MASTER"
 SERVICE_MASTER_SHEET_NAME = "SERVICE_MASTER"
 PROVIDER_MASTER_SHEET_NAME = "PROVIDER_MASTER"
 LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER"
+SERVICE_VARIANT_MASTER_SHEET_NAME = "SERVICE_VARIANT_MASTER"
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -122,10 +123,10 @@ ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
     "zh": "LINE 聯絡",
 }
 ROUTING_LABELS_BY_LANGUAGE = {
-    "vi": {"location": "Khu vực phục vụ", "service": "Dịch vụ"},
-    "id": {"location": "Area layanan", "service": "Layanan"},
-    "th": {"location": "พื้นที่ให้บริการ", "service": "บริการ"},
-    "zh": {"location": "服務區域", "service": "服務"},
+    "vi": {"location": "Khu vực phục vụ", "service": "Dịch vụ", "price": "Giá"},
+    "id": {"location": "Area layanan", "service": "Layanan", "price": "Harga"},
+    "th": {"location": "พื้นที่ให้บริการ", "service": "บริการ", "price": "ราคา"},
+    "zh": {"location": "服務區域", "service": "服務", "price": "價格"},
 }
 LOCATION_ALIAS_MAP = {
     "台中": ["台中", "đài trung", "dai trung", "taichung", "taizhong", "xitun", "taiping"],
@@ -617,29 +618,93 @@ def build_routing_reply(service_row: dict, language_group: str) -> str:
         lines.append(f"{labels['location']}: {display_location}")
     if scope:
         lines.append(f"{labels['service']}: {scope}")
-__PLACEHOLDER__
+    return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
+
+def parse_sim_entities(text: str) -> Tuple[str, str, str]:
+    normalized = normalize_routing_text(text)
+
+    network = ""
+    if _phrase_present(normalized, "chunghwa") or _phrase_present(normalized, "trung hoa") or _phrase_present(normalized, "中華"):
+        network = "Chunghwa"
+    elif _phrase_present(normalized, "if"):
+        network = "IF"
+    elif _phrase_present(normalized, "ok"):
+        network = "OK"
+
+    duration = ""
+    if any(_phrase_present(normalized, p) for p in ["12m", "12 thang", "1 nam", "sim nam", "1 year", "mot nam"]):
+        duration = "12m"
+    elif any(_phrase_present(normalized, p) for p in ["6m", "6 thang", "6 month", "sau thang"]):
+        duration = "6m"
+
+    variant_type = "renew" if any(_phrase_present(normalized, p) for p in ["gia han", "gia han sim", "renew", "gia hạn", "延長"]) else "new"
+    return network, duration, variant_type
+
+def find_sim_variant(service_id: str, network: str, duration: str, variant_type: str, variant_rows: List[dict]) -> Optional[dict]:
+    target_service_id = safe_str(service_id)
+    target_network = safe_str(network).lower()
+    target_duration = safe_str(duration).lower()
+    target_type = safe_str(variant_type).lower()
+    for row in variant_rows:
+        if safe_str(row.get("service_id")) != target_service_id:
+            continue
+        if safe_str(row.get("network")).lower() != target_network:
+            continue
+        if safe_str(row.get("duration")).lower() != target_duration:
+            continue
+        if safe_str(row.get("type")).lower() != target_type:
+            continue
+        return row
+    return None
+
+def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group: str) -> str:
+    lang = normalize_language_group(language_group)
+    prefix = ROUTING_REPLY_PREFIX_BY_LANGUAGE.get(lang, ROUTING_REPLY_PREFIX_BY_LANGUAGE["vi"])
+    labels = ROUTING_LABELS_BY_LANGUAGE.get(lang, ROUTING_LABELS_BY_LANGUAGE["vi"])
+    contact_id = safe_str(service_row.get("contact_id"))
+    network = safe_str(variant_row.get("network"))
+    duration = safe_str(variant_row.get("duration"))
+    price = safe_str(variant_row.get("price"))
+    variant_type = safe_str(variant_row.get("type")).lower()
+
+    duration_label = "1 năm" if duration == "12m" else "6 tháng" if duration == "6m" else duration
+    type_label = "gia hạn" if variant_type == "renew" else "sim mới"
+
+    lines = [f"{labels['service']}: SIM {network} {duration_label} ({type_label})"]
+    if price:
+        lines.append(f"{labels['price']}: {price} TWD")
+    lines.append(f"{prefix}: {contact_id}")
+    return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
+
 def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Optional[str]:
     config_map = load_bot_config_map(trace_id)
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
     service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
     alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+    variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
     fallback_location = safe_str(config_map.get("fallback_location")) or ROUTING_FALLBACK_LOCATION
+
     intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
     service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
     alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
+    variant_ws = get_routing_worksheet_by_name(trace_id, variant_sheet_name)
     if not intent_ws or not service_ws:
         logger.warning(
             f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} "
-            f"service_ws={bool(service_ws)} alias_ws={bool(alias_ws)}"
+            f"service_ws={bool(service_ws)} alias_ws={bool(alias_ws)} variant_ws={bool(variant_ws)}"
         )
         return None
+
     intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
     service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
     alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
+    variant_rows = get_records_safe(variant_ws, trace_id, variant_sheet_name) if variant_ws else []
+
     intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
     if not intent_name:
         logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
         return None
+
     location_hint = extract_location_alias(text, alias_rows)
     service = choose_service_for_intent(intent_name, location_hint, service_rows)
     if not service and location_hint != fallback_location:
@@ -651,6 +716,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Op
             f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
         )
         return None
+
     logger.info(
         f"[{trace_id}] ROUTING_MATCH_OK intent_name={intent_name} "
         f"service_id={safe_str(service.get('service_id'))} "
@@ -658,6 +724,23 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str) -> Op
         f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
         f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
     )
+
+    service_id = safe_str(service.get("service_id"))
+    if service_id == "SIM_TW_001" and variant_rows:
+        network, duration, variant_type = parse_sim_entities(text)
+        if network and duration:
+            variant = find_sim_variant(service_id, network, duration, variant_type, variant_rows)
+            if variant:
+                logger.info(
+                    f"[{trace_id}] SIM_VARIANT_MATCH_OK service_id={service_id} network={network} "
+                    f"duration={duration} type={variant_type} price={safe_str(variant.get('price'))}"
+                )
+                return build_sim_variant_reply(service, variant, language_group)
+            logger.info(
+                f"[{trace_id}] SIM_VARIANT_MISS service_id={service_id} network={network} "
+                f"duration={duration} type={variant_type}"
+            )
+
     return build_routing_reply(service, language_group)
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
