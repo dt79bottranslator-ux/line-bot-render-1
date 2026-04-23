@@ -71,7 +71,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V2_CANONICAL_REGION__AUDIT_V2"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V2_CANONICAL_REGION__AUDIT_V2__PERF_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -213,6 +213,10 @@ _WORKSHEET_VALUES_SHARED_CACHE: Dict[str, dict] = {}
 _WORKSHEET_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
 _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
+ROUTING_CONFIG_CACHE_TTL_SECONDS = int(os.getenv("ROUTING_CONFIG_CACHE_TTL_SECONDS", "300").strip() or "300")
+_ROUTING_CONFIG_SHARED_CACHE = {"config": None, "loaded_at_ts": 0.0}
+_ROUTING_LOG_WORKSHEET_INIT_CACHE = {"ready": False, "loaded_at_ts": 0.0}
+
 def _now_ts() -> float:
     return time.time()
 def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
@@ -513,16 +517,29 @@ def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
             return ws
         return None
 def load_bot_config_map(trace_id: str) -> Dict[str, str]:
+    cached = getattr(g, "_dt79_routing_config", None)
+    if isinstance(cached, dict) and cached:
+        logger.info(f"[{trace_id}] ROUTING_CONFIG_CACHE_HIT keys={json.dumps(sorted(cached.keys()), ensure_ascii=False)}")
+        return cached
+    shared = _ROUTING_CONFIG_SHARED_CACHE.get("config")
+    loaded_at_ts = float(_ROUTING_CONFIG_SHARED_CACHE.get("loaded_at_ts", 0.0) or 0.0)
+    if isinstance(shared, dict) and shared and _cache_is_fresh(loaded_at_ts, ROUTING_CONFIG_CACHE_TTL_SECONDS):
+        g._dt79_routing_config = shared
+        logger.info(f"[{trace_id}] ROUTING_CONFIG_SHARED_CACHE_HIT keys={json.dumps(sorted(shared.keys()), ensure_ascii=False)}")
+        return shared
     ws = get_routing_worksheet_by_name(trace_id, BOT_CONFIG_SHEET_NAME)
     if not ws:
-        return {}
+        return shared or {}
     rows = get_records_safe(ws, trace_id, BOT_CONFIG_SHEET_NAME)
-    config_map = {}
+    config_map: Dict[str, str] = {}
     for row in rows:
         key = safe_str(row.get("Key") or row.get("key")).strip()
         value = safe_str(row.get("Value") or row.get("value")).strip()
         if key:
             config_map[key] = value
+    g._dt79_routing_config = config_map
+    _ROUTING_CONFIG_SHARED_CACHE["config"] = config_map
+    _ROUTING_CONFIG_SHARED_CACHE["loaded_at_ts"] = _now_ts()
     logger.info(f"[{trace_id}] ROUTING_CONFIG_READY keys={json.dumps(sorted(config_map.keys()), ensure_ascii=False)}")
     return config_map
 def normalize_routing_text(value: str) -> str:
@@ -684,6 +701,7 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
         return fallback_matches[0][1]
     return None
 def ensure_routing_log_worksheet(trace_id: str):
+    ready_cached = getattr(g, "_dt79_routing_log_ws_ready", False)
     spreadsheet = open_routing_spreadsheet(trace_id)
     if not spreadsheet:
         return None
@@ -693,6 +711,9 @@ def ensure_routing_log_worksheet(trace_id: str):
         try:
             ws = spreadsheet.add_worksheet(title=ROUTING_LOG_SHEET_NAME, rows=5000, cols=6)
             ws.append_row(ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
+            g._dt79_routing_log_ws_ready = True
+            _ROUTING_LOG_WORKSHEET_INIT_CACHE["ready"] = True
+            _ROUTING_LOG_WORKSHEET_INIT_CACHE["loaded_at_ts"] = _now_ts()
             logger.info(f"[{trace_id}] ROUTING_LOG_SHEET_CREATED worksheet_name={ROUTING_LOG_SHEET_NAME}")
             return ws
         except Exception as e:
@@ -701,6 +722,10 @@ def ensure_routing_log_worksheet(trace_id: str):
     except Exception as e:
         logger.exception(f"[{trace_id}] ROUTING_LOG_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
         return None
+    shared_ready = bool(_ROUTING_LOG_WORKSHEET_INIT_CACHE.get("ready")) and _cache_is_fresh(float(_ROUTING_LOG_WORKSHEET_INIT_CACHE.get("loaded_at_ts", 0.0) or 0.0), ROUTING_CONFIG_CACHE_TTL_SECONDS)
+    if ready_cached or shared_ready:
+        g._dt79_routing_log_ws_ready = True
+        return ws
     values = get_all_values_safe(ws, trace_id, ROUTING_LOG_SHEET_NAME)
     if not values:
         try:
@@ -709,6 +734,9 @@ def ensure_routing_log_worksheet(trace_id: str):
         except Exception as e:
             logger.exception(f"[{trace_id}] ROUTING_LOG_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
             return None
+    g._dt79_routing_log_ws_ready = True
+    _ROUTING_LOG_WORKSHEET_INIT_CACHE["ready"] = True
+    _ROUTING_LOG_WORKSHEET_INIT_CACHE["loaded_at_ts"] = _now_ts()
     return ws
 
 def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, location_hint: str, location_id: str, message: str, trace_id: str) -> bool:
@@ -862,34 +890,37 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
 
     intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
     service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
-    alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
-    canonical_ws = get_routing_worksheet_by_name(trace_id, canonical_sheet_name) if canonical_sheet_name else None
-    region_map_ws = get_routing_worksheet_by_name(trace_id, region_map_sheet_name) if region_map_sheet_name else None
-    variant_ws = get_routing_worksheet_by_name(trace_id, variant_sheet_name)
     if not intent_ws or not service_ws:
         logger.warning(
-            f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} "
-            f"service_ws={bool(service_ws)} alias_ws={bool(alias_ws)} variant_ws={bool(variant_ws)}"
+            f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} service_ws={bool(service_ws)}"
         )
         return None
 
     intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
-    service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
-    alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
-    canonical_rows = get_records_safe(canonical_ws, trace_id, canonical_sheet_name) if canonical_ws and canonical_sheet_name else []
-    region_rows = get_records_safe(region_map_ws, trace_id, region_map_sheet_name) if region_map_ws and region_map_sheet_name else []
-    variant_rows = get_records_safe(variant_ws, trace_id, variant_sheet_name) if variant_ws else []
-
     intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
     if not intent_name:
         logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
         return None
 
+    service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
+
+    alias_rows: List[dict] = []
+    canonical_rows: List[dict] = []
+    region_rows: List[dict] = []
     location_id = ""
     service_region_key = ""
     location_hint = ""
-    location_resolution = None
-    if alias_rows and any(safe_str(row.get("location_id")) for row in alias_rows):
+
+    alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
+    if alias_ws:
+        alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name)
+
+    uses_v2_alias = bool(alias_rows and any(safe_str(row.get("location_id")) for row in alias_rows))
+    if uses_v2_alias:
+        canonical_ws = get_routing_worksheet_by_name(trace_id, canonical_sheet_name) if canonical_sheet_name else None
+        region_map_ws = get_routing_worksheet_by_name(trace_id, region_map_sheet_name) if region_map_sheet_name else None
+        canonical_rows = get_records_safe(canonical_ws, trace_id, canonical_sheet_name) if canonical_ws and canonical_sheet_name else []
+        region_rows = get_records_safe(region_map_ws, trace_id, region_map_sheet_name) if region_map_ws and region_map_sheet_name else []
         location_resolution = resolve_location_from_v2(text, alias_rows, canonical_rows, region_rows)
         if location_resolution:
             location_id = safe_str(location_resolution.get("location_id"))
@@ -929,6 +960,10 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     service_id = safe_str(service.get("service_id"))
     final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key)
 
+    variant_rows: List[dict] = []
+    if service_id == "SIM_TW_001":
+        variant_ws = get_routing_worksheet_by_name(trace_id, variant_sheet_name)
+        variant_rows = get_records_safe(variant_ws, trace_id, variant_sheet_name) if variant_ws else []
     if service_id == "SIM_TW_001" and variant_rows:
         network, duration, variant_type = parse_sim_entities(text)
         if network and duration:
