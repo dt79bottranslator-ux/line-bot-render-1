@@ -9,6 +9,7 @@ import time
 import uuid
 import logging
 import unicodedata
+import difflib
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Tuple, Optional, List
 import requests
@@ -707,27 +708,156 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
         fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
         return fallback_matches[0][1]
     return None
+def score_location_candidate(alias: str, item: dict, normalized_text: str, token_guesses: List[str]) -> int:
+    alias_type = safe_str(item.get("alias_type")).lower()
+    base_score_map = {
+        "district_zh": 100,
+        "district_en": 95,
+        "common_input": 85,
+        "phonetic_vi": 72,
+        "phonetic_id": 72,
+        "phonetic_th": 72,
+    }
+    score = base_score_map.get(alias_type, 60)
+    alias_len = len(alias)
+    score += min(alias_len, 18)
+
+    if re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", normalized_text):
+        score += 8
+    elif alias in normalized_text:
+        score += 2
+
+    intent_context_tokens = ["khu", "o", "gan", "phong", "sim", "renew", "thang", "month"]
+    if any(token and token in normalized_text for token in intent_context_tokens):
+        score += 3
+
+    for guess in token_guesses:
+        if not guess:
+            continue
+        ratio = difflib.SequenceMatcher(None, guess, alias).ratio()
+        if ratio >= 0.92:
+            score += 15
+            break
+        if ratio >= 0.82:
+            score += 8
+            break
+        if ratio >= 0.72:
+            score += 4
+            break
+
+    return score
+
+
 def collect_routing_location_candidates(text: str, alias_rows: List[dict]) -> List[dict]:
     normalized = normalize_routing_text(text)
     alias_index = build_location_alias_index(alias_rows or [])
     results: List[dict] = []
     seen = set()
+
+    token_guesses: List[str] = []
+    split_candidates = re.split(r"\b(?:hoac|or|hay|va|gan|khu)\b", normalized)
+    for part in split_candidates:
+        part = safe_str(part).strip(" ,.-")
+        if len(part) >= 3:
+            token_guesses.append(part[:80])
+    token_guesses.append(normalized)
+
     for alias, items in alias_index.items():
-        if not _phrase_present(normalized, alias):
+        alias_match = _phrase_present(normalized, alias)
+        fuzzy_ratio = 0.0
+        if not alias_match:
+            fuzzy_ratio = max((difflib.SequenceMatcher(None, guess, alias).ratio() for guess in token_guesses if guess), default=0.0)
+            alias_match = fuzzy_ratio >= 0.72 and len(alias) >= 4
+        if not alias_match:
             continue
         for item in items:
             target_key = safe_str(item.get("target_key"))
             target_type = safe_str(item.get("target_type"))
-            dedupe_key = (alias, target_key, target_type)
+            dedupe_key = (target_key, target_type)
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
+            score = score_location_candidate(alias, item, normalized, token_guesses)
+            if fuzzy_ratio >= 0.92:
+                score += 10
+            elif fuzzy_ratio >= 0.82:
+                score += 6
+            elif fuzzy_ratio >= 0.72:
+                score += 3
             results.append({
                 "matched_alias": alias,
                 "target_key": target_key,
                 "target_type": target_type,
+                "alias_type": safe_str(item.get("alias_type")),
+                "lang_group": safe_str(item.get("lang_group")),
+                "score": score,
             })
+
+    results.sort(key=lambda item: (-int(item.get("score", 0) or 0), -len(safe_str(item.get("matched_alias"))), safe_str(item.get("target_key"))))
     return results
+
+
+def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> dict:
+    if not candidates:
+        return {
+            "decision": "no_candidate",
+            "confidence": "low",
+            "selected_candidate": None,
+            "top_score": 0,
+            "second_score": 0,
+        }
+
+    canonical_index = build_canonical_location_index(canonical_rows or [])
+    region_index = build_region_map_index(region_rows or [])
+
+    enriched = []
+    for candidate in candidates:
+        current = dict(candidate)
+        if safe_str(current.get("target_type")) == "root_location":
+            current["location_id"] = ""
+            current["service_region_key"] = safe_str(current.get("target_key"))
+        else:
+            location_id = safe_str(current.get("target_key"))
+            canonical_row = canonical_index.get(location_id) or {}
+            region_row = region_index.get(location_id) or {}
+            current["location_id"] = location_id
+            current["service_region_key"] = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
+        enriched.append(current)
+
+    enriched = [c for c in enriched if safe_str(c.get("service_region_key"))]
+    if not enriched:
+        return {
+            "decision": "no_candidate",
+            "confidence": "low",
+            "selected_candidate": None,
+            "top_score": 0,
+            "second_score": 0,
+        }
+
+    top = enriched[0]
+    second = enriched[1] if len(enriched) > 1 else None
+    top_score = int(top.get("score", 0) or 0)
+    second_score = int(second.get("score", 0) or 0)
+    gap = top_score - second_score
+
+    if top_score >= 85 and gap >= 10:
+        decision = "route"
+        confidence = "high"
+    elif 75 <= top_score <= 84 and gap >= 15:
+        decision = "route"
+        confidence = "medium"
+    else:
+        decision = "slowpath"
+        confidence = "low"
+
+    return {
+        "decision": decision,
+        "confidence": confidence,
+        "selected_candidate": top if decision == "route" else None,
+        "top_score": top_score,
+        "second_score": second_score,
+        "candidates": enriched,
+    }
 
 def extract_location_token_guess(text: str, matched_keywords: List[str]) -> str:
     normalized = normalize_routing_text(text)
@@ -1145,43 +1275,92 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
 
     alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
     alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
-    candidate_matches = collect_routing_location_candidates(text, alias_rows) if alias_rows else []
-    candidate_aliases = [safe_str(item.get("matched_alias")) for item in candidate_matches if safe_str(item.get("matched_alias"))]
 
-    location_id = ""
-    service_region_key = ""
-    location_hint = ""
-    location_resolution = None
-
-    has_v2_alias = bool(alias_rows and any(safe_str(row.get("location_id")) for row in alias_rows))
-    if has_v2_alias:
-        canonical_rows = []
-        region_rows = []
+    canonical_rows = []
+    region_rows = []
+    if alias_rows and any(safe_str(row.get("location_id")) for row in alias_rows):
         canonical_ws = get_routing_worksheet_by_name(trace_id, canonical_sheet_name) if canonical_sheet_name else None
         region_map_ws = get_routing_worksheet_by_name(trace_id, region_map_sheet_name) if region_map_sheet_name else None
         if canonical_ws and canonical_sheet_name:
             canonical_rows = get_records_safe(canonical_ws, trace_id, canonical_sheet_name)
         if region_map_ws and region_map_sheet_name:
             region_rows = get_records_safe(region_map_ws, trace_id, region_map_sheet_name)
-        location_resolution = resolve_location_from_v2(text, alias_rows, canonical_rows, region_rows)
-        if location_resolution:
-            location_id = safe_str(location_resolution.get("location_id"))
-            service_region_key = safe_str(location_resolution.get("service_region_key"))
-            location_hint = service_region_key
-            logger.info(
-                f"[{trace_id}] ROUTING_LOCATION_V2_MATCH "
-                f"matched_alias={json.dumps(safe_str(location_resolution.get('matched_alias')), ensure_ascii=False)} "
-                f"location_id={json.dumps(location_id, ensure_ascii=False)} "
-                f"service_region_key={json.dumps(service_region_key, ensure_ascii=False)}"
-            )
+
+    candidate_matches = collect_routing_location_candidates(text, alias_rows) if alias_rows else []
+    candidate_aliases = [safe_str(item.get("matched_alias")) for item in candidate_matches if safe_str(item.get("matched_alias"))]
+    for candidate in candidate_matches:
+        logger.info(
+            f"[{trace_id}] ROUTING_CANDIDATE_EVAL "
+            f"matched_alias={json.dumps(safe_str(candidate.get('matched_alias')), ensure_ascii=False)} "
+            f"target_key={json.dumps(safe_str(candidate.get('target_key')), ensure_ascii=False)} "
+            f"target_type={json.dumps(safe_str(candidate.get('target_type')), ensure_ascii=False)} "
+            f"alias_type={json.dumps(safe_str(candidate.get('alias_type')), ensure_ascii=False)} "
+            f"score={int(candidate.get('score', 0) or 0)}"
+        )
+
+    location_id = ""
+    service_region_key = ""
+    location_hint = ""
+    location_token_guess = extract_location_token_guess(text, matched_keywords)
+    smart_fallback_reply = ""
+
+    candidate_decision = choose_best_location_candidate(candidate_matches, canonical_rows, region_rows) if candidate_matches else {
+        "decision": "no_candidate",
+        "confidence": "low",
+        "selected_candidate": None,
+        "top_score": 0,
+        "second_score": 0,
+        "candidates": [],
+    }
+    logger.info(
+        f"[{trace_id}] ROUTING_CANDIDATE_DECISION "
+        f"decision={safe_str(candidate_decision.get('decision'))} "
+        f"confidence={safe_str(candidate_decision.get('confidence'))} "
+        f"top_score={int(candidate_decision.get('top_score', 0) or 0)} "
+        f"second_score={int(candidate_decision.get('second_score', 0) or 0)}"
+    )
+
+    selected_candidate = candidate_decision.get("selected_candidate") or {}
+    if safe_str(candidate_decision.get("decision")) == "route":
+        location_id = safe_str(selected_candidate.get("location_id"))
+        service_region_key = safe_str(selected_candidate.get("service_region_key"))
+        location_hint = service_region_key
+        logger.info(
+            f"[{trace_id}] ROUTING_LOCATION_V2_MATCH "
+            f"matched_alias={json.dumps(safe_str(selected_candidate.get('matched_alias')), ensure_ascii=False)} "
+            f"location_id={json.dumps(location_id, ensure_ascii=False)} "
+            f"service_region_key={json.dumps(service_region_key, ensure_ascii=False)}"
+        )
+    elif safe_str(candidate_decision.get("decision")) == "slowpath" and candidate_matches:
+        candidate_locations = [safe_str(item.get("service_region_key")) for item in candidate_decision.get("candidates", []) if safe_str(item.get("service_region_key"))]
+        candidate_location_ids = [safe_str(item.get("location_id")) for item in candidate_decision.get("candidates", []) if safe_str(item.get("location_id"))]
+        reason_code = "multi_location" if len(candidate_location_ids) > 1 else "weak_location_match"
+        append_routing_slowpath_event(
+            user_id=user_id,
+            raw_text=text,
+            normalized_text=normalized_text,
+            detected_intent=intent_name,
+            candidate_locations=candidate_locations,
+            candidate_location_ids=candidate_location_ids,
+            reason_code=reason_code,
+            confidence="low",
+            action_needed="review_alias",
+            trace_id=trace_id,
+        )
+        return {
+            "reply_text": build_routing_smart_fallback_reply(intent_name, language_group, reason_code=reason_code, location_token_guess=location_token_guess),
+            "intent_name": intent_name,
+            "service_row": None,
+            "location_hint": "",
+            "location_id": "",
+            "service_region_key": "",
+            "matched_keywords": matched_keywords,
+            "result_type": "smart_fallback",
+        }
 
     if not location_hint:
         location_hint = extract_location_alias(text, alias_rows)
         service_region_key = location_hint
-
-    location_token_guess = extract_location_token_guess(text, matched_keywords)
-
-    smart_fallback_reply = ""
 
     if intent_name == "thue_phong_tro" and not location_hint:
         smart_fallback_reply = build_routing_smart_fallback_reply(intent_name, language_group, reason_code="missing_location", location_token_guess=location_token_guess)
@@ -1310,6 +1489,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         "matched_keywords": matched_keywords,
         "result_type": "routed",
     }
+
 
 _ADS_CATALOG_CACHE = {"rows": [], "loaded_at_ts": 0, "last_read_ok": False}
 _ADS_VIEW_CACHE: Dict[str, dict] = {}
