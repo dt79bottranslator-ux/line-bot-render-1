@@ -72,7 +72,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_ADMIN_AUDIT_LOG_V1_ALIAS_SOURCE_FIX"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_ADMIN_REVIEW_GUARD_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -124,7 +124,7 @@ ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text"
 ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME = "ROUTING_SHADOW_SUGGESTIONS"
 ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes", "second_candidate_alias", "second_candidate_location_id", "score_gap", "decision_context", "writeback_status", "writeback_at", "writeback_target", "writeback_notes"]
 ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME = "ROUTING_ADMIN_AUDIT_LOG"
-ROUTING_ADMIN_AUDIT_LOG_HEADERS = ["timestamp", "trace_id", "batch_id", "source_sheet", "source_row", "action", "raw_text", "normalized_text", "alias", "location_id", "region_key", "review_status", "writeback_status", "sanitizer_result", "sanitizer_reason", "target_sheet", "target_row", "operator", "notes"]
+ROUTING_ADMIN_AUDIT_LOG_HEADERS = ["timestamp", "trace_id", "batch_id", "source_sheet", "source_row", "action", "raw_text", "normalized_text", "alias", "location_id", "region_key", "review_status", "writeback_status", "sanitizer_result", "sanitizer_reason", "target_sheet", "target_row", "operator", "notes", "alias_source", "raw_text_risk_result", "raw_text_risk_type", "raw_text_risk_source", "guard_result", "guard_reason"]
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -1038,6 +1038,12 @@ def append_routing_admin_audit_log(
     target_row: str = "",
     notes: str = "",
     operator: str = "system:process-shadow-writeback",
+    alias_source: str = "",
+    raw_text_risk_result: str = "",
+    raw_text_risk_type: str = "",
+    raw_text_risk_source: str = "",
+    guard_result: str = "",
+    guard_reason: str = "",
 ) -> bool:
     ws = ensure_routing_admin_audit_log_worksheet(trace_id)
     if not ws:
@@ -1063,6 +1069,12 @@ def append_routing_admin_audit_log(
         safe_str(target_row),
         safe_str(operator),
         safe_str(notes)[:500],
+        safe_str(alias_source),
+        safe_str(raw_text_risk_result),
+        safe_str(raw_text_risk_type),
+        safe_str(raw_text_risk_source),
+        safe_str(guard_result),
+        safe_str(guard_reason),
     ]
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
@@ -1072,7 +1084,9 @@ def append_routing_admin_audit_log(
             f"batch_id={safe_str(batch_id)} source_row={safe_str(source_row)} "
             f"action={safe_str(action)} writeback_status={safe_str(writeback_status)} "
             f"sanitizer_result={safe_str(sanitizer_result)} target_sheet={safe_str(target_sheet)} "
-            f"target_row={safe_str(target_row)}"
+            f"target_row={safe_str(target_row)} alias_source={safe_str(alias_source)} "
+            f"raw_text_risk_result={safe_str(raw_text_risk_result)} raw_text_risk_type={safe_str(raw_text_risk_type)} "
+            f"guard_result={safe_str(guard_result)} guard_reason={safe_str(guard_reason)}"
         )
         return True
     except Exception as e:
@@ -3310,6 +3324,88 @@ def sanitize_shadow_alias_for_writeback(alias_text: str) -> dict:
 
     return {"ok": True, "normalized_alias": normalized_alias, "reason": ""}
 
+def detect_raw_text_risk_for_review(shadow_row: dict) -> dict:
+    source_candidates = [
+        ("location_token_guess", shadow_row.get("location_token_guess")),
+        ("raw_text", shadow_row.get("raw_text")),
+        ("normalized_text", shadow_row.get("normalized_text")),
+    ]
+    connector_patterns = [
+        r"\bhoac\s+la\b",
+        r"\bhoac\b",
+        r"\bhay\b",
+        r"\bor\b",
+        r"\bva\b",
+        r"/",
+        r",",
+        r";",
+    ]
+    for source_name, raw_value in source_candidates:
+        normalized_value = normalize_routing_text(raw_value)
+        if not normalized_value:
+            continue
+        for pattern in connector_patterns:
+            if re.search(pattern, normalized_value):
+                return {
+                    "raw_text_risk_result": "risk_detected",
+                    "raw_text_risk_type": "multi_location_input",
+                    "raw_text_risk_source": source_name,
+                }
+    return {
+        "raw_text_risk_result": "passed",
+        "raw_text_risk_type": "",
+        "raw_text_risk_source": "",
+    }
+
+
+def evaluate_routing_admin_review_guard(shadow_row: dict, alias_text: str, alias_source: str, sanitizer_result: dict) -> dict:
+    raw_risk = detect_raw_text_risk_for_review(shadow_row)
+    raw_text_risk_result = safe_str(raw_risk.get("raw_text_risk_result")) or "passed"
+    raw_text_risk_type = safe_str(raw_risk.get("raw_text_risk_type"))
+    raw_text_risk_source = safe_str(raw_risk.get("raw_text_risk_source"))
+    sanitizer_ok = bool(sanitizer_result.get("ok"))
+    sanitizer_reason = safe_str(sanitizer_result.get("reason"))
+
+    if not safe_str(alias_text):
+        guard_result = "blocked"
+        guard_reason = "missing_alias_text"
+    elif not sanitizer_ok:
+        guard_result = "blocked"
+        if raw_text_risk_result == "risk_detected":
+            guard_reason = "alias_source_dirty_and_raw_input_risky"
+        else:
+            guard_reason = f"alias_sanitizer_rejected:{sanitizer_reason or 'unknown'}"
+    elif safe_str(alias_source) == "suggested_alias":
+        guard_result = "allowed"
+        guard_reason = "alias_clean_but_raw_input_risky" if raw_text_risk_result == "risk_detected" else "alias_clean_and_raw_input_clean"
+    elif raw_text_risk_result == "risk_detected":
+        guard_result = "blocked"
+        guard_reason = "location_token_guess_risky_without_suggested_alias"
+    else:
+        guard_result = "allowed"
+        guard_reason = "location_token_guess_clean"
+
+    log_label = "ROUTING_ADMIN_REVIEW_GUARD_BLOCKED" if guard_result == "blocked" else "ROUTING_ADMIN_REVIEW_GUARD_EVALUATED"
+    logger.info(
+        f"[{safe_str(shadow_row.get('trace_id'))}] {log_label} "
+        f"alias_source={safe_str(alias_source)} "
+        f"alias_text={json.dumps(safe_str(alias_text), ensure_ascii=False)} "
+        f"alias_sanitizer_result={'passed' if sanitizer_ok else 'rejected'} "
+        f"raw_text_risk_result={raw_text_risk_result} "
+        f"raw_text_risk_type={raw_text_risk_type} "
+        f"raw_text_risk_source={raw_text_risk_source} "
+        f"guard_result={guard_result} "
+        f"guard_reason={guard_reason}"
+    )
+    return {
+        "raw_text_risk_result": raw_text_risk_result,
+        "raw_text_risk_type": raw_text_risk_type,
+        "raw_text_risk_source": raw_text_risk_source,
+        "guard_result": guard_result,
+        "guard_reason": guard_reason,
+    }
+
+
 def _parse_shadow_confidence_to_alias_confidence(value: str) -> str:
     normalized = safe_str(value).lower()
     return "0.95" if normalized in {"high", "medium"} else "0.85"
@@ -3358,6 +3454,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "error",
             "notes": "alias_sheet_unavailable",
             "action": "error",
+            "alias_source": "",
+            "raw_text_risk_result": "not_run",
+            "raw_text_risk_type": "",
+            "raw_text_risk_source": "",
+            "guard_result": "not_run",
+            "guard_reason": "worksheet_unavailable",
             "sanitizer_result": "not_run",
             "sanitizer_reason": "worksheet_unavailable",
             "target_row": "",
@@ -3367,6 +3469,7 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
     sanitizer_result = sanitize_shadow_alias_for_writeback(alias_text)
     normalized_alias = safe_str(sanitizer_result.get("normalized_alias"))
     sanitizer_reason = safe_str(sanitizer_result.get("reason"))
+    guard_eval = evaluate_routing_admin_review_guard(shadow_row, alias_text, alias_source, sanitizer_result)
     location_id = safe_str(shadow_row.get("suggested_location_id"))
     if not alias_text or not normalized_alias or not location_id:
         return {
@@ -3374,8 +3477,39 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "error",
             "notes": "missing_required_shadow_fields",
             "action": "error",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": "blocked",
+            "guard_reason": "missing_required_shadow_fields",
             "sanitizer_result": "failed",
             "sanitizer_reason": "missing_required_shadow_fields",
+            "target_row": "",
+        }
+    if safe_str(guard_eval.get("guard_result")) == "blocked" and sanitizer_result.get("ok"):
+        guard_reason = safe_str(guard_eval.get("guard_reason")) or "blocked_by_guard"
+        logger.info(
+            f"[{trace_id}] SHADOW_WRITEBACK_BLOCKED_BY_REVIEW_GUARD worksheet_name={worksheet_name} "
+            f"alias_text={json.dumps(alias_text, ensure_ascii=False)} "
+            f"alias_source={json.dumps(alias_source, ensure_ascii=False)} "
+            f"raw_text_risk_result={safe_str(guard_eval.get('raw_text_risk_result'))} "
+            f"raw_text_risk_type={safe_str(guard_eval.get('raw_text_risk_type'))} "
+            f"guard_reason={guard_reason}"
+        )
+        return {
+            "ok": False,
+            "status": "blocked_by_guard",
+            "notes": f"blocked_by_guard:{guard_reason}",
+            "action": "guard_block",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": safe_str(guard_eval.get("guard_result")),
+            "guard_reason": guard_reason,
+            "sanitizer_result": "passed",
+            "sanitizer_reason": "",
             "target_row": "",
         }
     if not sanitizer_result.get("ok"):
@@ -3392,6 +3526,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "error",
             "notes": f"alias_rejected_by_sanitizer:{reason}",
             "action": "reject",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": safe_str(guard_eval.get("guard_result")),
+            "guard_reason": safe_str(guard_eval.get("guard_reason")),
             "sanitizer_result": "rejected",
             "sanitizer_reason": reason,
             "target_row": "",
@@ -3405,6 +3545,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
                 "status": "skipped_duplicate",
                 "notes": "alias_already_exists_same_mapping",
                 "action": "skip_duplicate",
+                "alias_source": alias_source,
+                "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+                "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+                "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+                "guard_result": safe_str(guard_eval.get("guard_result")),
+                "guard_reason": safe_str(guard_eval.get("guard_reason")),
                 "sanitizer_result": "passed",
                 "sanitizer_reason": "",
                 "target_row": "",
@@ -3414,6 +3560,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "error",
             "notes": "alias_conflict_existing_mapping",
             "action": "error",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": safe_str(guard_eval.get("guard_result")),
+            "guard_reason": safe_str(guard_eval.get("guard_reason")),
             "sanitizer_result": "passed",
             "sanitizer_reason": "alias_conflict_existing_mapping",
             "target_row": "",
@@ -3424,6 +3576,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "error",
             "notes": "alias_sheet_unavailable",
             "action": "error",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": safe_str(guard_eval.get("guard_result")),
+            "guard_reason": safe_str(guard_eval.get("guard_reason")),
             "sanitizer_result": "passed",
             "sanitizer_reason": "alias_sheet_unavailable",
             "target_row": "",
@@ -3452,6 +3610,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "done",
             "notes": "writeback_ok",
             "action": "append",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": safe_str(guard_eval.get("guard_result")),
+            "guard_reason": safe_str(guard_eval.get("guard_reason")),
             "sanitizer_result": "passed",
             "sanitizer_reason": "",
             "target_row": target_row,
@@ -3463,6 +3627,12 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "status": "error",
             "notes": f"append_failed:{type(e).__name__}",
             "action": "error",
+            "alias_source": alias_source,
+            "raw_text_risk_result": safe_str(guard_eval.get("raw_text_risk_result")),
+            "raw_text_risk_type": safe_str(guard_eval.get("raw_text_risk_type")),
+            "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
+            "guard_result": safe_str(guard_eval.get("guard_result")),
+            "guard_reason": safe_str(guard_eval.get("guard_reason")),
             "sanitizer_result": "passed",
             "sanitizer_reason": f"append_failed:{type(e).__name__}",
             "target_row": "",
@@ -3510,6 +3680,12 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
         sanitizer_result = safe_str(result.get("sanitizer_result")) or "unknown"
         sanitizer_reason = safe_str(result.get("sanitizer_reason"))
         target_row = safe_str(result.get("target_row"))
+        alias_source = safe_str(result.get("alias_source")) or ("suggested_alias" if safe_str(row.get("suggested_alias")) else "location_token_guess")
+        raw_text_risk_result = safe_str(result.get("raw_text_risk_result"))
+        raw_text_risk_type = safe_str(result.get("raw_text_risk_type"))
+        raw_text_risk_source = safe_str(result.get("raw_text_risk_source"))
+        guard_result = safe_str(result.get("guard_result"))
+        guard_reason = safe_str(result.get("guard_reason"))
         mark_shadow_writeback_result(trace_id, row_index, status, worksheet_name, notes)
         audit_ok = append_routing_admin_audit_log(
             trace_id=trace_id,
@@ -3523,6 +3699,12 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
             target_sheet=worksheet_name,
             target_row=target_row,
             notes=notes,
+            alias_source=alias_source,
+            raw_text_risk_result=raw_text_risk_result,
+            raw_text_risk_type=raw_text_risk_type,
+            raw_text_risk_source=raw_text_risk_source,
+            guard_result=guard_result,
+            guard_reason=guard_reason,
         )
         if audit_ok:
             summary["audit_logged"] += 1
@@ -3540,8 +3722,13 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
             "row_index": row_index,
             "trace_id": safe_str(row.get("trace_id")),
             "alias_text": safe_str(row.get("suggested_alias")) or safe_str(row.get("location_token_guess")),
-            "alias_source": "suggested_alias" if safe_str(row.get("suggested_alias")) else "location_token_guess",
+            "alias_source": alias_source,
             "location_id": safe_str(row.get("suggested_location_id")),
+            "raw_text_risk_result": raw_text_risk_result,
+            "raw_text_risk_type": raw_text_risk_type,
+            "raw_text_risk_source": raw_text_risk_source,
+            "guard_result": guard_result,
+            "guard_reason": guard_reason,
             "status": status,
             "action": action,
             "sanitizer_result": sanitizer_result,
