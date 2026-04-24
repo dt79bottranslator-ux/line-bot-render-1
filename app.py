@@ -72,7 +72,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -3747,6 +3747,322 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
     logger.info(f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE batch_id={batch_id} processed={summary['processed']} done={summary['done']} skipped_duplicate={summary['skipped_duplicate']} blocked_by_guard={summary['blocked_by_guard']} error={summary['error']} audit_logged={summary['audit_logged']} audit_error={summary['audit_error']} worksheet_name={worksheet_name}")
     return summary
 
+
+CLEANUP_TEST_ROWS_VERSION = "ROUTING_ADMIN_CLEANUP_TEST_ROWS_V1"
+CLEANUP_TEST_MARKERS = ["DT79_TEST", "cleanup_test", "__TEST__", "[TEST]", " TEST "]
+CLEANUP_SHADOW_STATUS = "cleanup_test_archived"
+
+def column_index_to_a1_letter(index_1_based: int) -> str:
+    index = int(index_1_based)
+    if index <= 0:
+        return ""
+    letters = ""
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+def update_row_sparse_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str) -> bool:
+    values = get_all_values_safe(ws, trace_id, worksheet_name)
+    if not values:
+        logger.error(f"[{trace_id}] SPARSE_UPDATE_SKIPPED worksheet_name={worksheet_name} reason=empty_values")
+        return False
+    headers = values[0]
+    header_map = build_header_index_map(headers)
+    updates = []
+    for column_name, value in field_values.items():
+        col_idx = header_map.get(normalize_header_key(column_name))
+        if col_idx is None:
+            logger.error(f"[{trace_id}] SPARSE_UPDATE_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
+            return False
+        col_letter = column_index_to_a1_letter(col_idx + 1)
+        if not col_letter:
+            logger.error(f"[{trace_id}] SPARSE_UPDATE_COLUMN_INVALID worksheet_name={worksheet_name} column_name={column_name} col_idx={col_idx}")
+            return False
+        updates.append({
+            "range": f"{col_letter}{row_index}:{col_letter}{row_index}",
+            "values": [[safe_str(value)]],
+        })
+    if not updates:
+        return True
+    try:
+        ws.batch_update(updates, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(worksheet_name)
+        logger.info(
+            f"[{trace_id}] SPARSE_UPDATE_OK worksheet_name={worksheet_name} row_index={row_index} "
+            f"columns={json.dumps(list(field_values.keys()), ensure_ascii=False)}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] SPARSE_UPDATE_FAILED worksheet_name={worksheet_name} row_index={row_index} exception={type(e).__name__}:{e}")
+        return False
+
+def parse_cleanup_row_indexes(value) -> List[int]:
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    result = []
+    seen = set()
+    for item in raw_items:
+        if isinstance(item, str) and "," in item:
+            candidates = item.split(",")
+        else:
+            candidates = [item]
+        for candidate in candidates:
+            try:
+                row_index = int(safe_str(candidate))
+            except Exception:
+                continue
+            if row_index >= 2 and row_index not in seen:
+                seen.add(row_index)
+                result.append(row_index)
+    return result
+
+def parse_cleanup_text_list(value) -> List[str]:
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    result = []
+    seen = set()
+    for item in raw_items:
+        if isinstance(item, str) and "," in item:
+            candidates = item.split(",")
+        else:
+            candidates = [item]
+        for candidate in candidates:
+            normalized = safe_str(candidate)
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                result.append(normalized)
+    return result
+
+def row_has_cleanup_marker(row: dict, markers: List[str]) -> Tuple[bool, str]:
+    is_test_value = safe_str(row.get("is_test") or row.get("IS_TEST") or row.get("test_flag"))
+    if is_test_value.lower() in {"true", "yes", "y", "1", "test"}:
+        return True, "is_test_true"
+    searchable_fields = [
+        "trace_id",
+        "user_id",
+        "batch_id",
+        "raw_text",
+        "normalized_text",
+        "reviewer_notes",
+        "writeback_notes",
+        "notes",
+        "decision_context",
+        "suggestion_reason",
+    ]
+    combined = " ".join(safe_str(row.get(field)) for field in searchable_fields if safe_str(row.get(field)))
+    if not combined:
+        return False, ""
+    padded_upper = f" {combined.upper()} "
+    normalized_combined = normalize_routing_text(combined)
+    for marker in markers:
+        marker_raw = safe_str(marker)
+        if not marker_raw:
+            continue
+        if marker_raw.upper() in padded_upper:
+            return True, f"marker:{marker_raw}"
+        marker_norm = normalize_routing_text(marker_raw)
+        if marker_norm and marker_norm in normalized_combined:
+            return True, f"marker:{marker_raw}"
+    if re.search(r"(?<![A-Za-z0-9_])TEST(?![A-Za-z0-9_])", combined, flags=re.IGNORECASE):
+        return True, "marker:TEST"
+    return False, ""
+
+def row_matches_cleanup_rule(row: dict, row_index: int, explicit_row_indexes: List[int], trace_ids: List[str], markers: List[str]) -> Tuple[bool, str]:
+    if explicit_row_indexes and row_index in explicit_row_indexes:
+        return True, "explicit_row_index"
+    row_trace_id = safe_str(row.get("trace_id"))
+    if trace_ids and row_trace_id and row_trace_id in trace_ids:
+        return True, "explicit_trace_id"
+    if explicit_row_indexes or trace_ids:
+        return False, ""
+    return row_has_cleanup_marker(row, markers)
+
+def build_cleanup_records_from_values(values: List[List[str]]) -> List[dict]:
+    if not values:
+        return []
+    headers = [safe_str(v) for v in values[0]]
+    rows = []
+    for row_index, raw_row in enumerate(values[1:], start=2):
+        if not any(safe_str(cell) for cell in raw_row):
+            continue
+        row = {"__row_index": row_index}
+        for idx, header in enumerate(headers):
+            if not header:
+                continue
+            row[header] = safe_str(raw_row[idx]) if idx < len(raw_row) else ""
+        rows.append(row)
+    return rows
+
+def cleanup_routing_sheet_test_rows(
+    trace_id: str,
+    worksheet_name: str,
+    dry_run: bool,
+    explicit_row_indexes: List[int],
+    trace_ids: List[str],
+    markers: List[str],
+    limit: int,
+) -> dict:
+    ws = get_routing_worksheet_by_name(trace_id, worksheet_name)
+    result = {
+        "worksheet_name": worksheet_name,
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "matched": 0,
+        "updated": 0,
+        "error": 0,
+        "items": [],
+    }
+    if not ws:
+        result["ok"] = False
+        result["error"] += 1
+        result["items"].append({"status": "error", "reason": "worksheet_unavailable"})
+        return result
+
+    values = get_all_values_safe(ws, trace_id, worksheet_name)
+    rows = build_cleanup_records_from_values(values)
+    selected = []
+    for row in rows:
+        row_index = int(row.get("__row_index") or 0)
+        matched, reason = row_matches_cleanup_rule(row, row_index, explicit_row_indexes, trace_ids, markers)
+        if not matched:
+            continue
+        selected.append((row, reason))
+        if len(selected) >= limit:
+            break
+
+    result["matched"] = len(selected)
+    logger.info(
+        f"[{trace_id}] CLEANUP_TEST_ROWS_SCAN_DONE worksheet_name={worksheet_name} dry_run={dry_run} "
+        f"matched={len(selected)} limit={limit}"
+    )
+
+    for row, reason in selected:
+        row_index = int(row.get("__row_index") or 0)
+        item = {
+            "row_index": row_index,
+            "trace_id": safe_str(row.get("trace_id")),
+            "match_reason": reason,
+            "status_before": safe_str(row.get("writeback_status") or row.get("action")),
+        }
+        if dry_run:
+            item["status"] = "dry_run_matched"
+            result["items"].append(item)
+            continue
+
+        if worksheet_name == ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME:
+            ok = update_row_sparse_fields_by_header(
+                ws=ws,
+                row_index=row_index,
+                field_values={
+                    "writeback_status": CLEANUP_SHADOW_STATUS,
+                    "writeback_at": now_tw_iso(),
+                    "writeback_target": CLEANUP_TEST_ROWS_VERSION,
+                    "writeback_notes": f"{CLEANUP_TEST_ROWS_VERSION}: archived test row; match_reason={reason}",
+                },
+                trace_id=trace_id,
+                worksheet_name=worksheet_name,
+            )
+        elif worksheet_name == ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME:
+            previous_notes = safe_str(row.get("notes"))
+            cleanup_note = f"{CLEANUP_TEST_ROWS_VERSION}: archived test audit row; match_reason={reason}"
+            ok = update_row_sparse_fields_by_header(
+                ws=ws,
+                row_index=row_index,
+                field_values={
+                    "notes": f"{previous_notes} | {cleanup_note}" if previous_notes else cleanup_note,
+                },
+                trace_id=trace_id,
+                worksheet_name=worksheet_name,
+            )
+        else:
+            ok = False
+
+        if ok:
+            result["updated"] += 1
+            item["status"] = "updated"
+        else:
+            result["error"] += 1
+            result["ok"] = False
+            item["status"] = "error"
+        result["items"].append(item)
+
+    return result
+
+def run_routing_admin_cleanup_test_rows(trace_id: str, payload_json: dict) -> dict:
+    dry_run = bool(payload_json.get("dry_run", True))
+    raw_limit = payload_json.get("limit", 50)
+    try:
+        limit = int(raw_limit)
+    except Exception:
+        limit = 50
+    limit = max(1, min(limit, 200))
+
+    target = safe_str(payload_json.get("target") or "all").lower()
+    explicit_rows = payload_json.get("row_indexes") or {}
+    explicit_trace_ids = payload_json.get("trace_ids") or []
+    markers = parse_cleanup_text_list(payload_json.get("markers")) or CLEANUP_TEST_MARKERS
+
+    if isinstance(explicit_rows, dict):
+        shadow_row_indexes = parse_cleanup_row_indexes(explicit_rows.get("shadow") or explicit_rows.get(ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME))
+        audit_row_indexes = parse_cleanup_row_indexes(explicit_rows.get("audit") or explicit_rows.get(ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME))
+    else:
+        parsed = parse_cleanup_row_indexes(explicit_rows)
+        shadow_row_indexes = parsed
+        audit_row_indexes = parsed
+
+    trace_ids = parse_cleanup_text_list(explicit_trace_ids)
+
+    targets = []
+    if target in {"all", "routing_admin", "shadow"}:
+        targets.append((ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME, shadow_row_indexes))
+    if target in {"all", "routing_admin", "audit"}:
+        targets.append((ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME, audit_row_indexes))
+
+    summary = {
+        "ok": True,
+        "version": CLEANUP_TEST_ROWS_VERSION,
+        "dry_run": dry_run,
+        "target": target,
+        "limit": limit,
+        "matched": 0,
+        "updated": 0,
+        "error": 0,
+        "sheets": [],
+    }
+
+    if not targets:
+        summary["ok"] = False
+        summary["error"] = 1
+        summary["sheets"].append({"ok": False, "reason": "invalid_target", "target": target})
+        return summary
+
+    for worksheet_name, row_indexes in targets:
+        sheet_result = cleanup_routing_sheet_test_rows(
+            trace_id=trace_id,
+            worksheet_name=worksheet_name,
+            dry_run=dry_run,
+            explicit_row_indexes=row_indexes,
+            trace_ids=trace_ids,
+            markers=markers,
+            limit=limit,
+        )
+        summary["matched"] += int(sheet_result.get("matched", 0) or 0)
+        summary["updated"] += int(sheet_result.get("updated", 0) or 0)
+        summary["error"] += int(sheet_result.get("error", 0) or 0)
+        if not bool(sheet_result.get("ok")):
+            summary["ok"] = False
+        summary["sheets"].append(sheet_result)
+
+    logger.info(
+        f"[{trace_id}] CLEANUP_TEST_ROWS_DONE version={CLEANUP_TEST_ROWS_VERSION} dry_run={dry_run} "
+        f"target={target} matched={summary['matched']} updated={summary['updated']} error={summary['error']}"
+    )
+    return summary
+
+
 def run_publish_sync_once(trace_id: str) -> dict:
     logger.warning(f"[{trace_id}] PUBLISH_SYNC_FALLBACK_NOT_IMPLEMENTED")
     return {"ok": False, "error": "publish_sync_not_available", "status": "not_implemented"}
@@ -3780,6 +4096,31 @@ def internal_process_shadow_writeback():
     except Exception:
         limit = 20
     result = process_shadow_writeback_batch(trace_id, limit=limit)
+    payload = {
+        "ok": bool(result.get("ok")),
+        "app_version": APP_VERSION,
+        "trace_id": trace_id,
+        "latency_ms": ms_since(started),
+        "result": result,
+    }
+    return jsonify(payload), (200 if payload["ok"] else 207)
+
+
+@app.route("/internal/cleanup-routing-test-rows", methods=["POST"])
+def internal_cleanup_routing_test_rows():
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+    if not verify_internal_sync_token(trace_id):
+        payload = {
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": ms_since(started),
+            "error": "unauthorized",
+        }
+        return jsonify(payload), 401
+    payload_json = request.get_json(silent=True) or {}
+    result = run_routing_admin_cleanup_test_rows(trace_id, payload_json)
     payload = {
         "ok": bool(result.get("ok")),
         "app_version": APP_VERSION,
