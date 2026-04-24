@@ -72,7 +72,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_ADMIN_AUDIT_LOG_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_ADMIN_AUDIT_LOG_V1_ALIAS_SOURCE_FIX"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -1052,7 +1052,7 @@ def append_routing_admin_audit_log(
         safe_str(action),
         sanitize_incoming_text(shadow_row.get("raw_text"))[:500],
         safe_str(shadow_row.get("normalized_text"))[:500],
-        safe_str(shadow_row.get("location_token_guess"))[:120],
+        (safe_str(shadow_row.get("suggested_alias")) or safe_str(shadow_row.get("location_token_guess")))[:120],
         safe_str(shadow_row.get("suggested_location_id")),
         safe_str(shadow_row.get("suggested_region_key")),
         safe_str(shadow_row.get("review_status")),
@@ -3362,7 +3362,8 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "sanitizer_reason": "worksheet_unavailable",
             "target_row": "",
         }
-    alias_text = safe_str(shadow_row.get("location_token_guess"))
+    alias_text = safe_str(shadow_row.get("suggested_alias")) or safe_str(shadow_row.get("location_token_guess"))
+    alias_source = "suggested_alias" if safe_str(shadow_row.get("suggested_alias")) else "location_token_guess"
     sanitizer_result = sanitize_shadow_alias_for_writeback(alias_text)
     normalized_alias = safe_str(sanitizer_result.get("normalized_alias"))
     sanitizer_reason = safe_str(sanitizer_result.get("reason"))
@@ -3382,6 +3383,7 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
         logger.info(
             f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_REJECTED worksheet_name={worksheet_name} "
             f"alias_text={json.dumps(alias_text, ensure_ascii=False)} "
+            f"alias_source={json.dumps(alias_source, ensure_ascii=False)} "
             f"normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} "
             f"reason={reason}"
         )
@@ -3444,7 +3446,7 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(worksheet_name)
-        logger.info(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_OK worksheet_name={worksheet_name} alias_text={json.dumps(alias_text, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} location_id={json.dumps(location_id, ensure_ascii=False)} target_row={json.dumps(target_row, ensure_ascii=False)}")
+        logger.info(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_OK worksheet_name={worksheet_name} alias_text={json.dumps(alias_text, ensure_ascii=False)} alias_source={json.dumps(alias_source, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} location_id={json.dumps(location_id, ensure_ascii=False)} target_row={json.dumps(target_row, ensure_ascii=False)}")
         return {
             "ok": True,
             "status": "done",
@@ -3537,7 +3539,8 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
         summary["items"].append({
             "row_index": row_index,
             "trace_id": safe_str(row.get("trace_id")),
-            "alias_text": safe_str(row.get("location_token_guess")),
+            "alias_text": safe_str(row.get("suggested_alias")) or safe_str(row.get("location_token_guess")),
+            "alias_source": "suggested_alias" if safe_str(row.get("suggested_alias")) else "location_token_guess",
             "location_id": safe_str(row.get("suggested_location_id")),
             "status": status,
             "action": action,
