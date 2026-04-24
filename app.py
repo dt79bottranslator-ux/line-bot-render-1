@@ -121,6 +121,8 @@ ROUTING_MISS_HARVEST_SHEET_NAME = "ROUTING_MISS_HARVEST"
 ROUTING_MISS_HARVEST_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_guess", "location_token_guess", "candidate_aliases", "miss_type", "recommended_fix", "status", "reviewer_notes"]
 ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
 ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
+ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME = "ROUTING_SHADOW_SUGGESTIONS"
+ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes"]
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -222,6 +224,7 @@ _ROUTING_CONFIG_SHARED_CACHE = {"config_map": None, "loaded_at_ts": 0.0}
 _ROUTING_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+_ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 def _now_ts() -> float:
     return time.time()
 def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
@@ -1000,6 +1003,15 @@ def ensure_routing_slowpath_queue_worksheet(trace_id: str):
         ready_cache=_ROUTING_SLOWPATH_WORKSHEET_READY_CACHE,
     )
 
+
+def ensure_routing_shadow_suggestions_worksheet(trace_id: str):
+    return _ensure_generic_routing_queue_worksheet(
+        trace_id=trace_id,
+        worksheet_name=ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME,
+        headers=ROUTING_SHADOW_SUGGESTIONS_HEADERS,
+        ready_cache=_ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE,
+    )
+
 def append_routing_miss_event(
     user_id: str,
     raw_text: str,
@@ -1086,6 +1098,99 @@ def append_routing_slowpath_event(
     except Exception as e:
         logger.exception(f"[{trace_id}] ROUTING_SLOWPATH_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
+
+def append_routing_shadow_suggestion(
+    user_id: str,
+    raw_text: str,
+    normalized_text: str,
+    intent_name: str,
+    location_token_guess: str,
+    suggested_alias: str,
+    suggested_location_id: str,
+    suggested_region_key: str,
+    suggestion_source: str,
+    suggestion_reason: str,
+    confidence: str,
+    trace_id: str,
+    reviewer_notes: str = "",
+) -> bool:
+    ws = ensure_routing_shadow_suggestions_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_SKIPPED reason=worksheet_unavailable")
+        return False
+    row = [
+        now_tw_iso(),
+        safe_str(trace_id),
+        safe_str(user_id),
+        sanitize_incoming_text(raw_text)[:500],
+        safe_str(normalized_text)[:500],
+        safe_str(intent_name),
+        safe_str(location_token_guess),
+        safe_str(suggested_alias),
+        safe_str(suggested_location_id),
+        safe_str(suggested_region_key),
+        safe_str(suggestion_source),
+        safe_str(suggestion_reason)[:500],
+        safe_str(confidence),
+        "pending",
+        safe_str(reviewer_notes),
+    ]
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
+        logger.info(
+            f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_OK user_id={safe_str(user_id)} intent_name={safe_str(intent_name)} "
+            f"suggested_alias={json.dumps(safe_str(suggested_alias), ensure_ascii=False)} "
+            f"suggested_location_id={json.dumps(safe_str(suggested_location_id), ensure_ascii=False)} "
+            f"suggested_region_key={json.dumps(safe_str(suggested_region_key), ensure_ascii=False)} "
+            f"suggestion_source={safe_str(suggestion_source)} confidence={safe_str(confidence)}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
+
+
+def build_shadow_location_suggestion(intent_name: str, candidate_decision: dict, location_token_guess: str) -> Optional[dict]:
+    token = safe_str(location_token_guess)
+    if safe_str(intent_name) != "thue_phong_tro":
+        return None
+    candidates = candidate_decision.get("candidates") or []
+    top = candidates[0] if candidates else {}
+    second = candidates[1] if len(candidates) > 1 else {}
+    top_alias = safe_str(top.get("matched_alias"))
+    top_location_id = safe_str(top.get("location_id"))
+    top_region_key = safe_str(top.get("service_region_key"))
+    top_score = int(candidate_decision.get("top_score", 0) or 0)
+    second_score = int(candidate_decision.get("second_score", 0) or 0)
+    gap = top_score - second_score
+
+    if top_alias and top_region_key and top_score >= 85:
+        confidence = "medium" if gap < 10 else "high"
+        reason = f"top candidate score {top_score}"
+        if second_score:
+            reason += f" but conflict gap only {gap}"
+        return {
+            "suggested_alias": top_alias,
+            "suggested_location_id": top_location_id,
+            "suggested_region_key": top_region_key,
+            "suggestion_source": "candidate_engine",
+            "suggestion_reason": reason,
+            "confidence": confidence,
+        }
+
+    if token and top_alias and top_region_key and top_score >= 72:
+        return {
+            "suggested_alias": top_alias,
+            "suggested_location_id": top_location_id,
+            "suggested_region_key": top_region_key,
+            "suggestion_source": "heuristic",
+            "suggestion_reason": f"location token '{token}' is close to alias '{top_alias}' with score {top_score}",
+            "confidence": "low" if top_score < 85 else "medium",
+        }
+
+    return None
+
 
 def ensure_routing_log_worksheet(trace_id: str):
     spreadsheet = open_routing_spreadsheet(trace_id)
@@ -1477,6 +1582,22 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             action_needed="review_alias",
             trace_id=trace_id,
         )
+        shadow_suggestion = build_shadow_location_suggestion(intent_name, candidate_decision, location_token_guess)
+        if shadow_suggestion:
+            append_routing_shadow_suggestion(
+                user_id=user_id,
+                raw_text=text,
+                normalized_text=normalized_text,
+                intent_name=intent_name,
+                location_token_guess=location_token_guess,
+                suggested_alias=safe_str(shadow_suggestion.get("suggested_alias")),
+                suggested_location_id=safe_str(shadow_suggestion.get("suggested_location_id")),
+                suggested_region_key=safe_str(shadow_suggestion.get("suggested_region_key")),
+                suggestion_source=safe_str(shadow_suggestion.get("suggestion_source")),
+                suggestion_reason=safe_str(shadow_suggestion.get("suggestion_reason")),
+                confidence=safe_str(shadow_suggestion.get("confidence")),
+                trace_id=trace_id,
+            )
         return {
             "reply_text": build_routing_smart_fallback_reply(
                 intent_name,
@@ -1523,6 +1644,22 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             action_needed="review_alias",
             trace_id=trace_id,
         )
+        shadow_suggestion = build_shadow_location_suggestion(intent_name, candidate_decision, location_token_guess)
+        if shadow_suggestion:
+            append_routing_shadow_suggestion(
+                user_id=user_id,
+                raw_text=text,
+                normalized_text=normalized_text,
+                intent_name=intent_name,
+                location_token_guess=location_token_guess,
+                suggested_alias=safe_str(shadow_suggestion.get("suggested_alias")),
+                suggested_location_id=safe_str(shadow_suggestion.get("suggested_location_id")),
+                suggested_region_key=safe_str(shadow_suggestion.get("suggested_region_key")),
+                suggestion_source=safe_str(shadow_suggestion.get("suggestion_source")),
+                suggestion_reason=safe_str(shadow_suggestion.get("suggestion_reason")),
+                confidence=safe_str(shadow_suggestion.get("confidence")),
+                trace_id=trace_id,
+            )
 
     service = choose_service_for_intent(intent_name, location_hint, service_rows)
     if not service and location_hint != fallback_location:
@@ -1552,6 +1689,22 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                 recommended_fix="add_service_row",
                 trace_id=trace_id,
             )
+            shadow_suggestion = build_shadow_location_suggestion(intent_name, candidate_decision, location_token_guess)
+            if shadow_suggestion:
+                append_routing_shadow_suggestion(
+                    user_id=user_id,
+                    raw_text=text,
+                    normalized_text=normalized_text,
+                    intent_name=intent_name,
+                    location_token_guess=location_token_guess,
+                    suggested_alias=safe_str(shadow_suggestion.get("suggested_alias")),
+                    suggested_location_id=safe_str(shadow_suggestion.get("suggested_location_id")),
+                    suggested_region_key=safe_str(shadow_suggestion.get("suggested_region_key")),
+                    suggestion_source=safe_str(shadow_suggestion.get("suggestion_source")),
+                    suggestion_reason=safe_str(shadow_suggestion.get("suggestion_reason")),
+                    confidence=safe_str(shadow_suggestion.get("confidence")),
+                    trace_id=trace_id,
+                )
         logger.info(
             f"[{trace_id}] ROUTING_SERVICE_MISS intent_name={intent_name} "
             f"location_hint={json.dumps(location_hint, ensure_ascii=False)} "
