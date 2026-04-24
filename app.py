@@ -72,7 +72,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -3138,6 +3138,168 @@ def load_ads_reply_message(user_id: str, language_group: str, trace_id: str) -> 
             trace_id=trace_id,
         )
     return build_ads_catalog_reply(language_group, limited_rows), True
+
+TRANSLATION_TARGET_LANG_MAP = {
+    "zh": "zh-TW",
+    "zh-tw": "zh-TW",
+    "tw": "zh-TW",
+    "vi": "vi",
+    "id": "id",
+    "th": "th",
+    "en": "en",
+    "ja": "ja",
+    "ko": "ko",
+}
+TRANSLATION_SHORT_COMMANDS = {
+    "/zh": "zh-TW",
+    "/tw": "zh-TW",
+    "/vi": "vi",
+    "/id": "id",
+    "/th": "th",
+    "/en": "en",
+    "/ja": "ja",
+    "/ko": "ko",
+}
+TRANSLATION_USAGE_TEXT = (
+    "Lệnh dịch:\n"
+    "/tr zh nội dung cần dịch\n"
+    "/tr vi 需要翻譯的內容\n"
+    "/zh nội dung cần dịch\n"
+    "/vi 需要翻譯的內容"
+)
+
+def parse_translation_command(text: str) -> dict:
+    raw = sanitize_incoming_text(text)
+    if not raw:
+        return {"is_translation": False}
+    normalized = normalize_command_text(raw)
+
+    for command, target_lang in TRANSLATION_SHORT_COMMANDS.items():
+        prefix = f"{command} "
+        if normalized.startswith(prefix):
+            return {
+                "is_translation": True,
+                "target_lang": target_lang,
+                "content": raw[len(command):].strip(),
+                "command": command,
+            }
+        if normalized == command:
+            return {
+                "is_translation": True,
+                "target_lang": target_lang,
+                "content": "",
+                "command": command,
+            }
+
+    parts = raw.split(" ", 2)
+    if len(parts) >= 2 and safe_str(parts[0]).lower() in {"/tr", "/translate"}:
+        target_key = safe_str(parts[1]).lower()
+        target_lang = TRANSLATION_TARGET_LANG_MAP.get(target_key, "")
+        return {
+            "is_translation": True,
+            "target_lang": target_lang,
+            "content": safe_str(parts[2]) if len(parts) >= 3 else "",
+            "command": safe_str(parts[0]).lower(),
+        }
+
+    natural_prefixes = [
+        ("dich sang tieng trung ", "zh-TW"),
+        ("dịch sang tiếng trung ", "zh-TW"),
+        ("dich sang tieng viet ", "vi"),
+        ("dịch sang tiếng việt ", "vi"),
+        ("dich sang tieng indonesia ", "id"),
+        ("dịch sang tiếng indonesia ", "id"),
+        ("dich sang tieng thai ", "th"),
+        ("dịch sang tiếng thái ", "th"),
+        ("dich sang tieng anh ", "en"),
+        ("dịch sang tiếng anh ", "en"),
+    ]
+    for prefix, target_lang in natural_prefixes:
+        if normalized.startswith(normalize_command_text(prefix)):
+            return {
+                "is_translation": True,
+                "target_lang": target_lang,
+                "content": raw[len(prefix):].strip(),
+                "command": "natural_translation",
+            }
+
+    translation_intent_tokens = ["dịch", "dich", "translate", "翻譯", "翻译"]
+    if any(token in normalized for token in translation_intent_tokens) and any(
+        token in normalized for token in ["tiếng trung", "tieng trung", "zh", "中文", "tiếng việt", "tieng viet", "vi"]
+    ):
+        return {
+            "is_translation": True,
+            "target_lang": "",
+            "content": "",
+            "command": "translation_intent_missing_content",
+        }
+
+    return {"is_translation": False}
+
+def google_translate_command_text(text: str, target_lang: str, trace_id: str) -> tuple:
+    source_text = sanitize_incoming_text(text)
+    normalized_target = safe_str(target_lang)
+    if not GOOGLE_API_KEY:
+        logger.error(f"[{trace_id}] TRANSLATION_COMMAND_FAILED reason=missing_google_api_key")
+        return "", "missing_google_api_key"
+    if not source_text:
+        return "", "missing_text"
+    if not normalized_target:
+        return "", "missing_target_lang"
+
+    payload = {
+        "q": source_text,
+        "target": normalized_target,
+        "format": "text",
+        "key": GOOGLE_API_KEY,
+    }
+    try:
+        resp = requests.post(GOOGLE_TRANSLATE_API_URL, data=payload, timeout=OUTBOUND_TIMEOUT)
+        body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
+        logger.info(
+            f"[{trace_id}] TRANSLATION_COMMAND_HTTP "
+            f"status_code={resp.status_code} target_lang={normalized_target} body={json.dumps(body_preview, ensure_ascii=False)}"
+        )
+        if not (200 <= resp.status_code < 300):
+            return "", f"translate_http_{resp.status_code}"
+        data = resp.json()
+        translations = data.get("data", {}).get("translations", [])
+        if not translations:
+            return "", "translate_empty"
+        translated = html.unescape(safe_str(translations[0].get("translatedText")))
+        if not translated:
+            return "", "translate_empty_text"
+        return translated[:LINE_TEXT_HARD_LIMIT], ""
+    except Exception as e:
+        logger.exception(f"[{trace_id}] TRANSLATION_COMMAND_EXCEPTION exception={type(e).__name__}:{e}")
+        return "", "translate_exception"
+
+def build_translation_command_reply(text: str, trace_id: str) -> tuple:
+    parsed = parse_translation_command(text)
+    if not parsed.get("is_translation"):
+        return "", "not_translation"
+    target_lang = safe_str(parsed.get("target_lang"))
+    content = safe_str(parsed.get("content"))
+    command = safe_str(parsed.get("command"))
+    if not target_lang or not content:
+        logger.info(
+            f"[{trace_id}] TRANSLATION_COMMAND_USAGE_REQUIRED "
+            f"command={command} target_lang={target_lang} content_present={bool(content)}"
+        )
+        return TRANSLATION_USAGE_TEXT, "usage"
+    translated, error = google_translate_command_text(content, target_lang, trace_id)
+    if error:
+        logger.error(
+            f"[{trace_id}] TRANSLATION_COMMAND_FAILED "
+            f"command={command} target_lang={target_lang} error={error}"
+        )
+        return FALLBACK_REPLY_TEXT, error
+    logger.info(
+        f"[{trace_id}] TRANSLATION_COMMAND_OK "
+        f"command={command} target_lang={target_lang} input_len={len(content)} output_len={len(translated)}"
+    )
+    return translated, "ok"
+
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -3206,6 +3368,9 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         else:
             reply_text = handle_lang_invalid_message(current_language)
             flow_used = current_flow or "lang_invalid"
+    elif parse_translation_command(text).get("is_translation"):
+        reply_text, translation_status = build_translation_command_reply(text, trace_id)
+        flow_used = f"translation_command_{translation_status}"
     elif current_flow == FLOW_WORKER:
         reply_text = handle_worker_message(text, current_language)
         flow_used = FLOW_WORKER
