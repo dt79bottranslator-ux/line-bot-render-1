@@ -123,7 +123,6 @@ ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
 ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
 ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME = "ROUTING_SHADOW_SUGGESTIONS"
 ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes", "second_candidate_alias", "second_candidate_location_id", "score_gap", "decision_context", "writeback_status", "writeback_at", "writeback_target", "writeback_notes"]
-LOCATION_ALIAS_WRITEBACK_DEFAULT_SHEET_NAME = "LOCATION_ALIAS_MASTER_V2"
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -1118,10 +1117,6 @@ def append_routing_shadow_suggestion(
     second_candidate_location_id: str = "",
     score_gap: str = "",
     decision_context: str = "",
-    writeback_status: str = "pending",
-    writeback_at: str = "",
-    writeback_target: str = "",
-    writeback_notes: str = "",
 ) -> bool:
     ws = ensure_routing_shadow_suggestions_worksheet(trace_id)
     if not ws:
@@ -1147,10 +1142,10 @@ def append_routing_shadow_suggestion(
         safe_str(second_candidate_location_id),
         safe_str(score_gap),
         safe_str(decision_context)[:500],
-        safe_str(writeback_status),
-        safe_str(writeback_at),
-        safe_str(writeback_target),
-        safe_str(writeback_notes)[:500],
+        "pending",
+        "",
+        "",
+        "",
     ]
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
@@ -1163,7 +1158,6 @@ def append_routing_shadow_suggestion(
             f"second_candidate_alias={json.dumps(safe_str(second_candidate_alias), ensure_ascii=False)} "
             f"second_candidate_location_id={json.dumps(safe_str(second_candidate_location_id), ensure_ascii=False)} "
             f"score_gap={json.dumps(safe_str(score_gap), ensure_ascii=False)} "
-            f"writeback_status={json.dumps(safe_str(writeback_status), ensure_ascii=False)} "
             f"suggestion_source={safe_str(suggestion_source)} confidence={safe_str(confidence)}"
         )
         return True
@@ -1224,156 +1218,6 @@ def build_shadow_location_suggestion(intent_name: str, candidate_decision: dict,
         }
 
     return None
-
-
-def resolve_location_alias_writeback_sheet_name(trace_id: str) -> str:
-    config_map = load_bot_config_map(trace_id)
-    return safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_WRITEBACK_DEFAULT_SHEET_NAME
-
-
-def get_pending_shadow_writebacks(trace_id: str, limit: int = 20) -> List[dict]:
-    ws = get_routing_worksheet_by_name(trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
-    if not ws:
-        logger.error(f"[{trace_id}] SHADOW_WRITEBACK_QUEUE_UNAVAILABLE")
-        return []
-    values = get_all_values_safe(ws, trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
-    if not values:
-        return []
-    headers = values[0]
-    header_map = build_header_index_map(headers)
-    results: List[dict] = []
-    for row_index, row in enumerate(values[1:], start=2):
-        if not any(safe_str(cell) for cell in row):
-            continue
-        record = {header: (safe_str(row[idx]) if idx < len(row) else "") for idx, header in enumerate(headers) if safe_str(header)}
-        review_status = safe_str(record.get("review_status")).lower()
-        writeback_status = safe_str(record.get("writeback_status")).lower()
-        if review_status != "approved":
-            continue
-        if writeback_status not in {"", "pending"}:
-            continue
-        record["_row_index"] = row_index
-        results.append(record)
-        if len(results) >= max(1, int(limit or 20)):
-            break
-    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_PENDING_SCAN_OK count={len(results)}")
-    return results
-
-
-def find_existing_alias_v2(normalized_alias: str, trace_id: str, worksheet_name: str) -> Optional[dict]:
-    ws = get_routing_worksheet_by_name(trace_id, worksheet_name)
-    if not ws:
-        logger.error(f"[{trace_id}] LOCATION_ALIAS_WRITEBACK_SHEET_UNAVAILABLE worksheet_name={worksheet_name}")
-        return None
-    rows = get_records_safe(ws, trace_id, worksheet_name)
-    normalized_target = normalize_routing_text(normalized_alias)
-    for row in rows:
-        existing_normalized = normalize_routing_text(row.get("normalized_alias") or row.get("alias_text"))
-        if existing_normalized == normalized_target:
-            return row
-    return None
-
-
-def append_location_alias_v2_from_shadow(trace_id: str, worksheet_name: str, shadow_row: dict) -> Tuple[bool, str]:
-    ws = get_routing_worksheet_by_name(trace_id, worksheet_name)
-    if not ws:
-        return False, "worksheet_unavailable"
-    alias_text = safe_str(shadow_row.get("location_token_guess"))
-    normalized_alias = normalize_routing_text(alias_text)
-    location_id = safe_str(shadow_row.get("suggested_location_id"))
-    confidence_label = safe_str(shadow_row.get("confidence")).lower()
-    confidence_value = "0.95" if confidence_label in {"medium", "high"} else "0.85"
-    note = f"approved from {ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME} trace_id={safe_str(shadow_row.get('trace_id'))}"
-    row = [
-        alias_text,
-        normalized_alias,
-        location_id,
-        "vi",
-        "shadow_approved_vi",
-        confidence_value,
-        note,
-    ]
-    try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
-        _invalidate_worksheet_caches(worksheet_name)
-        logger.info(
-            f"[{trace_id}] LOCATION_ALIAS_WRITEBACK_APPEND_OK worksheet_name={worksheet_name} "
-            f"alias_text={json.dumps(alias_text, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} "
-            f"location_id={json.dumps(location_id, ensure_ascii=False)}"
-        )
-        return True, "ok"
-    except Exception as e:
-        logger.exception(f"[{trace_id}] LOCATION_ALIAS_WRITEBACK_APPEND_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
-        return False, f"append_failed:{type(e).__name__}"
-
-
-def mark_shadow_writeback_result(trace_id: str, row_index: int, status: str, target: str = "", notes: str = "") -> bool:
-    ws = get_routing_worksheet_by_name(trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
-    if not ws:
-        logger.error(f"[{trace_id}] SHADOW_WRITEBACK_MARK_SKIPPED reason=worksheet_unavailable row_index={row_index}")
-        return False
-    payload = {
-        "writeback_status": safe_str(status),
-        "writeback_at": now_tw_iso(),
-        "writeback_target": safe_str(target),
-        "writeback_notes": safe_str(notes)[:500],
-    }
-    return update_row_fields_by_header(ws, row_index, payload, trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
-
-
-def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
-    worksheet_name = resolve_location_alias_writeback_sheet_name(trace_id)
-    pending_rows = get_pending_shadow_writebacks(trace_id, limit=limit)
-    results = []
-    done_count = 0
-    skipped_count = 0
-    error_count = 0
-    for item in pending_rows:
-        row_index = int(item.get("_row_index", 0) or 0)
-        alias_text = safe_str(item.get("location_token_guess"))
-        normalized_alias = normalize_routing_text(alias_text)
-        location_id = safe_str(item.get("suggested_location_id"))
-        trace_ref = safe_str(item.get("trace_id"))
-        if not alias_text or not location_id:
-            mark_shadow_writeback_result(trace_id, row_index, "error", worksheet_name, "missing_required_fields")
-            results.append({"row_index": row_index, "status": "error", "reason": "missing_required_fields", "trace_id": trace_ref})
-            error_count += 1
-            continue
-        existing = find_existing_alias_v2(normalized_alias, trace_id, worksheet_name)
-        if existing:
-            existing_location_id = safe_str(existing.get("location_id"))
-            if existing_location_id == location_id:
-                mark_shadow_writeback_result(trace_id, row_index, "skipped_duplicate", worksheet_name, "duplicate_same_mapping")
-                results.append({"row_index": row_index, "status": "skipped_duplicate", "reason": "duplicate_same_mapping", "trace_id": trace_ref})
-                skipped_count += 1
-                continue
-            mark_shadow_writeback_result(trace_id, row_index, "error", worksheet_name, "alias_conflict_existing_mapping")
-            results.append({"row_index": row_index, "status": "error", "reason": "alias_conflict_existing_mapping", "trace_id": trace_ref})
-            error_count += 1
-            continue
-        ok, reason = append_location_alias_v2_from_shadow(trace_id, worksheet_name, item)
-        if ok:
-            mark_shadow_writeback_result(trace_id, row_index, "done", worksheet_name, "writeback_ok")
-            results.append({"row_index": row_index, "status": "done", "reason": "writeback_ok", "trace_id": trace_ref})
-            done_count += 1
-        else:
-            mark_shadow_writeback_result(trace_id, row_index, "error", worksheet_name, reason)
-            results.append({"row_index": row_index, "status": "error", "reason": reason, "trace_id": trace_ref})
-            error_count += 1
-    summary = {
-        "ok": True,
-        "target_sheet": worksheet_name,
-        "processed": len(pending_rows),
-        "done": done_count,
-        "skipped": skipped_count,
-        "errors": error_count,
-        "results": results,
-    }
-    logger.info(
-        f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE target_sheet={worksheet_name} processed={len(pending_rows)} "
-        f"done={done_count} skipped={skipped_count} errors={error_count}"
-    )
-    return summary
 
 
 def ensure_routing_log_worksheet(trace_id: str):
@@ -3351,6 +3195,185 @@ def verify_internal_sync_token(trace_id: str) -> bool:
     ok = hmac.compare_digest(provided, expected)
     logger.info(f"[{trace_id}] INTERNAL_SYNC_TOKEN_CHECK ok={ok}")
     return ok
+
+def resolve_location_alias_writeback_sheet_name(trace_id: str) -> str:
+    config_map = load_bot_config_map(trace_id)
+    return safe_str(config_map.get("location_alias_sheet")) or "LOCATION_ALIAS_MASTER_V2"
+
+def _normalize_shadow_alias_text(value: str) -> str:
+    return normalize_routing_text(value)
+
+def _parse_shadow_confidence_to_alias_confidence(value: str) -> str:
+    normalized = safe_str(value).lower()
+    return "0.95" if normalized in {"high", "medium"} else "0.85"
+
+def get_pending_shadow_writebacks(trace_id: str) -> List[dict]:
+    ws = get_routing_worksheet_by_name(trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
+    if not ws:
+        return []
+    rows = get_records_safe(ws, trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
+    pending = []
+    for idx, row in enumerate(rows, start=2):
+        review_status = safe_str(row.get("review_status")).lower()
+        writeback_status = safe_str(row.get("writeback_status")).lower()
+        if review_status != "approved":
+            continue
+        if writeback_status and writeback_status not in {"pending"}:
+            continue
+        item = dict(row)
+        item["__row_index"] = idx
+        pending.append(item)
+    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_PENDING_SCAN count={len(pending)}")
+    return pending
+
+def find_existing_alias_v2(normalized_alias: str, trace_id: str, worksheet_name: str) -> dict:
+    ws = get_routing_worksheet_by_name(trace_id, worksheet_name)
+    if not ws:
+        return {"status": "worksheet_unavailable"}
+    rows = get_records_safe(ws, trace_id, worksheet_name)
+    target = _normalize_shadow_alias_text(normalized_alias)
+    for row in rows:
+        existing_norm = _normalize_shadow_alias_text(row.get("normalized_alias") or row.get("alias_text"))
+        if existing_norm != target:
+            continue
+        return {
+            "status": "found",
+            "location_id": safe_str(row.get("location_id")),
+            "row": row,
+        }
+    return {"status": "not_found"}
+
+def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksheet_name: str) -> dict:
+    ws = get_routing_worksheet_by_name(trace_id, worksheet_name)
+    if not ws:
+        return {"ok": False, "status": "error", "notes": "alias_sheet_unavailable"}
+    alias_text = safe_str(shadow_row.get("location_token_guess"))
+    normalized_alias = _normalize_shadow_alias_text(alias_text)
+    location_id = safe_str(shadow_row.get("suggested_location_id"))
+    if not alias_text or not normalized_alias or not location_id:
+        return {"ok": False, "status": "error", "notes": "missing_required_shadow_fields"}
+    duplicate = find_existing_alias_v2(normalized_alias, trace_id, worksheet_name)
+    if duplicate.get("status") == "found":
+        existing_location_id = safe_str(duplicate.get("location_id"))
+        if existing_location_id == location_id:
+            return {"ok": True, "status": "skipped_duplicate", "notes": "alias_already_exists_same_mapping"}
+        return {"ok": False, "status": "error", "notes": "alias_conflict_existing_mapping"}
+    if duplicate.get("status") == "worksheet_unavailable":
+        return {"ok": False, "status": "error", "notes": "alias_sheet_unavailable"}
+    row = [
+        alias_text,
+        normalized_alias,
+        location_id,
+        "vi",
+        "shadow_approved_vi",
+        _parse_shadow_confidence_to_alias_confidence(shadow_row.get("confidence")),
+        f"approved from ROUTING_SHADOW_SUGGESTIONS trace_id={safe_str(shadow_row.get('trace_id'))}",
+    ]
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(worksheet_name)
+        logger.info(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_OK worksheet_name={worksheet_name} alias_text={json.dumps(alias_text, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} location_id={json.dumps(location_id, ensure_ascii=False)}")
+        return {"ok": True, "status": "done", "notes": "writeback_ok"}
+    except Exception as e:
+        logger.exception(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
+        return {"ok": False, "status": "error", "notes": f"append_failed:{type(e).__name__}"}
+
+def mark_shadow_writeback_result(trace_id: str, row_index: int, status: str, target: str, notes: str = "") -> bool:
+    ws = get_routing_worksheet_by_name(trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
+    if not ws:
+        return False
+    return update_row_fields_by_header(
+        ws=ws,
+        row_index=row_index,
+        field_values={
+            "writeback_status": safe_str(status),
+            "writeback_at": now_tw_iso(),
+            "writeback_target": safe_str(target),
+            "writeback_notes": safe_str(notes),
+        },
+        trace_id=trace_id,
+        worksheet_name=ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME,
+    )
+
+def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
+    worksheet_name = resolve_location_alias_writeback_sheet_name(trace_id)
+    pending_rows = get_pending_shadow_writebacks(trace_id)
+    summary = {
+        "ok": True,
+        "worksheet_name": worksheet_name,
+        "processed": 0,
+        "done": 0,
+        "skipped_duplicate": 0,
+        "error": 0,
+        "items": [],
+    }
+    for row in pending_rows[:max(1, min(limit, 100))]:
+        row_index = int(row.get("__row_index") or 0)
+        result = append_location_alias_v2_from_shadow(row, trace_id, worksheet_name)
+        status = safe_str(result.get("status")) or ("done" if result.get("ok") else "error")
+        notes = safe_str(result.get("notes"))
+        mark_shadow_writeback_result(trace_id, row_index, status, worksheet_name, notes)
+        summary["processed"] += 1
+        if status == "done":
+            summary["done"] += 1
+        elif status == "skipped_duplicate":
+            summary["skipped_duplicate"] += 1
+        else:
+            summary["error"] += 1
+            summary["ok"] = False
+        summary["items"].append({
+            "row_index": row_index,
+            "trace_id": safe_str(row.get("trace_id")),
+            "alias_text": safe_str(row.get("location_token_guess")),
+            "location_id": safe_str(row.get("suggested_location_id")),
+            "status": status,
+            "notes": notes,
+        })
+    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE processed={summary['processed']} done={summary['done']} skipped_duplicate={summary['skipped_duplicate']} error={summary['error']} worksheet_name={worksheet_name}")
+    return summary
+
+def run_publish_sync_once(trace_id: str) -> dict:
+    logger.warning(f"[{trace_id}] PUBLISH_SYNC_FALLBACK_NOT_IMPLEMENTED")
+    return {"ok": False, "error": "publish_sync_not_available", "status": "not_implemented"}
+
+def resolve_publish_sync_status_code(sync_result: dict) -> int:
+    if not isinstance(sync_result, dict):
+        return 500
+    if bool(sync_result.get("ok")):
+        return 200
+    if safe_str(sync_result.get("error")) == "publish_sync_not_available":
+        return 501
+    return 500
+
+@app.route("/internal/process-shadow-writeback", methods=["POST"])
+def internal_process_shadow_writeback():
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+    if not verify_internal_sync_token(trace_id):
+        payload = {
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": ms_since(started),
+            "error": "unauthorized",
+        }
+        return jsonify(payload), 401
+    payload_json = request.get_json(silent=True) or {}
+    limit = payload_json.get("limit", 20)
+    try:
+        limit = int(limit)
+    except Exception:
+        limit = 20
+    result = process_shadow_writeback_batch(trace_id, limit=limit)
+    payload = {
+        "ok": bool(result.get("ok")),
+        "app_version": APP_VERSION,
+        "trace_id": trace_id,
+        "latency_ms": ms_since(started),
+        "result": result,
+    }
+    return jsonify(payload), (200 if payload["ok"] else 207)
+
 @app.route("/internal/publish-sync", methods=["POST"])
 def internal_publish_sync():
     trace_id = make_trace_id()
@@ -3374,34 +3397,6 @@ def internal_publish_sync():
         "result": sync_result,
     }
     return jsonify(payload), status_code
-@app.route("/internal/process-shadow-writeback", methods=["POST"])
-def internal_process_shadow_writeback():
-    trace_id = make_trace_id()
-    started = time.perf_counter()
-    if not verify_internal_sync_token(trace_id):
-        payload = {
-            "ok": False,
-            "app_version": APP_VERSION,
-            "trace_id": trace_id,
-            "latency_ms": ms_since(started),
-            "error": "unauthorized",
-        }
-        return jsonify(payload), 401
-    limit_raw = safe_str(request.args.get("limit") or request.form.get("limit") or (request.get_json(silent=True) or {}).get("limit"))
-    try:
-        limit = max(1, min(int(limit_raw or "20"), 100))
-    except Exception:
-        limit = 20
-    result = process_shadow_writeback_batch(trace_id, limit=limit)
-    payload = {
-        "ok": bool(result.get("ok")),
-        "app_version": APP_VERSION,
-        "trace_id": trace_id,
-        "latency_ms": ms_since(started),
-        "result": result,
-    }
-    return jsonify(payload), 200
-
 @app.route("/callback", methods=["POST"])
 def callback():
     trace_id = make_trace_id()
