@@ -72,7 +72,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_V2_CANONICAL_REGION__AUDIT_V2"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_ADMIN_AUDIT_LOG_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -123,6 +123,8 @@ ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
 ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
 ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME = "ROUTING_SHADOW_SUGGESTIONS"
 ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes", "second_candidate_alias", "second_candidate_location_id", "score_gap", "decision_context", "writeback_status", "writeback_at", "writeback_target", "writeback_notes"]
+ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME = "ROUTING_ADMIN_AUDIT_LOG"
+ROUTING_ADMIN_AUDIT_LOG_HEADERS = ["timestamp", "trace_id", "batch_id", "source_sheet", "source_row", "action", "raw_text", "normalized_text", "alias", "location_id", "region_key", "review_status", "writeback_status", "sanitizer_result", "sanitizer_reason", "target_sheet", "target_row", "operator", "notes"]
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -225,6 +227,7 @@ _ROUTING_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+_ROUTING_ADMIN_AUDIT_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 def _now_ts() -> float:
     return time.time()
 def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
@@ -1011,6 +1014,70 @@ def ensure_routing_shadow_suggestions_worksheet(trace_id: str):
         headers=ROUTING_SHADOW_SUGGESTIONS_HEADERS,
         ready_cache=_ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE,
     )
+
+
+def ensure_routing_admin_audit_log_worksheet(trace_id: str):
+    return _ensure_generic_routing_queue_worksheet(
+        trace_id=trace_id,
+        worksheet_name=ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME,
+        headers=ROUTING_ADMIN_AUDIT_LOG_HEADERS,
+        ready_cache=_ROUTING_ADMIN_AUDIT_LOG_WORKSHEET_READY_CACHE,
+    )
+
+
+def append_routing_admin_audit_log(
+    trace_id: str,
+    batch_id: str,
+    shadow_row: dict,
+    source_row: int,
+    action: str,
+    writeback_status: str,
+    sanitizer_result: str,
+    sanitizer_reason: str,
+    target_sheet: str,
+    target_row: str = "",
+    notes: str = "",
+    operator: str = "system:process-shadow-writeback",
+) -> bool:
+    ws = ensure_routing_admin_audit_log_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] ROUTING_ADMIN_AUDIT_LOG_APPEND_SKIPPED reason=worksheet_unavailable")
+        return False
+    row = [
+        now_tw_iso(),
+        safe_str(shadow_row.get("trace_id")) or safe_str(trace_id),
+        safe_str(batch_id),
+        ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME,
+        safe_str(source_row),
+        safe_str(action),
+        sanitize_incoming_text(shadow_row.get("raw_text"))[:500],
+        safe_str(shadow_row.get("normalized_text"))[:500],
+        safe_str(shadow_row.get("location_token_guess"))[:120],
+        safe_str(shadow_row.get("suggested_location_id")),
+        safe_str(shadow_row.get("suggested_region_key")),
+        safe_str(shadow_row.get("review_status")),
+        safe_str(writeback_status),
+        safe_str(sanitizer_result),
+        safe_str(sanitizer_reason),
+        safe_str(target_sheet),
+        safe_str(target_row),
+        safe_str(operator),
+        safe_str(notes)[:500],
+    ]
+    try:
+        ws.append_row(row, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME)
+        logger.info(
+            f"[{trace_id}] ROUTING_ADMIN_AUDIT_LOG_APPEND_OK "
+            f"batch_id={safe_str(batch_id)} source_row={safe_str(source_row)} "
+            f"action={safe_str(action)} writeback_status={safe_str(writeback_status)} "
+            f"sanitizer_result={safe_str(sanitizer_result)} target_sheet={safe_str(target_sheet)} "
+            f"target_row={safe_str(target_row)}"
+        )
+        return True
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ROUTING_ADMIN_AUDIT_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
+        return False
 
 def append_routing_miss_event(
     user_id: str,
@@ -3286,30 +3353,79 @@ def find_existing_alias_v2(normalized_alias: str, trace_id: str, worksheet_name:
 def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksheet_name: str) -> dict:
     ws = get_routing_worksheet_by_name(trace_id, worksheet_name)
     if not ws:
-        return {"ok": False, "status": "error", "notes": "alias_sheet_unavailable"}
+        return {
+            "ok": False,
+            "status": "error",
+            "notes": "alias_sheet_unavailable",
+            "action": "error",
+            "sanitizer_result": "not_run",
+            "sanitizer_reason": "worksheet_unavailable",
+            "target_row": "",
+        }
     alias_text = safe_str(shadow_row.get("location_token_guess"))
     sanitizer_result = sanitize_shadow_alias_for_writeback(alias_text)
     normalized_alias = safe_str(sanitizer_result.get("normalized_alias"))
+    sanitizer_reason = safe_str(sanitizer_result.get("reason"))
     location_id = safe_str(shadow_row.get("suggested_location_id"))
     if not alias_text or not normalized_alias or not location_id:
-        return {"ok": False, "status": "error", "notes": "missing_required_shadow_fields"}
+        return {
+            "ok": False,
+            "status": "error",
+            "notes": "missing_required_shadow_fields",
+            "action": "error",
+            "sanitizer_result": "failed",
+            "sanitizer_reason": "missing_required_shadow_fields",
+            "target_row": "",
+        }
     if not sanitizer_result.get("ok"):
-        reason = safe_str(sanitizer_result.get("reason")) or "alias_rejected_by_sanitizer"
+        reason = sanitizer_reason or "alias_rejected_by_sanitizer"
         logger.info(
             f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_REJECTED worksheet_name={worksheet_name} "
             f"alias_text={json.dumps(alias_text, ensure_ascii=False)} "
             f"normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} "
             f"reason={reason}"
         )
-        return {"ok": False, "status": "error", "notes": f"alias_rejected_by_sanitizer:{reason}"}
+        return {
+            "ok": False,
+            "status": "error",
+            "notes": f"alias_rejected_by_sanitizer:{reason}",
+            "action": "reject",
+            "sanitizer_result": "rejected",
+            "sanitizer_reason": reason,
+            "target_row": "",
+        }
     duplicate = find_existing_alias_v2(normalized_alias, trace_id, worksheet_name)
     if duplicate.get("status") == "found":
         existing_location_id = safe_str(duplicate.get("location_id"))
         if existing_location_id == location_id:
-            return {"ok": True, "status": "skipped_duplicate", "notes": "alias_already_exists_same_mapping"}
-        return {"ok": False, "status": "error", "notes": "alias_conflict_existing_mapping"}
+            return {
+                "ok": True,
+                "status": "skipped_duplicate",
+                "notes": "alias_already_exists_same_mapping",
+                "action": "skip_duplicate",
+                "sanitizer_result": "passed",
+                "sanitizer_reason": "",
+                "target_row": "",
+            }
+        return {
+            "ok": False,
+            "status": "error",
+            "notes": "alias_conflict_existing_mapping",
+            "action": "error",
+            "sanitizer_result": "passed",
+            "sanitizer_reason": "alias_conflict_existing_mapping",
+            "target_row": "",
+        }
     if duplicate.get("status") == "worksheet_unavailable":
-        return {"ok": False, "status": "error", "notes": "alias_sheet_unavailable"}
+        return {
+            "ok": False,
+            "status": "error",
+            "notes": "alias_sheet_unavailable",
+            "action": "error",
+            "sanitizer_result": "passed",
+            "sanitizer_reason": "alias_sheet_unavailable",
+            "target_row": "",
+        }
     row = [
         alias_text,
         normalized_alias,
@@ -3319,14 +3435,36 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
         _parse_shadow_confidence_to_alias_confidence(shadow_row.get("confidence")),
         f"approved from ROUTING_SHADOW_SUGGESTIONS trace_id={safe_str(shadow_row.get('trace_id'))}",
     ]
+    target_row = ""
+    try:
+        current_values = get_all_values_safe(ws, trace_id, worksheet_name)
+        target_row = str(len(current_values) + 1) if current_values else ""
+    except Exception:
+        target_row = ""
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(worksheet_name)
-        logger.info(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_OK worksheet_name={worksheet_name} alias_text={json.dumps(alias_text, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} location_id={json.dumps(location_id, ensure_ascii=False)}")
-        return {"ok": True, "status": "done", "notes": "writeback_ok"}
+        logger.info(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_OK worksheet_name={worksheet_name} alias_text={json.dumps(alias_text, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} location_id={json.dumps(location_id, ensure_ascii=False)} target_row={json.dumps(target_row, ensure_ascii=False)}")
+        return {
+            "ok": True,
+            "status": "done",
+            "notes": "writeback_ok",
+            "action": "append",
+            "sanitizer_result": "passed",
+            "sanitizer_reason": "",
+            "target_row": target_row,
+        }
     except Exception as e:
         logger.exception(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
-        return {"ok": False, "status": "error", "notes": f"append_failed:{type(e).__name__}"}
+        return {
+            "ok": False,
+            "status": "error",
+            "notes": f"append_failed:{type(e).__name__}",
+            "action": "error",
+            "sanitizer_result": "passed",
+            "sanitizer_reason": f"append_failed:{type(e).__name__}",
+            "target_row": "",
+        }
 
 def mark_shadow_writeback_result(trace_id: str, row_index: int, status: str, target: str, notes: str = "") -> bool:
     ws = get_routing_worksheet_by_name(trace_id, ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
@@ -3347,14 +3485,18 @@ def mark_shadow_writeback_result(trace_id: str, row_index: int, status: str, tar
 
 def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
     worksheet_name = resolve_location_alias_writeback_sheet_name(trace_id)
+    batch_id = f"shwb_{datetime.now(TW_TZ).strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
     pending_rows = get_pending_shadow_writebacks(trace_id)
     summary = {
         "ok": True,
         "worksheet_name": worksheet_name,
+        "batch_id": batch_id,
         "processed": 0,
         "done": 0,
         "skipped_duplicate": 0,
         "error": 0,
+        "audit_logged": 0,
+        "audit_error": 0,
         "items": [],
     }
     for row in pending_rows[:max(1, min(limit, 100))]:
@@ -3362,7 +3504,28 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
         result = append_location_alias_v2_from_shadow(row, trace_id, worksheet_name)
         status = safe_str(result.get("status")) or ("done" if result.get("ok") else "error")
         notes = safe_str(result.get("notes"))
+        action = safe_str(result.get("action")) or status
+        sanitizer_result = safe_str(result.get("sanitizer_result")) or "unknown"
+        sanitizer_reason = safe_str(result.get("sanitizer_reason"))
+        target_row = safe_str(result.get("target_row"))
         mark_shadow_writeback_result(trace_id, row_index, status, worksheet_name, notes)
+        audit_ok = append_routing_admin_audit_log(
+            trace_id=trace_id,
+            batch_id=batch_id,
+            shadow_row=row,
+            source_row=row_index,
+            action=action,
+            writeback_status=status,
+            sanitizer_result=sanitizer_result,
+            sanitizer_reason=sanitizer_reason,
+            target_sheet=worksheet_name,
+            target_row=target_row,
+            notes=notes,
+        )
+        if audit_ok:
+            summary["audit_logged"] += 1
+        else:
+            summary["audit_error"] += 1
         summary["processed"] += 1
         if status == "done":
             summary["done"] += 1
@@ -3377,9 +3540,14 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
             "alias_text": safe_str(row.get("location_token_guess")),
             "location_id": safe_str(row.get("suggested_location_id")),
             "status": status,
+            "action": action,
+            "sanitizer_result": sanitizer_result,
+            "sanitizer_reason": sanitizer_reason,
+            "target_row": target_row,
+            "audit_logged": audit_ok,
             "notes": notes,
         })
-    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE processed={summary['processed']} done={summary['done']} skipped_duplicate={summary['skipped_duplicate']} error={summary['error']} worksheet_name={worksheet_name}")
+    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE batch_id={batch_id} processed={summary['processed']} done={summary['done']} skipped_duplicate={summary['skipped_duplicate']} error={summary['error']} audit_logged={summary['audit_logged']} audit_error={summary['audit_error']} worksheet_name={worksheet_name}")
     return summary
 
 def run_publish_sync_once(trace_id: str) -> dict:
