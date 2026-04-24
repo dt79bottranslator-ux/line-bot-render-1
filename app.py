@@ -72,7 +72,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__ROUTING_ADMIN_REVIEW_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -3487,18 +3487,22 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "sanitizer_reason": "missing_required_shadow_fields",
             "target_row": "",
         }
-    if safe_str(guard_eval.get("guard_result")) == "blocked" and sanitizer_result.get("ok"):
+    if safe_str(guard_eval.get("guard_result")) == "blocked":
         guard_reason = safe_str(guard_eval.get("guard_reason")) or "blocked_by_guard"
+        blocked_sanitizer_result = "passed" if sanitizer_result.get("ok") else "rejected"
+        blocked_sanitizer_reason = "" if sanitizer_result.get("ok") else (sanitizer_reason or "alias_rejected_by_sanitizer")
         logger.info(
             f"[{trace_id}] SHADOW_WRITEBACK_BLOCKED_BY_REVIEW_GUARD worksheet_name={worksheet_name} "
             f"alias_text={json.dumps(alias_text, ensure_ascii=False)} "
             f"alias_source={json.dumps(alias_source, ensure_ascii=False)} "
             f"raw_text_risk_result={safe_str(guard_eval.get('raw_text_risk_result'))} "
             f"raw_text_risk_type={safe_str(guard_eval.get('raw_text_risk_type'))} "
+            f"sanitizer_result={blocked_sanitizer_result} "
+            f"sanitizer_reason={blocked_sanitizer_reason} "
             f"guard_reason={guard_reason}"
         )
         return {
-            "ok": False,
+            "ok": True,
             "status": "blocked_by_guard",
             "notes": f"blocked_by_guard:{guard_reason}",
             "action": "guard_block",
@@ -3508,8 +3512,8 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
             "raw_text_risk_source": safe_str(guard_eval.get("raw_text_risk_source")),
             "guard_result": safe_str(guard_eval.get("guard_result")),
             "guard_reason": guard_reason,
-            "sanitizer_result": "passed",
-            "sanitizer_reason": "",
+            "sanitizer_result": blocked_sanitizer_result,
+            "sanitizer_reason": blocked_sanitizer_reason,
             "target_row": "",
         }
     if not sanitizer_result.get("ok"):
@@ -3667,6 +3671,7 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
         "done": 0,
         "skipped_duplicate": 0,
         "error": 0,
+        "blocked_by_guard": 0,
         "audit_logged": 0,
         "audit_error": 0,
         "items": [],
@@ -3715,6 +3720,8 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
             summary["done"] += 1
         elif status == "skipped_duplicate":
             summary["skipped_duplicate"] += 1
+        elif status == "blocked_by_guard":
+            summary["blocked_by_guard"] += 1
         else:
             summary["error"] += 1
             summary["ok"] = False
@@ -3737,7 +3744,7 @@ def process_shadow_writeback_batch(trace_id: str, limit: int = 20) -> dict:
             "audit_logged": audit_ok,
             "notes": notes,
         })
-    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE batch_id={batch_id} processed={summary['processed']} done={summary['done']} skipped_duplicate={summary['skipped_duplicate']} error={summary['error']} audit_logged={summary['audit_logged']} audit_error={summary['audit_error']} worksheet_name={worksheet_name}")
+    logger.info(f"[{trace_id}] SHADOW_WRITEBACK_BATCH_DONE batch_id={batch_id} processed={summary['processed']} done={summary['done']} skipped_duplicate={summary['skipped_duplicate']} blocked_by_guard={summary['blocked_by_guard']} error={summary['error']} audit_logged={summary['audit_logged']} audit_error={summary['audit_error']} worksheet_name={worksheet_name}")
     return summary
 
 def run_publish_sync_once(trace_id: str) -> dict:
