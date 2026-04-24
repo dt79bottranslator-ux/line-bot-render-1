@@ -3203,6 +3203,46 @@ def resolve_location_alias_writeback_sheet_name(trace_id: str) -> str:
 def _normalize_shadow_alias_text(value: str) -> str:
     return normalize_routing_text(value)
 
+
+def sanitize_shadow_alias_for_writeback(alias_text: str) -> dict:
+    raw_alias = safe_str(alias_text)
+    normalized_alias = _normalize_shadow_alias_text(raw_alias)
+    if not raw_alias or not normalized_alias:
+        return {"ok": False, "normalized_alias": normalized_alias, "reason": "empty_alias"}
+
+    connector_patterns = [
+        r"\bhoac\b",
+        r"\bhay\b",
+        r"\bor\b",
+        r"\bva\b",
+        r"/",
+        r",",
+        r";",
+    ]
+    for pattern in connector_patterns:
+        if re.search(pattern, normalized_alias):
+            return {"ok": False, "normalized_alias": normalized_alias, "reason": "contains_multi_location_connector"}
+
+    generic_aliases = {
+        "gan nha may",
+        "o cao hung",
+        "khu vuc nay",
+        "khu do",
+        "o day",
+        "phong re",
+    }
+    if normalized_alias in generic_aliases:
+        return {"ok": False, "normalized_alias": normalized_alias, "reason": "generic_non_location_phrase"}
+
+    if len(normalized_alias) > 24:
+        return {"ok": False, "normalized_alias": normalized_alias, "reason": "alias_too_long"}
+
+    tokens = [token for token in normalized_alias.split() if token]
+    if len(tokens) > 3:
+        return {"ok": False, "normalized_alias": normalized_alias, "reason": "too_many_tokens"}
+
+    return {"ok": True, "normalized_alias": normalized_alias, "reason": ""}
+
 def _parse_shadow_confidence_to_alias_confidence(value: str) -> str:
     normalized = safe_str(value).lower()
     return "0.95" if normalized in {"high", "medium"} else "0.85"
@@ -3248,10 +3288,20 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
     if not ws:
         return {"ok": False, "status": "error", "notes": "alias_sheet_unavailable"}
     alias_text = safe_str(shadow_row.get("location_token_guess"))
-    normalized_alias = _normalize_shadow_alias_text(alias_text)
+    sanitizer_result = sanitize_shadow_alias_for_writeback(alias_text)
+    normalized_alias = safe_str(sanitizer_result.get("normalized_alias"))
     location_id = safe_str(shadow_row.get("suggested_location_id"))
     if not alias_text or not normalized_alias or not location_id:
         return {"ok": False, "status": "error", "notes": "missing_required_shadow_fields"}
+    if not sanitizer_result.get("ok"):
+        reason = safe_str(sanitizer_result.get("reason")) or "alias_rejected_by_sanitizer"
+        logger.info(
+            f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_REJECTED worksheet_name={worksheet_name} "
+            f"alias_text={json.dumps(alias_text, ensure_ascii=False)} "
+            f"normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} "
+            f"reason={reason}"
+        )
+        return {"ok": False, "status": "error", "notes": f"alias_rejected_by_sanitizer:{reason}"}
     duplicate = find_existing_alias_v2(normalized_alias, trace_id, worksheet_name)
     if duplicate.get("status") == "found":
         existing_location_id = safe_str(duplicate.get("location_id"))
