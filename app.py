@@ -122,7 +122,7 @@ ROUTING_MISS_HARVEST_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", 
 ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
 ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
 ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME = "ROUTING_SHADOW_SUGGESTIONS"
-ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes"]
+ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes", "second_candidate_alias", "second_candidate_location_id", "score_gap", "decision_context"]
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
 ROUTING_FALLBACK_LOCATION = os.getenv("ROUTING_FALLBACK_LOCATION", "TW_ALL").strip() or "TW_ALL"
 ROUTING_REPLY_PREFIX_BY_LANGUAGE = {
@@ -1113,6 +1113,10 @@ def append_routing_shadow_suggestion(
     confidence: str,
     trace_id: str,
     reviewer_notes: str = "",
+    second_candidate_alias: str = "",
+    second_candidate_location_id: str = "",
+    score_gap: str = "",
+    decision_context: str = "",
 ) -> bool:
     ws = ensure_routing_shadow_suggestions_worksheet(trace_id)
     if not ws:
@@ -1134,6 +1138,10 @@ def append_routing_shadow_suggestion(
         safe_str(confidence),
         "pending",
         safe_str(reviewer_notes),
+        safe_str(second_candidate_alias),
+        safe_str(second_candidate_location_id),
+        safe_str(score_gap),
+        safe_str(decision_context)[:500],
     ]
     try:
         ws.append_row(row, value_input_option="USER_ENTERED")
@@ -1143,6 +1151,9 @@ def append_routing_shadow_suggestion(
             f"suggested_alias={json.dumps(safe_str(suggested_alias), ensure_ascii=False)} "
             f"suggested_location_id={json.dumps(safe_str(suggested_location_id), ensure_ascii=False)} "
             f"suggested_region_key={json.dumps(safe_str(suggested_region_key), ensure_ascii=False)} "
+            f"second_candidate_alias={json.dumps(safe_str(second_candidate_alias), ensure_ascii=False)} "
+            f"second_candidate_location_id={json.dumps(safe_str(second_candidate_location_id), ensure_ascii=False)} "
+            f"score_gap={json.dumps(safe_str(score_gap), ensure_ascii=False)} "
             f"suggestion_source={safe_str(suggestion_source)} confidence={safe_str(confidence)}"
         )
         return True
@@ -1164,6 +1175,8 @@ def build_shadow_location_suggestion(intent_name: str, candidate_decision: dict,
     top_score = int(candidate_decision.get("top_score", 0) or 0)
     second_score = int(candidate_decision.get("second_score", 0) or 0)
     gap = top_score - second_score
+    second_alias = safe_str(second.get("matched_alias"))
+    second_location_id = safe_str(second.get("location_id"))
 
     if top_alias and top_region_key and top_score >= 85:
         confidence = "medium" if gap < 10 else "high"
@@ -1177,6 +1190,13 @@ def build_shadow_location_suggestion(intent_name: str, candidate_decision: dict,
             "suggestion_source": "candidate_engine",
             "suggestion_reason": reason,
             "confidence": confidence,
+            "second_candidate_alias": second_alias,
+            "second_candidate_location_id": second_location_id,
+            "score_gap": str(gap) if second_score else "",
+            "decision_context": (
+                f"top candidate strong but conflict gap only {gap}" if second_score
+                else f"top candidate strong with score {top_score}"
+            ),
         }
 
     if token and top_alias and top_region_key and top_score >= 72:
@@ -1187,6 +1207,10 @@ def build_shadow_location_suggestion(intent_name: str, candidate_decision: dict,
             "suggestion_source": "heuristic",
             "suggestion_reason": f"location token '{token}' is close to alias '{top_alias}' with score {top_score}",
             "confidence": "low" if top_score < 85 else "medium",
+            "second_candidate_alias": second_alias,
+            "second_candidate_location_id": second_location_id,
+            "score_gap": str(gap) if second_score else "",
+            "decision_context": "heuristic fuzzy match from location token",
         }
 
     return None
@@ -1596,6 +1620,10 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                 suggestion_source=safe_str(shadow_suggestion.get("suggestion_source")),
                 suggestion_reason=safe_str(shadow_suggestion.get("suggestion_reason")),
                 confidence=safe_str(shadow_suggestion.get("confidence")),
+                second_candidate_alias=safe_str(shadow_suggestion.get("second_candidate_alias")),
+                second_candidate_location_id=safe_str(shadow_suggestion.get("second_candidate_location_id")),
+                score_gap=safe_str(shadow_suggestion.get("score_gap")),
+                decision_context=safe_str(shadow_suggestion.get("decision_context")),
                 trace_id=trace_id,
             )
         return {
@@ -1658,6 +1686,10 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                 suggestion_source=safe_str(shadow_suggestion.get("suggestion_source")),
                 suggestion_reason=safe_str(shadow_suggestion.get("suggestion_reason")),
                 confidence=safe_str(shadow_suggestion.get("confidence")),
+                second_candidate_alias=safe_str(shadow_suggestion.get("second_candidate_alias")),
+                second_candidate_location_id=safe_str(shadow_suggestion.get("second_candidate_location_id")),
+                score_gap=safe_str(shadow_suggestion.get("score_gap")),
+                decision_context=safe_str(shadow_suggestion.get("decision_context")),
                 trace_id=trace_id,
             )
 
@@ -1703,6 +1735,10 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                     suggestion_source=safe_str(shadow_suggestion.get("suggestion_source")),
                     suggestion_reason=safe_str(shadow_suggestion.get("suggestion_reason")),
                     confidence=safe_str(shadow_suggestion.get("confidence")),
+                    second_candidate_alias=safe_str(shadow_suggestion.get("second_candidate_alias")),
+                    second_candidate_location_id=safe_str(shadow_suggestion.get("second_candidate_location_id")),
+                    score_gap=safe_str(shadow_suggestion.get("score_gap")),
+                    decision_context=safe_str(shadow_suggestion.get("decision_context")),
                     trace_id=trace_id,
                 )
         logger.info(
