@@ -75,7 +75,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -100,7 +100,8 @@ GSHEET_MAINTENANCE_REPLY_TEXT = os.getenv(
 ASYNC_LOG_ENABLED = os.getenv("ASYNC_LOG_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_QUEUE_MAX = int(os.getenv("ASYNC_LOG_QUEUE_MAX", "1000").strip() or "1000")
 ASYNC_LOG_WORKER_TIMEOUT_SECONDS = float(os.getenv("ASYNC_LOG_WORKER_TIMEOUT_SECONDS", "1").strip() or "1")
-SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS = int(os.getenv("SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS", "300").strip() or "300")
+SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS = int(os.getenv("SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS", "900").strip() or "900")
+ROUTING_MASTER_CACHE_TTL_SECONDS = int(os.getenv("ROUTING_MASTER_CACHE_TTL_SECONDS", "900").strip() or "900")
 SIM_FASTPATH_ENABLED = os.getenv("SIM_FASTPATH_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_LEVEL_CRITICAL = "CRITICAL"
 ASYNC_LOG_LEVEL_AUDIT = "AUDIT"
@@ -248,6 +249,8 @@ _WORKSHEET_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
 _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 _ROUTING_CONFIG_SHARED_CACHE = {"config_map": None, "loaded_at_ts": 0.0}
+_ROUTING_MASTER_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
+_ROUTING_MASTER_CACHE_LOCK = threading.Lock()
 _ROUTING_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _SIM_FASTPATH_VARIANT_ROWS_CACHE = {"rows": [], "loaded_at_ts": 0.0, "sheet_name": ""}
 _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
@@ -702,6 +705,56 @@ def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
             logger.info(f"[{trace_id}] ROUTING_WORKSHEET_STALE_CACHE_FALLBACK worksheet_name={worksheet_name}")
             return ws
         return None
+def load_routing_master_records(trace_id: str, worksheet_name: str, ttl_seconds: Optional[int] = None) -> List[dict]:
+    sheet_name = safe_str(worksheet_name)
+    if not sheet_name:
+        return []
+    ttl = int(ttl_seconds or ROUTING_MASTER_CACHE_TTL_SECONDS)
+    request_cache = getattr(g, "_dt79_routing_master_records_cache", None)
+    if request_cache is None:
+        request_cache = {}
+        g._dt79_routing_master_records_cache = request_cache
+    if sheet_name in request_cache:
+        rows = request_cache[sheet_name]
+        logger.info(f"[{trace_id}] ROUTING_MASTER_RECORDS_CACHE_HIT scope=request worksheet_name={sheet_name} count={len(rows)}")
+        return rows
+
+    with _ROUTING_MASTER_CACHE_LOCK:
+        shared_entry = _ROUTING_MASTER_RECORDS_SHARED_CACHE.get(sheet_name)
+        if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), ttl):
+            rows = shared_entry.get("records", []) or []
+            request_cache[sheet_name] = rows
+            logger.info(f"[{trace_id}] ROUTING_MASTER_RECORDS_CACHE_HIT scope=shared worksheet_name={sheet_name} count={len(rows)}")
+            return rows
+
+    ws = get_routing_worksheet_by_name(trace_id, sheet_name)
+    if not ws:
+        logger.error(f"[{trace_id}] ROUTING_MASTER_RECORDS_SHEET_UNAVAILABLE worksheet_name={sheet_name}")
+        if shared_entry:
+            rows = shared_entry.get("records", []) or []
+            request_cache[sheet_name] = rows
+            logger.info(f"[{trace_id}] ROUTING_MASTER_RECORDS_STALE_FALLBACK worksheet_name={sheet_name} count={len(rows)}")
+            return rows
+        return []
+
+    rows = get_records_safe(ws, trace_id, sheet_name)
+    if rows:
+        request_cache[sheet_name] = rows
+        with _ROUTING_MASTER_CACHE_LOCK:
+            _ROUTING_MASTER_RECORDS_SHARED_CACHE[sheet_name] = {"records": rows, "loaded_at_ts": _now_ts()}
+        logger.info(f"[{trace_id}] ROUTING_MASTER_RECORDS_CACHE_READY worksheet_name={sheet_name} count={len(rows)}")
+        return rows
+
+    with _ROUTING_MASTER_CACHE_LOCK:
+        shared_entry = _ROUTING_MASTER_RECORDS_SHARED_CACHE.get(sheet_name)
+    if shared_entry:
+        rows = shared_entry.get("records", []) or []
+        request_cache[sheet_name] = rows
+        logger.info(f"[{trace_id}] ROUTING_MASTER_RECORDS_STALE_FALLBACK worksheet_name={sheet_name} count={len(rows)}")
+        return rows
+    return []
+
+
 def load_bot_config_map(trace_id: str) -> Dict[str, str]:
     cached = getattr(g, "_dt79_routing_config_map", None)
     if isinstance(cached, dict) and cached:
@@ -710,15 +763,12 @@ def load_bot_config_map(trace_id: str) -> Dict[str, str]:
 
     shared_config = _ROUTING_CONFIG_SHARED_CACHE.get("config_map")
     shared_loaded_at_ts = float(_ROUTING_CONFIG_SHARED_CACHE.get("loaded_at_ts", 0.0) or 0.0)
-    if isinstance(shared_config, dict) and shared_config and _cache_is_fresh(shared_loaded_at_ts, GSHEET_VALUES_CACHE_TTL_SECONDS):
+    if isinstance(shared_config, dict) and shared_config and _cache_is_fresh(shared_loaded_at_ts, ROUTING_MASTER_CACHE_TTL_SECONDS):
         g._dt79_routing_config_map = shared_config
         logger.info(f"[{trace_id}] ROUTING_CONFIG_CACHE_HIT scope=shared")
         return shared_config
 
-    ws = get_routing_worksheet_by_name(trace_id, BOT_CONFIG_SHEET_NAME)
-    if not ws:
-        return {}
-    rows = get_records_safe(ws, trace_id, BOT_CONFIG_SHEET_NAME)
+    rows = load_routing_master_records(trace_id, BOT_CONFIG_SHEET_NAME, ROUTING_MASTER_CACHE_TTL_SECONDS)
     config_map = {}
     for row in rows:
         key = safe_str(row.get("Key") or row.get("key")).strip()
@@ -1344,14 +1394,20 @@ def warm_up_cache(trace_id: str = "") -> bool:
     try:
         start_async_log_worker()
         config_map = load_bot_config_map(trace_id)
+        intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
+        service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
         alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+        variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
+
+        intent_rows = load_routing_master_records(trace_id, intent_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
+        service_rows = load_routing_master_records(trace_id, service_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
         alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
         alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
         get_location_alias_lookup(alias_rows, trace_id)
-        variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
         variant_rows = load_sim_variant_rows_fastpath(trace_id, variant_sheet_name)
         logger.info(
             f"[{trace_id}] WARM_UP_CACHE_OK alias_sheet={alias_sheet_name} "
+            f"intent_rows={len(intent_rows)} service_rows={len(service_rows)} "
             f"alias_rows={len(alias_rows)} sim_variant_rows={len(variant_rows)} latency_ms={ms_since(start)}"
         )
         return True
@@ -2030,11 +2086,10 @@ def load_sim_variant_rows_fastpath(trace_id: str, variant_sheet_name: str) -> Li
     if cached_sheet == sheet_name and cached_rows and _cache_is_fresh(loaded_at_ts, SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS):
         logger.info(f"[{trace_id}] SIM_FASTPATH_VARIANT_CACHE_HIT worksheet_name={sheet_name} count={len(cached_rows)}")
         return cached_rows
-    variant_ws = get_routing_worksheet_by_name(trace_id, sheet_name)
-    if not variant_ws:
+    rows = load_routing_master_records(trace_id, sheet_name, SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS)
+    if not rows:
         logger.error(f"[{trace_id}] SIM_FASTPATH_VARIANT_SHEET_UNAVAILABLE worksheet_name={sheet_name}")
         return cached_rows if cached_sheet == sheet_name else []
-    rows = get_records_safe(variant_ws, trace_id, sheet_name)
     if rows:
         _SIM_FASTPATH_VARIANT_ROWS_CACHE["rows"] = rows
         _SIM_FASTPATH_VARIANT_ROWS_CACHE["loaded_at_ts"] = _now_ts()
@@ -2227,16 +2282,15 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
 
     normalized_text = normalize_routing_text(text)
 
-    intent_ws = get_routing_worksheet_by_name(trace_id, intent_sheet_name)
-    service_ws = get_routing_worksheet_by_name(trace_id, service_sheet_name)
-    if not intent_ws or not service_ws:
+    intent_rows = load_routing_master_records(trace_id, intent_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
+    service_rows = load_routing_master_records(trace_id, service_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
+    if not intent_rows or not service_rows:
         logger.warning(
-            f"[{trace_id}] ROUTING_SHEET_UNAVAILABLE intent_ws={bool(intent_ws)} "
-            f"service_ws={bool(service_ws)}"
+            f"[{trace_id}] ROUTING_MASTER_CACHE_UNAVAILABLE intent_rows={len(intent_rows)} "
+            f"service_rows={len(service_rows)}"
         )
         return None
 
-    intent_rows = get_records_safe(intent_ws, trace_id, intent_sheet_name)
     intent_name, matched_keywords = detect_routing_intent(text, intent_rows)
     if not intent_name:
         append_routing_miss_event(
@@ -2261,8 +2315,6 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             "matched_keywords": [],
             "result_type": "smart_fallback",
         }
-
-    service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
 
     if intent_name == "sim_mang_di_dong":
         sim_fastpath_result = try_build_sim_fastpath_reply(
