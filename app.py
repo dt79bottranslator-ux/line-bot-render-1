@@ -8,6 +8,9 @@ import base64
 import time
 import uuid
 import logging
+import threading
+from queue import Queue, Full, Empty
+from collections import deque
 import unicodedata
 import difflib
 from datetime import datetime, timezone, timedelta
@@ -72,7 +75,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -82,6 +85,24 @@ FALLBACK_REPLY_TEXT = "Hệ thống bận, thử lại sau."
 LINE_TEXT_HARD_LIMIT = 5000
 RATE_LIMIT_STORE_MAX_KEYS = 5000
 ERROR_BODY_LOG_LIMIT = 800
+USER_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("USER_RATE_LIMIT_WINDOW_SECONDS", "10").strip() or "10")
+USER_RATE_LIMIT_MAX_EVENTS = int(os.getenv("USER_RATE_LIMIT_MAX_EVENTS", "5").strip() or "5")
+USER_RATE_LIMIT_REPLY_TEXT = os.getenv(
+    "USER_RATE_LIMIT_REPLY_TEXT",
+    "Hệ thống đang nhận quá nhiều tin nhắn. Vui lòng thử lại sau ít phút."
+).strip()
+GSHEET_CIRCUIT_FAILURE_THRESHOLD = int(os.getenv("GSHEET_CIRCUIT_FAILURE_THRESHOLD", "3").strip() or "3")
+GSHEET_CIRCUIT_RESET_SECONDS = int(os.getenv("GSHEET_CIRCUIT_RESET_SECONDS", "60").strip() or "60")
+GSHEET_MAINTENANCE_REPLY_TEXT = os.getenv(
+    "GSHEET_MAINTENANCE_REPLY_TEXT",
+    "Hệ thống dữ liệu đang bảo trì ngắn. Vui lòng thử lại sau ít phút."
+).strip()
+ASYNC_LOG_ENABLED = os.getenv("ASYNC_LOG_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+ASYNC_LOG_QUEUE_MAX = int(os.getenv("ASYNC_LOG_QUEUE_MAX", "1000").strip() or "1000")
+ASYNC_LOG_WORKER_TIMEOUT_SECONDS = float(os.getenv("ASYNC_LOG_WORKER_TIMEOUT_SECONDS", "1").strip() or "1")
+ASYNC_LOG_LEVEL_CRITICAL = "CRITICAL"
+ASYNC_LOG_LEVEL_AUDIT = "AUDIT"
+ASYNC_LOG_LEVEL_DEBUG = "DEBUG"
 PROCESSED_EVENT_TTL_SECONDS = int(os.getenv("PROCESSED_EVENT_TTL_SECONDS", "21600").strip() or "21600")
 PROCESSED_EVENT_MAX_KEYS = int(os.getenv("PROCESSED_EVENT_MAX_KEYS", "10000").strip() or "10000")
 PROCESSED_EVENT_SHEET_NAME = os.getenv("PROCESSED_EVENT_SHEET_NAME", "processed_event_state").strip() or "processed_event_state"
@@ -182,7 +203,9 @@ def now_tw_iso() -> str:
 def now_tw_dt() -> datetime:
     return datetime.now(TW_TZ)
 def make_trace_id() -> str:
-    return f"trc_{uuid.uuid4().hex[:12]}"
+    ts_compact = datetime.now(TW_TZ).strftime("%y%m%d%H%M%S")
+    version_hash = hashlib.sha1(APP_VERSION.encode("utf-8")).hexdigest()[:6]
+    return f"trc_{version_hash}_{ts_compact}_{uuid.uuid4().hex[:6]}"
 def get_now_ts() -> int:
     return int(time.time())
 def ms_since(start_perf: float) -> int:
@@ -235,6 +258,155 @@ def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
 def _is_gsheet_quota_error(exc: Exception) -> bool:
     text = safe_str(exc)
     return "429" in text or "Quota exceeded" in text or "Read requests per minute per user" in text
+
+class GSheetCircuitOpenError(RuntimeError):
+    pass
+
+_GSHEET_CIRCUIT_STATE = {
+    "open_until_ts": 0.0,
+    "failure_count": 0,
+    "last_error": "",
+}
+_GSHEET_CIRCUIT_LOCK = threading.Lock()
+_RATE_LIMIT_STATE: Dict[str, deque] = {}
+_RATE_LIMIT_LOCK = threading.Lock()
+_ASYNC_LOG_QUEUE = Queue(maxsize=ASYNC_LOG_QUEUE_MAX)
+_ASYNC_LOG_WORKER_STARTED = False
+_ASYNC_LOG_WORKER_LOCK = threading.Lock()
+
+def gsheet_circuit_is_open() -> bool:
+    with _GSHEET_CIRCUIT_LOCK:
+        open_until_ts = float(_GSHEET_CIRCUIT_STATE.get("open_until_ts", 0.0) or 0.0)
+        if open_until_ts and _now_ts() < open_until_ts:
+            return True
+        if open_until_ts and _now_ts() >= open_until_ts:
+            _GSHEET_CIRCUIT_STATE["open_until_ts"] = 0.0
+            _GSHEET_CIRCUIT_STATE["failure_count"] = 0
+            _GSHEET_CIRCUIT_STATE["last_error"] = ""
+        return False
+
+def record_gsheet_success(trace_id: str) -> None:
+    with _GSHEET_CIRCUIT_LOCK:
+        if int(_GSHEET_CIRCUIT_STATE.get("failure_count", 0) or 0):
+            logger.info(f"[{trace_id}] GSHEET_CIRCUIT_RECOVERED")
+        _GSHEET_CIRCUIT_STATE["failure_count"] = 0
+        _GSHEET_CIRCUIT_STATE["last_error"] = ""
+
+def record_gsheet_failure(exc: Exception, trace_id: str, operation: str) -> None:
+    if not _is_gsheet_quota_error(exc):
+        return
+    with _GSHEET_CIRCUIT_LOCK:
+        failure_count = int(_GSHEET_CIRCUIT_STATE.get("failure_count", 0) or 0) + 1
+        _GSHEET_CIRCUIT_STATE["failure_count"] = failure_count
+        _GSHEET_CIRCUIT_STATE["last_error"] = f"{type(exc).__name__}:{safe_str(exc)[:200]}"
+        logger.error(
+            f"[{trace_id}] GSHEET_QUOTA_FAILURE operation={operation} "
+            f"failure_count={failure_count} threshold={GSHEET_CIRCUIT_FAILURE_THRESHOLD}"
+        )
+        if failure_count >= GSHEET_CIRCUIT_FAILURE_THRESHOLD:
+            _GSHEET_CIRCUIT_STATE["open_until_ts"] = _now_ts() + GSHEET_CIRCUIT_RESET_SECONDS
+            logger.error(
+                f"[{trace_id}] GSHEET_CIRCUIT_OPEN operation={operation} "
+                f"reset_seconds={GSHEET_CIRCUIT_RESET_SECONDS}"
+            )
+
+def gsheet_guarded_call(trace_id: str, operation: str, fn, *args, **kwargs):
+    if gsheet_circuit_is_open():
+        logger.error(f"[{trace_id}] GSHEET_CIRCUIT_BLOCK operation={operation}")
+        raise GSheetCircuitOpenError("gsheet_circuit_open")
+    try:
+        result = fn(*args, **kwargs)
+        record_gsheet_success(trace_id)
+        return result
+    except GSheetCircuitOpenError:
+        raise
+    except Exception as exc:
+        record_gsheet_failure(exc, trace_id, operation)
+        raise
+
+def append_row_guarded(ws, trace_id: str, worksheet_name: str, row_values: list, value_input_option: str = "USER_ENTERED"):
+    return gsheet_guarded_call(
+        trace_id,
+        f"worksheet.append.{safe_str(worksheet_name) or 'unknown'}",
+        ws.append_row,
+        row_values,
+        value_input_option=value_input_option,
+    )
+
+def check_user_rate_limit(user_id: str, trace_id: str) -> bool:
+    key = safe_str(user_id) or "anonymous"
+    now = _now_ts()
+    window_start = now - USER_RATE_LIMIT_WINDOW_SECONDS
+    with _RATE_LIMIT_LOCK:
+        dq = _RATE_LIMIT_STATE.get(key)
+        if dq is None:
+            dq = deque()
+            _RATE_LIMIT_STATE[key] = dq
+        while dq and dq[0] < window_start:
+            dq.popleft()
+        if len(dq) >= USER_RATE_LIMIT_MAX_EVENTS:
+            logger.warning(
+                f"[{trace_id}] RATE_LIMIT_BLOCKED user_id={key} "
+                f"window_seconds={USER_RATE_LIMIT_WINDOW_SECONDS} max_events={USER_RATE_LIMIT_MAX_EVENTS}"
+            )
+            return False
+        dq.append(now)
+        if len(_RATE_LIMIT_STATE) > RATE_LIMIT_STORE_MAX_KEYS:
+            oldest_keys = sorted(
+                _RATE_LIMIT_STATE.keys(),
+                key=lambda k: _RATE_LIMIT_STATE[k][0] if _RATE_LIMIT_STATE[k] else now,
+            )[: max(1, RATE_LIMIT_STORE_MAX_KEYS // 10)]
+            for old_key in oldest_keys:
+                _RATE_LIMIT_STATE.pop(old_key, None)
+        return True
+
+def _async_log_worker_loop() -> None:
+    while True:
+        try:
+            task = _ASYNC_LOG_QUEUE.get(timeout=ASYNC_LOG_WORKER_TIMEOUT_SECONDS)
+        except Empty:
+            continue
+        if task is None:
+            _ASYNC_LOG_QUEUE.task_done()
+            break
+        level, trace_id, task_name, fn, args, kwargs = task
+        try:
+            fn(*args, **kwargs)
+            logger.info(f"[{trace_id}] ASYNC_LOG_DONE level={level} task={task_name}")
+        except GSheetCircuitOpenError as exc:
+            logger.error(f"[{trace_id}] ASYNC_LOG_CIRCUIT_BLOCKED level={level} task={task_name} exception={type(exc).__name__}:{exc}")
+        except Exception as exc:
+            logger.exception(f"[{trace_id}] ASYNC_LOG_FAILED level={level} task={task_name} exception={type(exc).__name__}:{exc}")
+        finally:
+            _ASYNC_LOG_QUEUE.task_done()
+
+def start_async_log_worker() -> None:
+    global _ASYNC_LOG_WORKER_STARTED
+    if not ASYNC_LOG_ENABLED:
+        return
+    with _ASYNC_LOG_WORKER_LOCK:
+        if _ASYNC_LOG_WORKER_STARTED:
+            return
+        worker = threading.Thread(target=_async_log_worker_loop, name="dt79-async-log-worker", daemon=True)
+        worker.start()
+        _ASYNC_LOG_WORKER_STARTED = True
+        logger.info("ASYNC_LOG_WORKER_STARTED")
+
+def enqueue_async_log(level: str, trace_id: str, task_name: str, fn, *args, **kwargs) -> bool:
+    if not ASYNC_LOG_ENABLED or level == ASYNC_LOG_LEVEL_CRITICAL:
+        try:
+            return bool(fn(*args, **kwargs))
+        except Exception as exc:
+            logger.exception(f"[{trace_id}] SYNC_LOG_FAILED level={level} task={task_name} exception={type(exc).__name__}:{exc}")
+            return False
+    start_async_log_worker()
+    try:
+        _ASYNC_LOG_QUEUE.put_nowait((level, trace_id, task_name, fn, args, kwargs))
+        logger.info(f"[{trace_id}] ASYNC_LOG_ENQUEUED level={level} task={task_name} queue_size={_ASYNC_LOG_QUEUE.qsize()}")
+        return True
+    except Full:
+        logger.error(f"[{trace_id}] ASYNC_LOG_QUEUE_FULL level={level} task={task_name}")
+        return False
 def _values_to_records(values: List[List[str]]) -> List[dict]:
     if not values:
         return []
@@ -309,7 +481,7 @@ def open_spreadsheet(trace_id: str):
     if not client:
         return shared
     try:
-        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        spreadsheet = gsheet_guarded_call(trace_id, "client.open.phase1", client.open, PHASE1_SPREADSHEET_NAME)
         g._dt79_spreadsheet = spreadsheet
         _SPREADSHEET_SHARED_CACHE["spreadsheet"] = spreadsheet
         _SPREADSHEET_SHARED_CACHE["loaded_at_ts"] = _now_ts()
@@ -348,7 +520,7 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
     if not spreadsheet:
         return None
     try:
-        ws = spreadsheet.worksheet(worksheet_name)
+        ws = gsheet_guarded_call(trace_id, f"worksheet.open.{worksheet_name}", spreadsheet.worksheet, worksheet_name)
         worksheet_cache[worksheet_name] = ws
         _WORKSHEET_OBJECT_SHARED_CACHE[worksheet_name] = ws
         logger.info(f"[{trace_id}] WORKSHEET_READY worksheet_name={worksheet_name}")
@@ -380,7 +552,7 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
         logger.info(f"[{trace_id}] WORKSHEET_VALUES_SHARED_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
         return values
     try:
-        values = ws.get_all_values()
+        values = gsheet_guarded_call(trace_id, f"worksheet.read.{worksheet_name}", ws.get_all_values)
         values_cache[worksheet_name] = values
         _WORKSHEET_VALUES_SHARED_CACHE[worksheet_name] = {"values": values, "loaded_at_ts": _now_ts()}
         _WORKSHEET_RECORDS_SHARED_CACHE[worksheet_name] = {"records": _values_to_records(values), "loaded_at_ts": _now_ts()}
@@ -455,7 +627,7 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
     end_col_letter = chr(ord("A") + max_col_idx)
     target_range = f"{start_col_letter}{row_index}:{end_col_letter}{row_index}"
     try:
-        ws.update(target_range, [row_values], value_input_option="USER_ENTERED")
+        gsheet_guarded_call(trace_id, f"worksheet.update.{worksheet_name}", ws.update, target_range, [row_values], value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(worksheet_name)
         logger.info(
             f"[{trace_id}] UPDATE_ROW_FIELDS_OK worksheet_name={worksheet_name} row_index={row_index} "
@@ -481,7 +653,7 @@ def open_routing_spreadsheet(trace_id: str):
     if not client:
         return shared
     try:
-        spreadsheet = client.open(ROUTING_SPREADSHEET_NAME)
+        spreadsheet = gsheet_guarded_call(trace_id, "client.open.routing", client.open, ROUTING_SPREADSHEET_NAME)
         g._dt79_routing_spreadsheet = spreadsheet
         _ROUTING_SPREADSHEET_SHARED_CACHE["spreadsheet"] = spreadsheet
         _ROUTING_SPREADSHEET_SHARED_CACHE["loaded_at_ts"] = _now_ts()
@@ -511,7 +683,7 @@ def get_routing_worksheet_by_name(trace_id: str, worksheet_name: str):
     if not spreadsheet:
         return None
     try:
-        ws = spreadsheet.worksheet(worksheet_name)
+        ws = gsheet_guarded_call(trace_id, f"worksheet.open.{worksheet_name}", spreadsheet.worksheet, worksheet_name)
         worksheet_cache[worksheet_name] = ws
         _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE[worksheet_name] = ws
         logger.info(f"[{trace_id}] ROUTING_WORKSHEET_READY worksheet_name={worksheet_name}")
@@ -938,6 +1110,253 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
         "candidates": enriched,
     }
 
+_LOCATION_ALIAS_LOOKUP_SHARED_CACHE = {
+    "alias_index": {},
+    "alias_lengths": set(),
+    "canonical_index": {},
+    "region_index": {},
+    "fingerprint": "",
+    "loaded_at_ts": 0.0,
+}
+
+def _rows_fingerprint(rows: List[dict]) -> str:
+    payload = []
+    for row in rows or []:
+        payload.append("|".join([
+            safe_str(row.get("alias_text")),
+            safe_str(row.get("normalized_alias")),
+            safe_str(row.get("location_id")),
+            safe_str(row.get("root_location")),
+            safe_str(row.get("alias_type")),
+        ]))
+    raw = "\n".join(payload)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest() if raw else ""
+
+def get_location_alias_lookup(alias_rows: List[dict], trace_id: str = "") -> dict:
+    fingerprint = _rows_fingerprint(alias_rows or [])
+    cached_fp = safe_str(_LOCATION_ALIAS_LOOKUP_SHARED_CACHE.get("fingerprint"))
+    if fingerprint and fingerprint == cached_fp:
+        return _LOCATION_ALIAS_LOOKUP_SHARED_CACHE
+
+    alias_index = build_location_alias_index(alias_rows or [])
+    alias_lengths = {len(alias.split()) for alias in alias_index.keys() if alias}
+    _LOCATION_ALIAS_LOOKUP_SHARED_CACHE["alias_index"] = alias_index
+    _LOCATION_ALIAS_LOOKUP_SHARED_CACHE["alias_lengths"] = alias_lengths or {1}
+    _LOCATION_ALIAS_LOOKUP_SHARED_CACHE["fingerprint"] = fingerprint
+    _LOCATION_ALIAS_LOOKUP_SHARED_CACHE["loaded_at_ts"] = _now_ts()
+    if trace_id:
+        logger.info(
+            f"[{trace_id}] LOCATION_ALIAS_LOOKUP_READY alias_count={len(alias_index)} "
+            f"ngram_sizes={json.dumps(sorted(alias_lengths or {1}), ensure_ascii=False)}"
+        )
+    return _LOCATION_ALIAS_LOOKUP_SHARED_CACHE
+
+def build_text_alias_lookup_keys(text: str, alias_lengths: set) -> List[str]:
+    normalized = normalize_routing_text(text)
+    if not normalized:
+        return []
+    tokens = [safe_str(x) for x in re.split(r"\s+", normalized) if safe_str(x)]
+    max_len = min(max(alias_lengths or {1}), 6)
+    wanted_lengths = {n for n in (alias_lengths or {1}) if 1 <= int(n) <= max_len}
+    keys = []
+    seen = set()
+
+    def add_key(value: str) -> None:
+        key = safe_str(value)
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+
+    add_key(normalized)
+    for token in tokens:
+        add_key(token)
+    for n in sorted(wanted_lengths):
+        if n <= 1:
+            continue
+        for idx in range(0, max(0, len(tokens) - n + 1)):
+            add_key(" ".join(tokens[idx:idx+n]))
+    return keys
+
+def resolve_location_from_v2(text: str, alias_rows: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> Optional[dict]:
+    lookup = get_location_alias_lookup(alias_rows or [])
+    alias_index = lookup.get("alias_index") or {}
+    keys = build_text_alias_lookup_keys(text, lookup.get("alias_lengths") or {1})
+    canonical_index = build_canonical_location_index(canonical_rows or [])
+    region_index = build_region_map_index(region_rows or [])
+    matched_alias = ""
+    matched_item = None
+
+    for key in keys:
+        items = alias_index.get(key)
+        if items:
+            matched_alias = key
+            matched_item = items[0]
+            break
+
+    if not matched_item:
+        return None
+    if matched_item.get("target_type") == "root_location":
+        return {
+            "location_id": "",
+            "service_region_key": safe_str(matched_item.get("target_key")),
+            "matched_alias": matched_alias,
+            "target_type": "root_location",
+        }
+    location_id = safe_str(matched_item.get("target_key"))
+    canonical_row = canonical_index.get(location_id) or {}
+    region_row = region_index.get(location_id) or {}
+    service_region_key = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
+    if not service_region_key:
+        return None
+    return {
+        "location_id": location_id,
+        "service_region_key": service_region_key,
+        "matched_alias": matched_alias,
+        "canonical_zh": safe_str(canonical_row.get("canonical_zh")),
+        "canonical_en": safe_str(canonical_row.get("canonical_en")),
+        "district_town_zh": safe_str(canonical_row.get("district_town_zh")),
+        "county_city_zh": safe_str(canonical_row.get("county_city_zh")),
+        "target_type": "location_id",
+    }
+
+def extract_location_alias(text: str, alias_rows: Optional[List[dict]] = None) -> str:
+    lookup = get_location_alias_lookup(alias_rows or [])
+    alias_index = lookup.get("alias_index") or {}
+    for key in build_text_alias_lookup_keys(text, lookup.get("alias_lengths") or {1}):
+        items = alias_index.get(key)
+        if items:
+            return safe_str(items[0].get("target_key"))
+    normalized = normalize_routing_text(text)
+    for canonical, aliases in LOCATION_ALIAS_MAP.items():
+        for alias in aliases:
+            if _phrase_present(normalized, normalize_routing_text(alias)):
+                return canonical
+    return ""
+
+def collect_routing_location_candidates(text: str, alias_rows: List[dict], matched_keywords: Optional[List[str]] = None) -> List[dict]:
+    normalized = normalize_routing_text(text)
+    lookup = get_location_alias_lookup(alias_rows or [])
+    alias_index = lookup.get("alias_index") or {}
+    alias_lengths = lookup.get("alias_lengths") or {1}
+    results: List[dict] = []
+    seen = set()
+
+    matched_keywords = matched_keywords or []
+    token_guesses = build_location_token_guesses(text, matched_keywords)
+    lookup_keys = build_text_alias_lookup_keys(text, alias_lengths)
+    for guess in token_guesses:
+        lookup_keys.extend(build_text_alias_lookup_keys(guess, alias_lengths))
+
+    exact_aliases = []
+    exact_seen = set()
+    for key in lookup_keys:
+        if key in alias_index and key not in exact_seen:
+            exact_seen.add(key)
+            exact_aliases.append(key)
+
+    for alias in exact_aliases:
+        for item in alias_index.get(alias, []):
+            target_key = safe_str(item.get("target_key"))
+            target_type = safe_str(item.get("target_type"))
+            dedupe_key = (target_key, target_type)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            score = score_location_candidate(alias, item, normalized, token_guesses) + 20
+            results.append({
+                "matched_alias": alias,
+                "target_key": target_key,
+                "target_type": target_type,
+                "alias_type": safe_str(item.get("alias_type")),
+                "lang_group": safe_str(item.get("lang_group")),
+                "score": score,
+                "match_mode": "hash_exact",
+            })
+
+    if not results:
+        token_guess_skeletons = [build_phonetic_skeleton(x) for x in token_guesses if x]
+        for alias, items in alias_index.items():
+            fuzzy_ratio = max(
+                (difflib.SequenceMatcher(None, guess, alias).ratio() for guess in token_guesses if guess),
+                default=0.0,
+            )
+            alias_skeleton = build_phonetic_skeleton(alias)
+            skeleton_ratio = max(
+                (
+                    difflib.SequenceMatcher(None, skeleton, alias_skeleton).ratio()
+                    for skeleton in token_guess_skeletons
+                    if skeleton and alias_skeleton
+                ),
+                default=0.0,
+            )
+            alias_match = (
+                (fuzzy_ratio >= 0.72 and len(alias) >= 4)
+                or (skeleton_ratio >= 0.78 and len(alias) >= 4)
+            )
+            if not alias_match:
+                continue
+            for item in items:
+                target_key = safe_str(item.get("target_key"))
+                target_type = safe_str(item.get("target_type"))
+                dedupe_key = (target_key, target_type)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                score = score_location_candidate(alias, item, normalized, token_guesses)
+                if fuzzy_ratio >= 0.92:
+                    score += 10
+                elif fuzzy_ratio >= 0.82:
+                    score += 6
+                elif fuzzy_ratio >= 0.72:
+                    score += 3
+                if skeleton_ratio >= 0.92:
+                    score += 12
+                elif skeleton_ratio >= 0.84:
+                    score += 8
+                elif skeleton_ratio >= 0.78:
+                    score += 4
+                results.append({
+                    "matched_alias": alias,
+                    "target_key": target_key,
+                    "target_type": target_type,
+                    "alias_type": safe_str(item.get("alias_type")),
+                    "lang_group": safe_str(item.get("lang_group")),
+                    "score": score,
+                    "match_mode": "fuzzy_fallback",
+                })
+
+    results.sort(
+        key=lambda item: (
+            -int(item.get("score", 0) or 0),
+            0 if safe_str(item.get("match_mode")) == "hash_exact" else 1,
+            -len(safe_str(item.get("matched_alias"))),
+            safe_str(item.get("target_key")),
+        )
+    )
+    return results
+
+def warm_up_cache(trace_id: str = "") -> bool:
+    trace_id = safe_str(trace_id) or make_trace_id()
+    start = time.perf_counter()
+    try:
+        start_async_log_worker()
+        config_map = load_bot_config_map(trace_id)
+        alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+        alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
+        alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
+        get_location_alias_lookup(alias_rows, trace_id)
+        logger.info(
+            f"[{trace_id}] WARM_UP_CACHE_OK alias_sheet={alias_sheet_name} "
+            f"alias_rows={len(alias_rows)} latency_ms={ms_since(start)}"
+        )
+        return True
+    except GSheetCircuitOpenError as exc:
+        logger.error(f"[{trace_id}] WARM_UP_CACHE_SKIPPED reason=gsheet_circuit_open exception={type(exc).__name__}:{exc}")
+        return False
+    except (gspread.WorksheetNotFound, gspread.exceptions.APIError, requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        logger.exception(f"[{trace_id}] WARM_UP_CACHE_FAILED exception={type(exc).__name__}:{exc}")
+        return False
+
 def extract_location_token_guess(text: str, matched_keywords: List[str]) -> str:
     normalized = normalize_routing_text(text)
     for keyword in sorted((matched_keywords or []), key=lambda x: len(safe_str(x)), reverse=True):
@@ -955,11 +1374,11 @@ def _ensure_generic_routing_queue_worksheet(trace_id: str, worksheet_name: str, 
     if not spreadsheet:
         return None
     try:
-        ws = spreadsheet.worksheet(worksheet_name)
+        ws = gsheet_guarded_call(trace_id, f"worksheet.open.{worksheet_name}", spreadsheet.worksheet, worksheet_name)
     except gspread.WorksheetNotFound:
         try:
             ws = spreadsheet.add_worksheet(title=worksheet_name, rows=5000, cols=max(len(headers), 12))
-            ws.append_row(headers, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), headers, value_input_option="USER_ENTERED")
             ready_cache["verified"] = True
             ready_cache["loaded_at_ts"] = _now_ts()
             logger.info(f"[{trace_id}] ROUTING_QUEUE_SHEET_CREATED worksheet_name={worksheet_name}")
@@ -980,7 +1399,7 @@ def _ensure_generic_routing_queue_worksheet(trace_id: str, worksheet_name: str, 
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
         try:
-            ws.append_row(headers, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), headers, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] ROUTING_QUEUE_HEADERS_INIT_OK worksheet_name={worksheet_name}")
         except Exception as e:
             logger.exception(f"[{trace_id}] ROUTING_QUEUE_HEADERS_INIT_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
@@ -1077,7 +1496,7 @@ def append_routing_admin_audit_log(
         safe_str(guard_reason),
     ]
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME)
         logger.info(
             f"[{trace_id}] ROUTING_ADMIN_AUDIT_LOG_APPEND_OK "
@@ -1093,7 +1512,7 @@ def append_routing_admin_audit_log(
         logger.exception(f"[{trace_id}] ROUTING_ADMIN_AUDIT_LOG_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
-def append_routing_miss_event(
+def _append_routing_miss_event_sync(
     user_id: str,
     raw_text: str,
     normalized_text: str,
@@ -1124,7 +1543,7 @@ def append_routing_miss_event(
         safe_str(reviewer_notes),
     ]
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_MISS_HARVEST_SHEET_NAME)
         logger.info(
             f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_OK user_id={safe_str(user_id)} intent_guess={safe_str(intent_guess)} "
@@ -1136,7 +1555,7 @@ def append_routing_miss_event(
         logger.exception(f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
-def append_routing_slowpath_event(
+def _append_routing_slowpath_event_sync(
     user_id: str,
     raw_text: str,
     normalized_text: str,
@@ -1169,7 +1588,7 @@ def append_routing_slowpath_event(
         safe_str(reviewer_notes),
     ]
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_SLOWPATH_QUEUE_SHEET_NAME)
         logger.info(
             f"[{trace_id}] ROUTING_SLOWPATH_APPEND_OK user_id={safe_str(user_id)} detected_intent={safe_str(detected_intent)} "
@@ -1180,7 +1599,7 @@ def append_routing_slowpath_event(
         logger.exception(f"[{trace_id}] ROUTING_SLOWPATH_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
-def append_routing_shadow_suggestion(
+def _append_routing_shadow_suggestion_sync(
     user_id: str,
     raw_text: str,
     normalized_text: str,
@@ -1229,7 +1648,7 @@ def append_routing_shadow_suggestion(
         "",
     ]
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
         logger.info(
             f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_OK user_id={safe_str(user_id)} intent_name={safe_str(intent_name)} "
@@ -1246,6 +1665,124 @@ def append_routing_shadow_suggestion(
         logger.exception(f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 
+
+def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, location_hint: str, location_id: str, message: str, trace_id: str) -> bool:
+    return enqueue_async_log(
+        ASYNC_LOG_LEVEL_AUDIT,
+        trace_id,
+        "append_routing_log_event",
+        _append_routing_log_event_sync,
+        user_id,
+        intent_name,
+        service_row,
+        location_hint,
+        location_id,
+        message,
+        trace_id,
+    )
+
+def append_routing_miss_event(
+    user_id: str,
+    raw_text: str,
+    normalized_text: str,
+    intent_guess: str,
+    location_token_guess: str,
+    candidate_aliases: List[str],
+    miss_type: str,
+    recommended_fix: str,
+    trace_id: str,
+    reviewer_notes: str = "",
+) -> bool:
+    return enqueue_async_log(
+        ASYNC_LOG_LEVEL_AUDIT,
+        trace_id,
+        "append_routing_miss_event",
+        _append_routing_miss_event_sync,
+        user_id,
+        raw_text,
+        normalized_text,
+        intent_guess,
+        location_token_guess,
+        candidate_aliases,
+        miss_type,
+        recommended_fix,
+        trace_id,
+        reviewer_notes,
+    )
+
+def append_routing_slowpath_event(
+    user_id: str,
+    raw_text: str,
+    normalized_text: str,
+    detected_intent: str,
+    candidate_locations: List[str],
+    candidate_location_ids: List[str],
+    reason_code: str,
+    confidence: str,
+    action_needed: str,
+    trace_id: str,
+    reviewer_notes: str = "",
+) -> bool:
+    return enqueue_async_log(
+        ASYNC_LOG_LEVEL_AUDIT,
+        trace_id,
+        "append_routing_slowpath_event",
+        _append_routing_slowpath_event_sync,
+        user_id,
+        raw_text,
+        normalized_text,
+        detected_intent,
+        candidate_locations,
+        candidate_location_ids,
+        reason_code,
+        confidence,
+        action_needed,
+        trace_id,
+        reviewer_notes,
+    )
+
+def append_routing_shadow_suggestion(
+    user_id: str,
+    raw_text: str,
+    normalized_text: str,
+    intent_name: str,
+    location_token_guess: str,
+    suggested_alias: str,
+    suggested_location_id: str,
+    suggested_region_key: str,
+    suggestion_source: str,
+    suggestion_reason: str,
+    confidence: str,
+    trace_id: str,
+    reviewer_notes: str = "",
+    second_candidate_alias: str = "",
+    second_candidate_location_id: str = "",
+    score_gap: str = "",
+    decision_context: str = "",
+) -> bool:
+    return enqueue_async_log(
+        ASYNC_LOG_LEVEL_AUDIT,
+        trace_id,
+        "append_routing_shadow_suggestion",
+        _append_routing_shadow_suggestion_sync,
+        user_id,
+        raw_text,
+        normalized_text,
+        intent_name,
+        location_token_guess,
+        suggested_alias,
+        suggested_location_id,
+        suggested_region_key,
+        suggestion_source,
+        suggestion_reason,
+        confidence,
+        trace_id,
+        reviewer_notes,
+        second_candidate_alias,
+        second_candidate_location_id,
+        score_gap,
+        decision_context,
+    )
 
 def build_shadow_location_suggestion(intent_name: str, candidate_decision: dict, location_token_guess: str) -> Optional[dict]:
     token = safe_str(location_token_guess)
@@ -1310,7 +1847,7 @@ def ensure_routing_log_worksheet(trace_id: str):
     except gspread.WorksheetNotFound:
         try:
             ws = spreadsheet.add_worksheet(title=ROUTING_LOG_SHEET_NAME, rows=5000, cols=6)
-            ws.append_row(ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
             _ROUTING_LOG_WORKSHEET_READY_CACHE["verified"] = True
             _ROUTING_LOG_WORKSHEET_READY_CACHE["loaded_at_ts"] = _now_ts()
             logger.info(f"[{trace_id}] ROUTING_LOG_SHEET_CREATED worksheet_name={ROUTING_LOG_SHEET_NAME}")
@@ -1331,7 +1868,7 @@ def ensure_routing_log_worksheet(trace_id: str):
     values = get_all_values_safe(ws, trace_id, ROUTING_LOG_SHEET_NAME)
     if not values:
         try:
-            ws.append_row(ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] ROUTING_LOG_HEADERS_INIT_OK")
         except Exception as e:
             logger.exception(f"[{trace_id}] ROUTING_LOG_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
@@ -1341,7 +1878,7 @@ def ensure_routing_log_worksheet(trace_id: str):
     _ROUTING_LOG_WORKSHEET_READY_CACHE["loaded_at_ts"] = _now_ts()
     return ws
 
-def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, location_hint: str, location_id: str, message: str, trace_id: str) -> bool:
+def _append_routing_log_event_sync(user_id: str, intent_name: str, service_row: dict, location_hint: str, location_id: str, message: str, trace_id: str) -> bool:
     ws = ensure_routing_log_worksheet(trace_id)
     if not ws:
         logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=worksheet_unavailable")
@@ -1356,7 +1893,7 @@ def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, 
         sanitize_incoming_text(message)[:500],
     ]
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_LOG_SHEET_NAME)
         logger.info(
             f"[{trace_id}] ROUTING_LOG_APPEND_OK user_id={safe_str(user_id)} intent_name={safe_str(intent_name)} "
@@ -2100,7 +2637,7 @@ def ensure_processed_event_worksheet(trace_id: str):
     except gspread.WorksheetNotFound:
         try:
             ws = spreadsheet.add_worksheet(title=PROCESSED_EVENT_SHEET_NAME, rows=5000, cols=10)
-            ws.append_row(PROCESSED_EVENT_HEADERS, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), PROCESSED_EVENT_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] PROCESSED_EVENT_SHEET_CREATED worksheet_name={PROCESSED_EVENT_SHEET_NAME}")
             return ws
         except Exception as e:
@@ -2112,7 +2649,7 @@ def ensure_processed_event_worksheet(trace_id: str):
     values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME)
     if not values:
         try:
-            ws.append_row(PROCESSED_EVENT_HEADERS, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), PROCESSED_EVENT_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] PROCESSED_EVENT_HEADERS_INIT_OK")
         except Exception as e:
             logger.exception(f"[{trace_id}] PROCESSED_EVENT_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
@@ -2231,7 +2768,7 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
             get_event_type(event),
         ]
         try:
-            ws.append_row(row, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
             _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
             logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_key={event_key}")
             persist_ok = True
@@ -2269,7 +2806,7 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
             get_event_type(event),
         ]
         try:
-            ws.append_row(row, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
             persist_ok = True
         except Exception as e:
             logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
@@ -2345,7 +2882,7 @@ def set_persistent_user_language(user_id: str, language_group: str, trace_id: st
     if row_index:
         return update_row_fields_by_header(ws, row_index, {"language_group": normalized_language, "updated_at": now_iso}, trace_id, USER_STATE_SHEET_NAME)
     try:
-        ws.append_row([normalized_user_id, "", now_iso, normalized_language], value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, USER_STATE_SHEET_NAME, [normalized_user_id, "", now_iso, normalized_language], value_input_option="USER_ENTERED")
         logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_OK user_id={normalized_user_id} language_group={normalized_language}")
         return True
     except Exception as e:
@@ -2380,7 +2917,7 @@ def ensure_user_state_worksheet(trace_id: str):
     except gspread.WorksheetNotFound:
         try:
             ws = spreadsheet.add_worksheet(title=USER_STATE_SHEET_NAME, rows=1000, cols=6)
-            ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), USER_STATE_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] USER_STATE_SHEET_CREATED worksheet_name={USER_STATE_SHEET_NAME}")
             return ws
         except Exception as e:
@@ -2392,7 +2929,7 @@ def ensure_user_state_worksheet(trace_id: str):
     values = get_all_values_safe(ws, trace_id, USER_STATE_SHEET_NAME)
     if not values:
         try:
-            ws.append_row(USER_STATE_HEADERS, value_input_option="USER_ENTERED")
+            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), USER_STATE_HEADERS, value_input_option="USER_ENTERED")
             logger.info(f"[{trace_id}] USER_STATE_HEADERS_INIT_OK")
         except Exception as e:
             logger.exception(f"[{trace_id}] USER_STATE_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
@@ -2440,7 +2977,7 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     if row_index:
         return update_row_fields_by_header(ws, row_index, {"flow": normalized_flow, "updated_at": now_iso}, trace_id, USER_STATE_SHEET_NAME)
     try:
-        ws.append_row([normalized_user_id, normalized_flow, now_iso, ""], value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, USER_STATE_SHEET_NAME, [normalized_user_id, normalized_flow, now_iso, ""], value_input_option="USER_ENTERED")
         logger.info(f"[{trace_id}] USER_STATE_PERSIST_APPEND_OK user_id={normalized_user_id} flow={normalized_flow}")
         return True
     except Exception as e:
@@ -2563,7 +3100,7 @@ def open_ads_catalog_worksheet(trace_id: str):
     if not client:
         return None
     try:
-        spreadsheet = client.open(PHASE1_SPREADSHEET_NAME)
+        spreadsheet = gsheet_guarded_call(trace_id, "client.open.phase1", client.open, PHASE1_SPREADSHEET_NAME)
         worksheet = spreadsheet.worksheet(ADS_CATALOG_V2_SHEET_NAME)
         logger.info(f"[{trace_id}] ADS_CATALOG_SHEET_READY worksheet_name={ADS_CATALOG_V2_SHEET_NAME}")
         return worksheet
@@ -3079,7 +3616,7 @@ def append_ads_click_log_row(ad_row: dict, viewer_user_id: str, viewer_language_
         trace_id,
     ]
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         logger.info(f"[{trace_id}] ADS_CLICK_LOG_APPEND_OK action_type={action_type} ad_id={safe_str(ad_row.get('ad_id'))}")
         return True
     except Exception as e:
@@ -3305,6 +3842,26 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     reply_token = get_reply_token(event)
     text = get_message_text(event)
     normalized = normalize_command_text(text)
+    if not check_user_rate_limit(user_id, trace_id):
+        reply_sent = reply_line_text(reply_token, USER_RATE_LIMIT_REPLY_TEXT, trace_id, "vi") if reply_token else False
+        return {
+            "handled": True,
+            "event_type": "message",
+            "message_type": "text",
+            "flow": "rate_limited",
+            "reply_sent": reply_sent,
+            "reason": "rate_limited",
+        }
+    if gsheet_circuit_is_open():
+        reply_sent = reply_line_text(reply_token, GSHEET_MAINTENANCE_REPLY_TEXT, trace_id, "vi") if reply_token else False
+        return {
+            "handled": True,
+            "event_type": "message",
+            "message_type": "text",
+            "flow": "maintenance",
+            "reply_sent": reply_sent,
+            "reason": "gsheet_circuit_open",
+        }
     current_flow = resolve_user_flow(user_id, trace_id)
     current_language = resolve_user_language(user_id, trace_id)
     requested_language = parse_lang_command(text)
@@ -3771,7 +4328,7 @@ def append_location_alias_v2_from_shadow(shadow_row: dict, trace_id: str, worksh
     except Exception:
         target_row = ""
     try:
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(worksheet_name)
         logger.info(f"[{trace_id}] SHADOW_WRITEBACK_ALIAS_APPEND_OK worksheet_name={worksheet_name} alias_text={json.dumps(alias_text, ensure_ascii=False)} alias_source={json.dumps(alias_source, ensure_ascii=False)} normalized_alias={json.dumps(normalized_alias, ensure_ascii=False)} location_id={json.dumps(location_id, ensure_ascii=False)} target_row={json.dumps(target_row, ensure_ascii=False)}")
         return {
@@ -4320,6 +4877,7 @@ def internal_publish_sync():
     return jsonify(payload), status_code
 @app.route("/callback", methods=["POST"])
 def callback():
+    start_async_log_worker()
     trace_id = make_trace_id()
     started = time.perf_counter()
     raw_body = request.get_data() or b""
@@ -4350,12 +4908,26 @@ def callback():
             event_success = bool(result.get("handled")) and bool(result.get("reply_sent", True))
             finalize_event_processing(event, trace_id, success=event_success)
             results.append(result)
+        except GSheetCircuitOpenError as e:
+            finalize_event_processing(event, trace_id, success=False)
+            logger.error(f"[{trace_id}] CALLBACK_EVENT_GSHEET_CIRCUIT_OPEN event_key={event_key} exception={type(e).__name__}:{e}")
+            results.append({"handled": False, "reason": "gsheet_circuit_open", "event_key": event_key})
+        except (gspread.WorksheetNotFound, gspread.exceptions.APIError, requests.RequestException, ValueError, KeyError, TypeError) as e:
+            finalize_event_processing(event, trace_id, success=False)
+            logger.exception(f"[{trace_id}] CALLBACK_EVENT_KNOWN_EXCEPTION event_key={event_key} exception={type(e).__name__}:{e}")
+            results.append({"handled": False, "reason": "known_exception", "event_key": event_key, "exception_type": type(e).__name__})
         except Exception as e:
             finalize_event_processing(event, trace_id, success=False)
-            logger.exception(f"[{trace_id}] CALLBACK_EVENT_EXCEPTION event_key={event_key} exception={type(e).__name__}:{e}")
-            results.append({"handled": False, "reason": "event_exception", "event_key": event_key})
+            logger.exception(f"[{trace_id}] CALLBACK_EVENT_UNKNOWN_EXCEPTION event_key={event_key} exception={type(e).__name__}:{e}")
+            results.append({"handled": False, "reason": "unknown_exception", "event_key": event_key})
     latency_ms = ms_since(started)
     logger.info(f"[{trace_id}] CALLBACK_DONE events={len(events)} latency_ms={latency_ms}")
     return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": len(events), "results": results}), 200
+try:
+    with app.app_context():
+        warm_up_cache()
+except Exception as exc:
+    logger.exception(f"APP_WARM_UP_CACHE_FAILED exception={type(exc).__name__}:{exc}")
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
