@@ -25,6 +25,85 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# --- SECURITY_TENANT_GUARD_V1 ---
+DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "tenant_default").strip() or "tenant_default"
+TENANT_HEADER_NAME = os.getenv("TENANT_HEADER_NAME", "X-DT79-Tenant-ID").strip() or "X-DT79-Tenant-ID"
+ADMIN_ACCESS_SHEET_NAME = os.getenv("ADMIN_ACCESS_SHEET_NAME", "ADMIN_ACCESS_MASTER").strip() or "ADMIN_ACCESS_MASTER"
+ADMIN_ACCESS_CACHE_TTL_SECONDS = int(os.getenv("ADMIN_ACCESS_CACHE_TTL_SECONDS", "60").strip() or "60")
+ADMIN_ACCESS_HEADERS = ["tenant_id", "line_user_id", "role", "status", "revoked_at", "note"]
+_ADMIN_ACCESS_CACHE: Dict[str, dict] = {}
+_ADMIN_ACCESS_CACHE_TS: Dict[str, float] = {}
+
+SENSITIVE_LOG_KEYS = {
+    "token", "access_token", "channel_access_token", "authorization", "secret",
+    "signature", "x_line_signature", "reply_token", "replyToken", "raw_body",
+    "body", "message", "text", "raw_text", "normalized_text", "user_id", "line_user_id",
+}
+
+def stable_hash(value: str, length: int = 12) -> str:
+    raw = str(value or "")
+    if not raw:
+        return "empty"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:length]
+
+def resolve_tenant_id_from_event(event: dict) -> str:
+    try:
+        header_tenant = safe_str(request.headers.get(TENANT_HEADER_NAME))
+    except Exception:
+        header_tenant = ""
+    if header_tenant:
+        return header_tenant
+    destination = safe_str((event or {}).get("destination"))
+    if destination:
+        return f"line_destination:{destination}"
+    source = (event or {}).get("source") or {}
+    group_id = safe_str(source.get("groupId"))
+    room_id = safe_str(source.get("roomId"))
+    if group_id:
+        return f"line_group:{group_id}"
+    if room_id:
+        return f"line_room:{room_id}"
+    return DEFAULT_TENANT_ID
+
+def set_current_tenant_id_from_event(event: dict, trace_id: str) -> str:
+    tenant_id = resolve_tenant_id_from_event(event)
+    try:
+        g.dt79_tenant_id = tenant_id
+    except Exception:
+        pass
+    logger.info(f"[{trace_id}] TENANT_CONTEXT_SET tenant_hash={stable_hash(tenant_id)}")
+    return tenant_id
+
+def get_current_tenant_id() -> str:
+    try:
+        tenant_id = safe_str(getattr(g, "dt79_tenant_id", ""))
+        if tenant_id:
+            return tenant_id
+    except Exception:
+        pass
+    return DEFAULT_TENANT_ID
+
+def tenant_scope_key(raw_key: str) -> str:
+    raw = safe_str(raw_key)
+    if not raw:
+        return ""
+    tenant_id = get_current_tenant_id()
+    return f"{tenant_id}::{raw}"
+
+def user_ref(user_id: str) -> str:
+    return stable_hash(tenant_scope_key(user_id) or user_id)
+
+def event_ref(event_key: str) -> str:
+    return stable_hash(event_key)
+
+def message_fingerprint(text: str) -> str:
+    cleaned = sanitize_incoming_text(text)
+    return f"len={len(cleaned)} sha={stable_hash(cleaned)}"
+
+def redact_message_for_storage(text: str) -> str:
+    return f"[REDACTED_MESSAGE {message_fingerprint(text)}]"
+
 @app.route("/", methods=["GET", "HEAD"])
 def root_health():
     return "OK", 200
@@ -75,7 +154,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -142,13 +221,13 @@ PROVIDER_MASTER_SHEET_NAME = "PROVIDER_MASTER"
 LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER"
 SERVICE_VARIANT_MASTER_SHEET_NAME = "SERVICE_VARIANT_MASTER"
 ROUTING_LOG_SHEET_NAME = "ROUTING_LOG"
-ROUTING_LOG_HEADERS = ["timestamp", "user_id", "intent", "service_id", "location", "message"]
+ROUTING_LOG_HEADERS = ["timestamp", "tenant_id", "user_ref", "intent", "service_id", "location", "message_fingerprint"]
 ROUTING_MISS_HARVEST_SHEET_NAME = "ROUTING_MISS_HARVEST"
-ROUTING_MISS_HARVEST_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_guess", "location_token_guess", "candidate_aliases", "miss_type", "recommended_fix", "status", "reviewer_notes"]
+ROUTING_MISS_HARVEST_HEADERS = ["timestamp", "trace_id", "tenant_id", "user_ref", "raw_text_fingerprint", "normalized_text_fingerprint", "intent_guess", "location_token_guess", "candidate_aliases", "miss_type", "recommended_fix", "status", "reviewer_notes"]
 ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
-ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
+ROUTING_SLOWPATH_QUEUE_HEADERS = ["timestamp", "trace_id", "tenant_id", "user_ref", "raw_text_fingerprint", "normalized_text_fingerprint", "detected_intent", "candidate_locations", "candidate_location_ids", "reason_code", "confidence", "action_needed", "status", "reviewer_notes"]
 ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME = "ROUTING_SHADOW_SUGGESTIONS"
-ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "user_id", "raw_text", "normalized_text", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes", "second_candidate_alias", "second_candidate_location_id", "score_gap", "decision_context", "writeback_status", "writeback_at", "writeback_target", "writeback_notes"]
+ROUTING_SHADOW_SUGGESTIONS_HEADERS = ["timestamp", "trace_id", "tenant_id", "user_ref", "raw_text_fingerprint", "normalized_text_fingerprint", "intent_name", "location_token_guess", "suggested_alias", "suggested_location_id", "suggested_region_key", "suggestion_source", "suggestion_reason", "confidence", "review_status", "reviewer_notes", "second_candidate_alias", "second_candidate_location_id", "score_gap", "decision_context", "writeback_status", "writeback_at", "writeback_target", "writeback_notes"]
 ROUTING_ADMIN_AUDIT_LOG_SHEET_NAME = "ROUTING_ADMIN_AUDIT_LOG"
 ROUTING_ADMIN_AUDIT_LOG_HEADERS = ["timestamp", "trace_id", "batch_id", "source_sheet", "source_row", "action", "raw_text", "normalized_text", "alias", "location_id", "region_key", "review_status", "writeback_status", "sanitizer_result", "sanitizer_reason", "target_sheet", "target_row", "operator", "notes", "alias_source", "raw_text_risk_result", "raw_text_risk_type", "raw_text_risk_source", "guard_result", "guard_reason"]
 ROUTING_SPREADSHEET_NAME = os.getenv("ROUTING_SPREADSHEET_NAME", "DT79_BOT_TRANSLATOR_DATABASE").strip() or "DT79_BOT_TRANSLATOR_DATABASE"
@@ -342,7 +421,7 @@ def append_row_guarded(ws, trace_id: str, worksheet_name: str, row_values: list,
     )
 
 def check_user_rate_limit(user_id: str, trace_id: str) -> bool:
-    key = safe_str(user_id) or "anonymous"
+    key = tenant_scope_key(user_id) or "anonymous"
     now = _now_ts()
     window_start = now - USER_RATE_LIMIT_WINDOW_SECONDS
     with _RATE_LIMIT_LOCK:
@@ -354,7 +433,7 @@ def check_user_rate_limit(user_id: str, trace_id: str) -> bool:
             dq.popleft()
         if len(dq) >= USER_RATE_LIMIT_MAX_EVENTS:
             logger.warning(
-                f"[{trace_id}] RATE_LIMIT_BLOCKED user_id={key} "
+                f"[{trace_id}] RATE_LIMIT_BLOCKED user_ref={user_ref(user_id)} "
                 f"window_seconds={USER_RATE_LIMIT_WINDOW_SECONDS} max_events={USER_RATE_LIMIT_MAX_EVENTS}"
             )
             return False
@@ -1626,7 +1705,7 @@ def _append_routing_miss_event_sync(
         append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_MISS_HARVEST_SHEET_NAME)
         logger.info(
-            f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_OK user_id={safe_str(user_id)} intent_guess={safe_str(intent_guess)} "
+            f"[{trace_id}] ROUTING_MISS_HARVEST_APPEND_OK user_ref={user_ref(user_id)} intent_guess={safe_str(intent_guess)} "
             f"miss_type={safe_str(miss_type)} recommended_fix={safe_str(recommended_fix)} "
             f"location_token_guess={json.dumps(safe_str(location_token_guess), ensure_ascii=False)}"
         )
@@ -1671,7 +1750,7 @@ def _append_routing_slowpath_event_sync(
         append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_SLOWPATH_QUEUE_SHEET_NAME)
         logger.info(
-            f"[{trace_id}] ROUTING_SLOWPATH_APPEND_OK user_id={safe_str(user_id)} detected_intent={safe_str(detected_intent)} "
+            f"[{trace_id}] ROUTING_SLOWPATH_APPEND_OK user_ref={user_ref(user_id)} detected_intent={safe_str(detected_intent)} "
             f"reason_code={safe_str(reason_code)} confidence={safe_str(confidence)} action_needed={safe_str(action_needed)}"
         )
         return True
@@ -1731,7 +1810,7 @@ def _append_routing_shadow_suggestion_sync(
         append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_SHADOW_SUGGESTIONS_SHEET_NAME)
         logger.info(
-            f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_OK user_id={safe_str(user_id)} intent_name={safe_str(intent_name)} "
+            f"[{trace_id}] ROUTING_SHADOW_SUGGESTION_APPEND_OK user_ref={user_ref(user_id)} intent_name={safe_str(intent_name)} "
             f"suggested_alias={json.dumps(safe_str(suggested_alias), ensure_ascii=False)} "
             f"suggested_location_id={json.dumps(safe_str(suggested_location_id), ensure_ascii=False)} "
             f"suggested_region_key={json.dumps(safe_str(suggested_region_key), ensure_ascii=False)} "
@@ -1966,17 +2045,18 @@ def _append_routing_log_event_sync(user_id: str, intent_name: str, service_row: 
     resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     row = [
         now_tw_iso(),
-        safe_str(user_id),
+        get_current_tenant_id(),
+        user_ref(user_id),
         safe_str(intent_name),
         safe_str(service_row.get("service_id")),
         resolved_location,
-        sanitize_incoming_text(message)[:500],
+        message_fingerprint(message),
     ]
     try:
         append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
         _invalidate_worksheet_caches(ROUTING_LOG_SHEET_NAME)
         logger.info(
-            f"[{trace_id}] ROUTING_LOG_APPEND_OK user_id={safe_str(user_id)} intent_name={safe_str(intent_name)} "
+            f"[{trace_id}] ROUTING_LOG_APPEND_OK user_ref={user_ref(user_id)} intent_name={safe_str(intent_name)} "
             f"service_id={safe_str(service_row.get('service_id'))} "
             f"location={json.dumps(resolved_location, ensure_ascii=False)} "
             f"location_id={json.dumps(safe_str(location_id), ensure_ascii=False)}"
@@ -1999,13 +2079,13 @@ def log_routing_reply_result(
     resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     logger.info(
         f"[{trace_id}] ROUTING_REPLY_RESULT "
-        f"user_id={safe_str(user_id)} "
+        f"user_ref={user_ref(user_id)} "
         f"intent_name={safe_str(intent_name)} "
         f"service_id={safe_str(service_row.get('service_id'))} "
         f"location={json.dumps(resolved_location, ensure_ascii=False)} "
         f"location_id={json.dumps(safe_str(location_id), ensure_ascii=False)} "
         f"reply_ok={reply_ok} "
-        f"reply_preview={json.dumps(safe_str(reply_text)[:160], ensure_ascii=False)}"
+        f"reply_len={len(safe_str(reply_text))}"
     )
 
 
@@ -2323,7 +2403,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             recommended_fix="expand_intent_keywords",
             trace_id=trace_id,
         )
-        logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text={json.dumps(text, ensure_ascii=False)}")
+        logger.info(f"[{trace_id}] ROUTING_INTENT_MISS text_fp={message_fingerprint(text)}")
         return {
             "reply_text": build_routing_smart_fallback_reply("", language_group, reason_code="intent_unclear"),
             "intent_name": "",
@@ -2645,7 +2725,7 @@ _ADS_DETAIL_CACHE: Dict[str, dict] = {}
 _WORKSPACE_VALIDATION_CACHE = {"result": None, "loaded_at_ts": 0}
 _USER_FLOW_STATE: Dict[str, dict] = {}
 USER_STATE_HEADERS = ["user_id", "flow", "updated_at", "language_group"]
-PROCESSED_EVENT_HEADERS = ["event_key", "processed_at", "trace_id", "webhook_event_id", "message_id", "reply_token", "user_id", "event_type"]
+PROCESSED_EVENT_HEADERS = ["event_key", "processed_at", "trace_id", "webhook_event_id", "message_id", "reply_token_hash", "user_ref", "event_type"]
 EVENT_PROCESSING_LOCK_SECONDS = int(os.getenv("EVENT_PROCESSING_LOCK_SECONDS", "120").strip() or "120")
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
 _PROCESSED_EVENT_STATE: Dict[str, dict] = {}
@@ -2858,16 +2938,17 @@ def ensure_processed_event_worksheet(trace_id: str):
         return ws
     return ws
 def get_event_unique_key(event: dict) -> str:
+    tenant_id = resolve_tenant_id_from_event(event)
     webhook_event_id = safe_str(event.get("webhookEventId"))
     if webhook_event_id:
-        return f"webhook:{webhook_event_id}"
+        return f"{tenant_id}:webhook:{webhook_event_id}"
     message = event.get("message") or {}
     message_id = safe_str(message.get("id"))
     if message_id:
-        return f"message:{message_id}"
+        return f"{tenant_id}:message:{message_id}"
     reply_token = safe_str(event.get("replyToken"))
     if reply_token:
-        return f"reply:{reply_token}"
+        return f"{tenant_id}:reply:{stable_hash(reply_token)}"
     return ""
 def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict:
     empty_result = {"status": "", "row_index": 0, "processed_at_value": ""}
@@ -2951,8 +3032,8 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         "trace_id": trace_id,
         "webhook_event_id": safe_str(event.get("webhookEventId")),
         "message_id": safe_str(message.get("id")),
-        "reply_token": safe_str(event.get("replyToken")),
-        "user_id": get_event_user_id(event),
+        "reply_token_hash": stable_hash(safe_str(event.get("replyToken"))),
+        "user_ref": user_ref(get_event_user_id(event)),
         "event_type": get_event_type(event),
     }
     if row_index > 0:
@@ -3078,26 +3159,27 @@ def prune_runtime_user_language_state(trace_id: str) -> None:
         logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_PRUNED removed={len(expired_keys)}")
 def get_runtime_user_language(user_id: str, trace_id: str) -> str:
     prune_runtime_user_language_state(trace_id)
-    item = _USER_LANGUAGE_STATE.get(safe_str(user_id))
+    normalized_user_id = tenant_scope_key(user_id)
+    item = _USER_LANGUAGE_STATE.get(normalized_user_id)
     if not item:
-        logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_MISS user_id={user_id}")
+        logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_MISS user_ref={user_ref(user_id)}")
         return ""
     language_group = safe_str(item.get("language_group"))
-    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_HIT user_id={user_id} language_group={language_group}")
+    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_HIT user_ref={user_ref(user_id)} language_group={language_group}")
     return language_group
 def set_runtime_user_language(user_id: str, language_group: str, trace_id: str) -> None:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     normalized_language = normalize_language_group(language_group)
     if not normalized_user_id:
         logger.error(f"[{trace_id}] USER_LANGUAGE_STATE_SET_SKIPPED reason=missing_user_id")
         return
     prune_runtime_user_language_state(trace_id)
     _USER_LANGUAGE_STATE[normalized_user_id] = {"language_group": normalized_language, "updated_at_ts": get_now_ts()}
-    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_SET user_id={normalized_user_id} language_group={normalized_language}")
+    logger.info(f"[{trace_id}] USER_LANGUAGE_STATE_SET user_ref={user_ref(user_id)} language_group={normalized_language}")
 def ensure_user_language_worksheet(trace_id: str):
     return ensure_user_state_worksheet(trace_id)
 def get_persistent_user_language(user_id: str, trace_id: str) -> str:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     if not normalized_user_id:
         return ""
     ws = ensure_user_language_worksheet(trace_id)
@@ -3106,14 +3188,14 @@ def get_persistent_user_language(user_id: str, trace_id: str) -> str:
         return ""
     records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
     for row in records:
-        if safe_str(row.get("user_id")) == normalized_user_id:
+        if safe_str(row.get("user_scope_key") or row.get("user_id")) == normalized_user_id:
             language_group = normalize_language_group(row.get("language_group"))
-            logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_HIT user_id={normalized_user_id} language_group={language_group}")
+            logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_HIT user_ref={user_ref(user_id)} language_group={language_group}")
             return language_group
-    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_MISS user_id={normalized_user_id}")
+    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_MISS user_ref={user_ref(user_id)}")
     return ""
 def set_persistent_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     normalized_language = normalize_language_group(language_group)
     if not normalized_user_id:
         logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_SET_SKIPPED reason=missing_user_id")
@@ -3128,7 +3210,7 @@ def set_persistent_user_language(user_id: str, language_group: str, trace_id: st
         return update_row_fields_by_header(ws, row_index, {"language_group": normalized_language, "updated_at": now_iso}, trace_id, USER_STATE_SHEET_NAME)
     try:
         append_row_guarded(ws, trace_id, USER_STATE_SHEET_NAME, [normalized_user_id, "", now_iso, normalized_language], value_input_option="USER_ENTERED")
-        logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_OK user_id={normalized_user_id} language_group={normalized_language}")
+        logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_OK user_ref={user_ref(user_id)} language_group={normalized_language}")
         return True
     except Exception as e:
         logger.exception(f"[{trace_id}] USER_LANGUAGE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
@@ -3140,7 +3222,7 @@ def resolve_user_language(user_id: str, trace_id: str) -> str:
     persistent_language = get_persistent_user_language(user_id, trace_id)
     if persistent_language:
         set_runtime_user_language(user_id, persistent_language, trace_id)
-        logger.info(f"[{trace_id}] USER_LANGUAGE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} language_group={persistent_language}")
+        logger.info(f"[{trace_id}] USER_LANGUAGE_RESTORED_FROM_SHEET user_ref={user_ref(user_id)} language_group={persistent_language}")
         return persistent_language
     return DEFAULT_LANGUAGE_GROUP
 def persist_user_language(user_id: str, language_group: str, trace_id: str) -> bool:
@@ -3149,8 +3231,8 @@ def persist_user_language(user_id: str, language_group: str, trace_id: str) -> b
     if persist_ok:
         set_runtime_user_language(user_id, normalized_language, trace_id)
     else:
-        _USER_LANGUAGE_STATE.pop(safe_str(user_id), None)
-    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_id={safe_str(user_id)} language_group={normalized_language} ok={persist_ok}")
+        _USER_LANGUAGE_STATE.pop(tenant_scope_key(user_id), None)
+    logger.info(f"[{trace_id}] USER_LANGUAGE_PERSIST_RESULT user_ref={user_ref(user_id)} language_group={normalized_language} ok={persist_ok}")
     return persist_ok
 # --- user state ---
 def ensure_user_state_worksheet(trace_id: str):
@@ -3182,7 +3264,7 @@ def ensure_user_state_worksheet(trace_id: str):
         return ws
     return ws
 def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     if not normalized_user_id:
         return ""
     ws = ensure_user_state_worksheet(trace_id)
@@ -3191,24 +3273,24 @@ def get_persistent_user_flow(user_id: str, trace_id: str) -> str:
         return ""
     records = get_records_safe(ws, trace_id, USER_STATE_SHEET_NAME)
     for row in records:
-        if safe_str(row.get("user_id")) != normalized_user_id:
+        if safe_str(row.get("user_scope_key") or row.get("user_id")) != normalized_user_id:
             continue
         flow = safe_str(row.get("flow"))
         updated_at = safe_str(row.get("updated_at"))
         if flow and not is_supported_flow(flow):
-            logger.warning(f"[{trace_id}] USER_STATE_PERSIST_UNSUPPORTED_FLOW user_id={normalized_user_id} flow={flow}")
-            clear_persistent_user_flow(normalized_user_id, trace_id)
+            logger.warning(f"[{trace_id}] USER_STATE_PERSIST_UNSUPPORTED_FLOW user_ref={user_ref(user_id)} flow={flow}")
+            clear_persistent_user_flow(user_id, trace_id)
             return ""
         if flow and is_persistent_flow_expired(updated_at):
-            logger.info(f"[{trace_id}] USER_STATE_PERSIST_EXPIRED user_id={normalized_user_id} flow={flow} updated_at={json.dumps(updated_at, ensure_ascii=False)} ttl_seconds={PERSISTENT_FLOW_TTL_SECONDS}")
-            clear_persistent_user_flow(normalized_user_id, trace_id)
+            logger.info(f"[{trace_id}] USER_STATE_PERSIST_EXPIRED user_ref={user_ref(user_id)} flow={flow} updated_at={json.dumps(updated_at, ensure_ascii=False)} ttl_seconds={PERSISTENT_FLOW_TTL_SECONDS}")
+            clear_persistent_user_flow(user_id, trace_id)
             return ""
-        logger.info(f"[{trace_id}] USER_STATE_PERSIST_HIT user_id={normalized_user_id} flow={flow}")
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_HIT user_ref={user_ref(user_id)} flow={flow}")
         return flow
-    logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_id={normalized_user_id}")
+    logger.info(f"[{trace_id}] USER_STATE_PERSIST_MISS user_ref={user_ref(user_id)}")
     return ""
 def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     normalized_flow = safe_str(flow)
     if not normalized_user_id:
         logger.error(f"[{trace_id}] USER_STATE_PERSIST_SET_SKIPPED reason=missing_user_id")
@@ -3223,13 +3305,13 @@ def set_persistent_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
         return update_row_fields_by_header(ws, row_index, {"flow": normalized_flow, "updated_at": now_iso}, trace_id, USER_STATE_SHEET_NAME)
     try:
         append_row_guarded(ws, trace_id, USER_STATE_SHEET_NAME, [normalized_user_id, normalized_flow, now_iso, ""], value_input_option="USER_ENTERED")
-        logger.info(f"[{trace_id}] USER_STATE_PERSIST_APPEND_OK user_id={normalized_user_id} flow={normalized_flow}")
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_APPEND_OK user_ref={user_ref(user_id)} flow={normalized_flow}")
         return True
     except Exception as e:
         logger.exception(f"[{trace_id}] USER_STATE_PERSIST_APPEND_FAILED exception={type(e).__name__}:{e}")
         return False
 def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     if not normalized_user_id:
         logger.error(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_SKIPPED reason=missing_user_id")
         return False
@@ -3239,25 +3321,25 @@ def clear_persistent_user_flow(user_id: str, trace_id: str) -> bool:
         return False
     row_index = find_first_row_index_by_column_value(ws=ws, column_name="user_id", expected_value=normalized_user_id, trace_id=trace_id, worksheet_name=USER_STATE_SHEET_NAME)
     if not row_index:
-        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_MISS user_id={normalized_user_id}")
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_MISS user_ref={user_ref(user_id)}")
         return True
     ok = update_row_fields_by_header(ws, row_index, {"flow": "", "updated_at": now_tw_iso()}, trace_id, USER_STATE_SHEET_NAME)
     if ok:
-        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_id={normalized_user_id} row_index={row_index}")
+        logger.info(f"[{trace_id}] USER_STATE_PERSIST_CLEAR_OK user_ref={user_ref(user_id)} row_index={row_index}")
     return ok
 def clear_runtime_user_flow(user_id: str, trace_id: str) -> None:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     if not normalized_user_id:
         logger.error(f"[{trace_id}] USER_FLOW_STATE_CLEAR_SKIPPED reason=missing_user_id")
         return
     existed = normalized_user_id in _USER_FLOW_STATE
     _USER_FLOW_STATE.pop(normalized_user_id, None)
-    logger.info(f"[{trace_id}] USER_FLOW_STATE_CLEARED user_id={normalized_user_id} existed={existed}")
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_CLEARED user_ref={user_ref(user_id)} existed={existed}")
 def clear_user_flow(user_id: str, trace_id: str) -> bool:
     persist_ok = clear_persistent_user_flow(user_id, trace_id)
     if persist_ok:
         clear_runtime_user_flow(user_id, trace_id)
-    logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_id={safe_str(user_id)} ok={persist_ok}")
+    logger.info(f"[{trace_id}] USER_STATE_CLEAR_RESULT user_ref={user_ref(user_id)} ok={persist_ok}")
     return persist_ok
 def prune_runtime_user_flow_state(trace_id: str) -> None:
     now_ts = get_now_ts()
@@ -3275,22 +3357,23 @@ def prune_runtime_user_flow_state(trace_id: str) -> None:
         logger.info(f"[{trace_id}] USER_FLOW_STATE_PRUNED removed={len(expired_keys)}")
 def get_runtime_user_flow(user_id: str, trace_id: str) -> str:
     prune_runtime_user_flow_state(trace_id)
-    item = _USER_FLOW_STATE.get(safe_str(user_id))
+    normalized_user_id = tenant_scope_key(user_id)
+    item = _USER_FLOW_STATE.get(normalized_user_id)
     if not item:
-        logger.info(f"[{trace_id}] USER_FLOW_STATE_MISS user_id={user_id}")
+        logger.info(f"[{trace_id}] USER_FLOW_STATE_MISS user_ref={user_ref(user_id)}")
         return ""
     flow = safe_str(item.get("flow"))
-    logger.info(f"[{trace_id}] USER_FLOW_STATE_HIT user_id={user_id} flow={flow}")
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_HIT user_ref={user_ref(user_id)} flow={flow}")
     return flow
 def set_runtime_user_flow(user_id: str, flow: str, trace_id: str) -> None:
-    normalized_user_id = safe_str(user_id)
+    normalized_user_id = tenant_scope_key(user_id)
     normalized_flow = safe_str(flow)
     if not normalized_user_id:
         logger.error(f"[{trace_id}] USER_FLOW_STATE_SET_SKIPPED reason=missing_user_id")
         return
     prune_runtime_user_flow_state(trace_id)
     _USER_FLOW_STATE[normalized_user_id] = {"flow": normalized_flow, "updated_at_ts": get_now_ts()}
-    logger.info(f"[{trace_id}] USER_FLOW_STATE_SET user_id={normalized_user_id} flow={normalized_flow}")
+    logger.info(f"[{trace_id}] USER_FLOW_STATE_SET user_ref={user_ref(user_id)} flow={normalized_flow}")
 def resolve_user_flow(user_id: str, trace_id: str) -> str:
     runtime_flow = get_runtime_user_flow(user_id, trace_id)
     if runtime_flow:
@@ -3298,7 +3381,7 @@ def resolve_user_flow(user_id: str, trace_id: str) -> str:
     persistent_flow = get_persistent_user_flow(user_id, trace_id)
     if persistent_flow:
         set_runtime_user_flow(user_id, persistent_flow, trace_id)
-        logger.info(f"[{trace_id}] USER_STATE_RESTORED_FROM_SHEET user_id={safe_str(user_id)} flow={persistent_flow}")
+        logger.info(f"[{trace_id}] USER_STATE_RESTORED_FROM_SHEET user_ref={user_ref(user_id)} flow={persistent_flow}")
         return persistent_flow
     return ""
 def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
@@ -3306,8 +3389,8 @@ def persist_user_flow(user_id: str, flow: str, trace_id: str) -> bool:
     if persist_ok:
         set_runtime_user_flow(user_id, flow, trace_id)
     else:
-        _USER_FLOW_STATE.pop(safe_str(user_id), None)
-    logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_id={safe_str(user_id)} flow={safe_str(flow)} ok={persist_ok}")
+        _USER_FLOW_STATE.pop(tenant_scope_key(user_id), None)
+    logger.info(f"[{trace_id}] USER_STATE_PERSIST_RESULT user_ref={user_ref(user_id)} flow={safe_str(flow)} ok={persist_ok}")
     return persist_ok
 # --- ads catalog helpers ---
 def reset_ads_runtime_caches(trace_id: str) -> None:
@@ -3495,7 +3578,7 @@ def switch_user_rich_menu(user_id: str, language_group: str, trace_id: str) -> b
         body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
         logger.info(
             f"[{trace_id}] RICH_MENU_SWITCH_HTTP "
-            f"user_id={normalized_user_id} language_group={normalized_language} "
+            f"user_ref={user_ref(user_id)} language_group={normalized_language} "
             f"rich_menu_id={rich_menu_id} status_code={resp.status_code} "
             f"body={json.dumps(body_preview, ensure_ascii=False)}"
         )
@@ -3833,11 +3916,11 @@ def build_ads_catalog_reply(language_group: str, ads_rows: list) -> str:
             lines.append("")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 def set_ads_view_cache(user_id: str, language_group: str, rows: list, trace_id: str) -> None:
-    cache_key = f"{safe_str(user_id)}::{normalize_language_group(language_group)}"
+    cache_key = f"{tenant_scope_key(user_id)}::{normalize_language_group(language_group)}"
     _ADS_VIEW_CACHE[cache_key] = {"rows": rows, "loaded_at_ts": get_now_ts()}
     logger.info(f"[{trace_id}] ADS_VIEW_CACHE_SET cache_key={cache_key} rows={len(rows)}")
 def get_ads_view_cache(user_id: str, language_group: str, trace_id: str) -> list:
-    cache_key = f"{safe_str(user_id)}::{normalize_language_group(language_group)}"
+    cache_key = f"{tenant_scope_key(user_id)}::{normalize_language_group(language_group)}"
     item = _ADS_VIEW_CACHE.get(cache_key) or {}
     loaded_at_ts = int(item.get("loaded_at_ts", 0) or 0)
     if loaded_at_ts <= 0 or (get_now_ts() - loaded_at_ts) > ADS_VIEW_TTL_SECONDS:
@@ -3855,7 +3938,7 @@ def append_ads_click_log_row(ad_row: dict, viewer_user_id: str, viewer_language_
         safe_str(ad_row.get("ad_id")),
         safe_str(ad_row.get("tenant_id")),
         safe_str(ad_row.get("owner_id")),
-        safe_str(viewer_user_id),
+        user_ref(viewer_user_id),
         normalize_language_group(viewer_language_group),
         safe_str(action_type),
         trace_id,
@@ -4111,12 +4194,12 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     current_language = resolve_user_language(user_id, trace_id)
     requested_language = parse_lang_command(text)
     routing_result = None
-    logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_id={user_id} reply_token_present={bool(reply_token)} text={json.dumps(text, ensure_ascii=False)} normalized={json.dumps(normalized, ensure_ascii=False)} current_flow={current_flow} current_language={current_language}")
+    logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_ref={user_ref(user_id)} reply_token_present={bool(reply_token)} text_fp={message_fingerprint(text)} normalized_fp={message_fingerprint(normalized)} current_flow={current_flow} current_language={current_language}")
     reply_language = current_language
     if normalized == WORKER_ENTRY_COMMAND:
         persist_ok = persist_user_flow(user_id, FLOW_WORKER, trace_id)
         if not persist_ok:
-            logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/worker user_id={user_id}")
+            logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/worker user_ref={user_ref(user_id)}")
             reply_text = handle_state_save_failed_message(current_language)
             flow_used = "persist_failed"
         else:
@@ -4125,7 +4208,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     elif normalized == ADS_ENTRY_COMMAND:
         persist_ok = persist_user_flow(user_id, FLOW_ADS, trace_id)
         if not persist_ok:
-            logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/ads user_id={user_id}")
+            logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/ads user_ref={user_ref(user_id)}")
             reply_text = handle_state_save_failed_message(current_language)
             flow_used = "persist_failed"
         else:
@@ -4134,7 +4217,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
         clear_ok = clear_user_flow(user_id, trace_id)
         if not clear_ok:
-            logger.error(f"[{trace_id}] USER_STATE_CLEAR_FAILED command={normalized} user_id={user_id}")
+            logger.error(f"[{trace_id}] USER_STATE_CLEAR_FAILED command={normalized} user_ref={user_ref(user_id)}")
             reply_text = handle_state_clear_failed_message(current_language)
             flow_used = "clear_failed"
         else:
@@ -4150,7 +4233,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         if requested_language:
             persist_ok = persist_user_language(user_id, requested_language, trace_id)
             if not persist_ok:
-                logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_FAILED command=/lang user_id={user_id} requested_language={requested_language}")
+                logger.error(f"[{trace_id}] USER_LANGUAGE_PERSIST_FAILED command=/lang user_ref={user_ref(user_id)} requested_language={requested_language}")
                 reply_text = handle_state_save_failed_message(current_language)
                 flow_used = current_flow or "lang_persist_failed"
             else:
@@ -4158,7 +4241,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 if not switch_ok:
                     logger.error(
                         f"[{trace_id}] RICH_MENU_SWITCH_FAILED_AFTER_LANG_SAVE "
-                        f"user_id={user_id} requested_language={requested_language}"
+                        f"user_ref={user_ref(user_id)} requested_language={requested_language}"
                     )
                     reply_text = t(requested_language, "rich_menu_switch_failed")
                     reply_language = requested_language
@@ -4221,7 +4304,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             )
         else:
             logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=reply_failed")
-    return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_id": user_id, "reply_sent": reply_ok}
+    return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_ref": user_ref(user_id), "reply_sent": reply_ok}
 def dispatch_line_event(event: dict, trace_id: str) -> dict:
     event_type = get_event_type(event)
     logger.info(f"[{trace_id}] LINE_EVENT_DISPATCH event_type={event_type}")
@@ -5043,6 +5126,67 @@ def resolve_publish_sync_status_code(sync_result: dict) -> int:
         return 501
     return 500
 
+
+# --- dynamic admin access guard ---
+def ensure_admin_access_worksheet(trace_id: str):
+    spreadsheet = open_spreadsheet(trace_id)
+    if not spreadsheet:
+        return None
+    try:
+        ws = spreadsheet.worksheet(ADMIN_ACCESS_SHEET_NAME)
+    except gspread.WorksheetNotFound:
+        try:
+            ws = spreadsheet.add_worksheet(title=ADMIN_ACCESS_SHEET_NAME, rows=1000, cols=len(ADMIN_ACCESS_HEADERS))
+            append_row_guarded(ws, trace_id, ADMIN_ACCESS_SHEET_NAME, ADMIN_ACCESS_HEADERS, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] ADMIN_ACCESS_SHEET_CREATED worksheet_name={ADMIN_ACCESS_SHEET_NAME}")
+            return ws
+        except Exception as e:
+            logger.exception(f"[{trace_id}] ADMIN_ACCESS_SHEET_CREATE_FAILED exception={type(e).__name__}:{e}")
+            return None
+    except Exception as e:
+        logger.exception(f"[{trace_id}] ADMIN_ACCESS_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
+        return None
+    return ws
+
+def get_admin_access_map(trace_id: str) -> dict:
+    tenant_id = get_current_tenant_id()
+    now = _now_ts()
+    if tenant_id in _ADMIN_ACCESS_CACHE and now - float(_ADMIN_ACCESS_CACHE_TS.get(tenant_id, 0.0) or 0.0) < ADMIN_ACCESS_CACHE_TTL_SECONDS:
+        return _ADMIN_ACCESS_CACHE.get(tenant_id, {}) or {}
+    ws = ensure_admin_access_worksheet(trace_id)
+    if not ws:
+        return {}
+    rows = get_records_safe(ws, trace_id, ADMIN_ACCESS_SHEET_NAME)
+    result = {}
+    for row in rows:
+        if safe_str(row.get("tenant_id")) != tenant_id:
+            continue
+        line_user_id = safe_str(row.get("line_user_id"))
+        if not line_user_id:
+            continue
+        result[line_user_id] = {
+            "role": safe_str(row.get("role")).lower(),
+            "status": safe_str(row.get("status")).lower(),
+            "revoked_at": safe_str(row.get("revoked_at")),
+        }
+    _ADMIN_ACCESS_CACHE[tenant_id] = result
+    _ADMIN_ACCESS_CACHE_TS[tenant_id] = now
+    logger.info(f"[{trace_id}] ADMIN_ACCESS_CACHE_READY tenant_hash={stable_hash(tenant_id)} count={len(result)}")
+    return result
+
+def is_admin_allowed(user_id: str, trace_id: str, required_role: str = "admin") -> bool:
+    item = get_admin_access_map(trace_id).get(safe_str(user_id))
+    if not item:
+        logger.warning(f"[{trace_id}] ADMIN_ACCESS_DENIED user_ref={user_ref(user_id)} reason=not_found")
+        return False
+    if item.get("status") != "active":
+        logger.warning(f"[{trace_id}] ADMIN_ACCESS_DENIED user_ref={user_ref(user_id)} reason=status_{item.get('status')}")
+        return False
+    role = item.get("role")
+    if required_role == "owner":
+        return role == "owner"
+    return role in {"admin", "owner"}
+
 @app.route("/internal/process-shadow-writeback", methods=["POST"])
 def internal_process_shadow_writeback():
     trace_id = make_trace_id()
@@ -5142,6 +5286,7 @@ def callback():
         return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": 0, "results": [], "reason": "empty_events_verify_ok"}), 200
     results = []
     for event in events:
+        set_current_tenant_id_from_event(event, trace_id)
         event_key = get_event_unique_key(event)
         try:
             can_process, processing_reason, processing_event_key = begin_event_processing(event, trace_id)
