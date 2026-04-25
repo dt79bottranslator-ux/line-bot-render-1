@@ -75,7 +75,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -100,6 +100,8 @@ GSHEET_MAINTENANCE_REPLY_TEXT = os.getenv(
 ASYNC_LOG_ENABLED = os.getenv("ASYNC_LOG_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_QUEUE_MAX = int(os.getenv("ASYNC_LOG_QUEUE_MAX", "1000").strip() or "1000")
 ASYNC_LOG_WORKER_TIMEOUT_SECONDS = float(os.getenv("ASYNC_LOG_WORKER_TIMEOUT_SECONDS", "1").strip() or "1")
+SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS = int(os.getenv("SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS", "300").strip() or "300")
+SIM_FASTPATH_ENABLED = os.getenv("SIM_FASTPATH_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_LEVEL_CRITICAL = "CRITICAL"
 ASYNC_LOG_LEVEL_AUDIT = "AUDIT"
 ASYNC_LOG_LEVEL_DEBUG = "DEBUG"
@@ -247,6 +249,7 @@ _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 _ROUTING_CONFIG_SHARED_CACHE = {"config_map": None, "loaded_at_ts": 0.0}
 _ROUTING_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+_SIM_FASTPATH_VARIANT_ROWS_CACHE = {"rows": [], "loaded_at_ts": 0.0, "sheet_name": ""}
 _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
@@ -1345,9 +1348,11 @@ def warm_up_cache(trace_id: str = "") -> bool:
         alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
         alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
         get_location_alias_lookup(alias_rows, trace_id)
+        variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
+        variant_rows = load_sim_variant_rows_fastpath(trace_id, variant_sheet_name)
         logger.info(
             f"[{trace_id}] WARM_UP_CACHE_OK alias_sheet={alias_sheet_name} "
-            f"alias_rows={len(alias_rows)} latency_ms={ms_since(start)}"
+            f"alias_rows={len(alias_rows)} sim_variant_rows={len(variant_rows)} latency_ms={ms_since(start)}"
         )
         return True
     except GSheetCircuitOpenError as exc:
@@ -2017,6 +2022,119 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
         lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
+def load_sim_variant_rows_fastpath(trace_id: str, variant_sheet_name: str) -> List[dict]:
+    sheet_name = safe_str(variant_sheet_name) or SERVICE_VARIANT_MASTER_SHEET_NAME
+    cached_sheet = safe_str(_SIM_FASTPATH_VARIANT_ROWS_CACHE.get("sheet_name"))
+    loaded_at_ts = float(_SIM_FASTPATH_VARIANT_ROWS_CACHE.get("loaded_at_ts", 0.0) or 0.0)
+    cached_rows = _SIM_FASTPATH_VARIANT_ROWS_CACHE.get("rows") or []
+    if cached_sheet == sheet_name and cached_rows and _cache_is_fresh(loaded_at_ts, SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS):
+        logger.info(f"[{trace_id}] SIM_FASTPATH_VARIANT_CACHE_HIT worksheet_name={sheet_name} count={len(cached_rows)}")
+        return cached_rows
+    variant_ws = get_routing_worksheet_by_name(trace_id, sheet_name)
+    if not variant_ws:
+        logger.error(f"[{trace_id}] SIM_FASTPATH_VARIANT_SHEET_UNAVAILABLE worksheet_name={sheet_name}")
+        return cached_rows if cached_sheet == sheet_name else []
+    rows = get_records_safe(variant_ws, trace_id, sheet_name)
+    if rows:
+        _SIM_FASTPATH_VARIANT_ROWS_CACHE["rows"] = rows
+        _SIM_FASTPATH_VARIANT_ROWS_CACHE["loaded_at_ts"] = _now_ts()
+        _SIM_FASTPATH_VARIANT_ROWS_CACHE["sheet_name"] = sheet_name
+        logger.info(f"[{trace_id}] SIM_FASTPATH_VARIANT_CACHE_READY worksheet_name={sheet_name} count={len(rows)}")
+        return rows
+    return cached_rows if cached_sheet == sheet_name else []
+
+
+def try_build_sim_fastpath_reply(
+    text: str,
+    language_group: str,
+    trace_id: str,
+    user_id: str,
+    service_rows: List[dict],
+    variant_sheet_name: str,
+    fallback_location: str,
+    matched_keywords: List[str],
+    normalized_text: str,
+) -> Optional[dict]:
+    if not SIM_FASTPATH_ENABLED:
+        return None
+    service = choose_service_for_intent("sim_mang_di_dong", safe_str(fallback_location) or ROUTING_FALLBACK_LOCATION, service_rows)
+    if not service:
+        service = choose_service_for_intent("sim_mang_di_dong", "", service_rows)
+    if not service:
+        append_routing_miss_event(
+            user_id=user_id,
+            raw_text=text,
+            normalized_text=normalized_text,
+            intent_guess="sim_mang_di_dong",
+            location_token_guess="",
+            candidate_aliases=[],
+            miss_type="service_missing",
+            recommended_fix="add_service_row",
+            trace_id=trace_id,
+        )
+        logger.info(f"[{trace_id}] SIM_FASTPATH_SERVICE_MISS matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}")
+        return {
+            "reply_text": build_routing_smart_fallback_reply("sim_mang_di_dong", language_group, reason_code="missing_service_row"),
+            "intent_name": "sim_mang_di_dong",
+            "service_row": None,
+            "location_hint": "",
+            "location_id": "",
+            "service_region_key": "",
+            "matched_keywords": matched_keywords,
+            "result_type": "smart_fallback",
+        }
+
+    service_id = safe_str(service.get("service_id"))
+    service_region_key = safe_str(service.get("service_region_key")) or safe_str(service.get("location")) or safe_str(fallback_location) or ROUTING_FALLBACK_LOCATION
+    final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key)
+    network, duration, variant_type = parse_sim_entities(text)
+
+    if service_id == "SIM_TW_001" and network and duration:
+        variant_rows = load_sim_variant_rows_fastpath(trace_id, variant_sheet_name)
+        variant = find_sim_variant(service_id, network, duration, variant_type, variant_rows) if variant_rows else None
+        if variant:
+            logger.info(
+                f"[{trace_id}] SIM_FASTPATH_VARIANT_MATCH_OK service_id={service_id} network={network} "
+                f"duration={duration} type={variant_type} price={safe_str(variant.get('price'))}"
+            )
+            final_reply_text = build_sim_variant_reply(service, variant, language_group)
+        else:
+            append_routing_miss_event(
+                user_id=user_id,
+                raw_text=text,
+                normalized_text=normalized_text,
+                intent_guess="sim_mang_di_dong",
+                location_token_guess="",
+                candidate_aliases=[],
+                miss_type="variant_missing",
+                recommended_fix="add_variant_row",
+                trace_id=trace_id,
+            )
+            final_reply_text = build_routing_smart_fallback_reply("sim_mang_di_dong", language_group, reason_code="missing_variant")
+            logger.info(
+                f"[{trace_id}] SIM_FASTPATH_VARIANT_MISS service_id={service_id} network={network} "
+                f"duration={duration} type={variant_type}"
+            )
+
+    logger.info(
+        f"[{trace_id}] SIM_FASTPATH_ROUTE_OK service_id={service_id} "
+        f"service_region_key={json.dumps(service_region_key, ensure_ascii=False)} "
+        f"network={json.dumps(network, ensure_ascii=False)} duration={json.dumps(duration, ensure_ascii=False)} "
+        f"variant_type={json.dumps(variant_type, ensure_ascii=False)} "
+        f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
+    )
+    return {
+        "reply_text": final_reply_text,
+        "intent_name": "sim_mang_di_dong",
+        "service_row": service,
+        "location_hint": service_region_key,
+        "location_id": "",
+        "service_region_key": service_region_key,
+        "matched_keywords": matched_keywords,
+        "result_type": "sim_fastpath",
+    }
+
+
 def select_candidate_aliases_for_reply(candidates: Optional[List[dict]] = None, max_items: int = 2, score_window: int = 5) -> List[str]:
     ranked = candidates or []
     if not ranked:
@@ -2145,6 +2263,21 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         }
 
     service_rows = get_records_safe(service_ws, trace_id, service_sheet_name)
+
+    if intent_name == "sim_mang_di_dong":
+        sim_fastpath_result = try_build_sim_fastpath_reply(
+            text=text,
+            language_group=language_group,
+            trace_id=trace_id,
+            user_id=user_id,
+            service_rows=service_rows,
+            variant_sheet_name=variant_sheet_name,
+            fallback_location=fallback_location,
+            matched_keywords=matched_keywords,
+            normalized_text=normalized_text,
+        )
+        if sim_fastpath_result:
+            return sim_fastpath_result
 
     alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
     alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
