@@ -154,7 +154,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -3537,6 +3537,24 @@ def get_message_text(event: dict) -> str:
     return sanitize_incoming_text(message.get("text"))
 def get_reply_token(event: dict) -> str:
     return safe_str(event.get("replyToken"))
+def summarize_line_reply_response(resp) -> dict:
+    """Return metadata only. Never expose LINE raw body or quoteToken in logs."""
+    result = {
+        "status_code": getattr(resp, "status_code", 0),
+        "body_len": len(safe_str(getattr(resp, "text", ""))),
+        "sent_count": 0,
+        "quote_token_present": False,
+    }
+    try:
+        data = resp.json() if safe_str(getattr(resp, "text", "")) else {}
+        sent_messages = data.get("sentMessages") or []
+        if isinstance(sent_messages, list):
+            result["sent_count"] = len(sent_messages)
+            result["quote_token_present"] = any(bool((item or {}).get("quoteToken")) for item in sent_messages if isinstance(item, dict))
+    except Exception:
+        result["response_json_parse_ok"] = False
+    return result
+
 def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: str = "vi") -> bool:
     if not LINE_CHANNEL_ACCESS_TOKEN:
         logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_ACCESS_TOKEN")
@@ -3549,8 +3567,14 @@ def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: 
     payload = {"replyToken": reply_token, "messages": [{"type": "text", "text": text}]}
     try:
         resp = requests.post(LINE_REPLY_API_URL, headers=headers, json=payload, timeout=OUTBOUND_TIMEOUT)
-        body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
-        logger.info(f"[{trace_id}] LINE_REPLY_HTTP status_code={resp.status_code} body={json.dumps(body_preview, ensure_ascii=False)}")
+        summary = summarize_line_reply_response(resp)
+        logger.info(
+            f"[{trace_id}] LINE_REPLY_HTTP "
+            f"status_code={summary.get('status_code')} "
+            f"sent_count={summary.get('sent_count')} "
+            f"quote_token_present={summary.get('quote_token_present')} "
+            f"body_len={summary.get('body_len')}"
+        )
         return 200 <= resp.status_code < 300
     except Exception as e:
         logger.exception(f"[{trace_id}] LINE_REPLY_EXCEPTION exception={type(e).__name__}:{e}")
@@ -3575,12 +3599,11 @@ def switch_user_rich_menu(user_id: str, language_group: str, trace_id: str) -> b
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}
     try:
         resp = requests.post(url, headers=headers, timeout=OUTBOUND_TIMEOUT)
-        body_preview = safe_str(resp.text)[:ERROR_BODY_LOG_LIMIT]
         logger.info(
             f"[{trace_id}] RICH_MENU_SWITCH_HTTP "
             f"user_ref={user_ref(user_id)} language_group={normalized_language} "
             f"rich_menu_id={rich_menu_id} status_code={resp.status_code} "
-            f"body={json.dumps(body_preview, ensure_ascii=False)}"
+            f"body_len={len(safe_str(resp.text))}"
         )
         return 200 <= resp.status_code < 300
     except Exception as e:
