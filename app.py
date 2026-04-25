@@ -75,7 +75,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -102,6 +102,7 @@ ASYNC_LOG_QUEUE_MAX = int(os.getenv("ASYNC_LOG_QUEUE_MAX", "1000").strip() or "1
 ASYNC_LOG_WORKER_TIMEOUT_SECONDS = float(os.getenv("ASYNC_LOG_WORKER_TIMEOUT_SECONDS", "1").strip() or "1")
 SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS = int(os.getenv("SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS", "900").strip() or "900")
 ROUTING_MASTER_CACHE_TTL_SECONDS = int(os.getenv("ROUTING_MASTER_CACHE_TTL_SECONDS", "900").strip() or "900")
+LOCATION_MASTER_CACHE_TTL_SECONDS = int(os.getenv("LOCATION_MASTER_CACHE_TTL_SECONDS", "900").strip() or "900")
 EVENT_STATE_FAST_FINALIZE_ENABLED = os.getenv("EVENT_STATE_FAST_FINALIZE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 SIM_FASTPATH_ENABLED = os.getenv("SIM_FASTPATH_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_LEVEL_CRITICAL = "CRITICAL"
@@ -757,6 +758,18 @@ def load_routing_master_records(trace_id: str, worksheet_name: str, ttl_seconds:
     return []
 
 
+def load_location_master_records(trace_id: str, worksheet_name: str, role: str = "") -> List[dict]:
+    sheet_name = safe_str(worksheet_name)
+    if not sheet_name:
+        return []
+    rows = load_routing_master_records(trace_id, sheet_name, LOCATION_MASTER_CACHE_TTL_SECONDS)
+    logger.info(
+        f"[{trace_id}] LOCATION_MASTER_RECORDS_CACHE_READY "
+        f"role={safe_str(role) or sheet_name} worksheet_name={sheet_name} count={len(rows)}"
+    )
+    return rows
+
+
 def load_bot_config_map(trace_id: str) -> Dict[str, str]:
     cached = getattr(g, "_dt79_routing_config_map", None)
     if isinstance(cached, dict) and cached:
@@ -1403,14 +1416,18 @@ def warm_up_cache(trace_id: str = "") -> bool:
 
         intent_rows = load_routing_master_records(trace_id, intent_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
         service_rows = load_routing_master_records(trace_id, service_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
-        alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
-        alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
+        canonical_sheet_name = safe_str(config_map.get("location_canonical_sheet"))
+        region_map_sheet_name = safe_str(config_map.get("location_region_map_sheet"))
+        alias_rows = load_location_master_records(trace_id, alias_sheet_name, "alias")
+        canonical_rows = load_location_master_records(trace_id, canonical_sheet_name, "canonical") if canonical_sheet_name else []
+        region_rows = load_location_master_records(trace_id, region_map_sheet_name, "region_map") if region_map_sheet_name else []
         get_location_alias_lookup(alias_rows, trace_id)
         variant_rows = load_sim_variant_rows_fastpath(trace_id, variant_sheet_name)
         logger.info(
             f"[{trace_id}] WARM_UP_CACHE_OK alias_sheet={alias_sheet_name} "
             f"intent_rows={len(intent_rows)} service_rows={len(service_rows)} "
-            f"alias_rows={len(alias_rows)} sim_variant_rows={len(variant_rows)} latency_ms={ms_since(start)}"
+            f"alias_rows={len(alias_rows)} canonical_rows={len(canonical_rows)} "
+            f"region_rows={len(region_rows)} sim_variant_rows={len(variant_rows)} latency_ms={ms_since(start)}"
         )
         return True
     except GSheetCircuitOpenError as exc:
@@ -2333,18 +2350,15 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
         if sim_fastpath_result:
             return sim_fastpath_result
 
-    alias_ws = get_routing_worksheet_by_name(trace_id, alias_sheet_name)
-    alias_rows = get_records_safe(alias_ws, trace_id, alias_sheet_name) if alias_ws else []
+    alias_rows = load_location_master_records(trace_id, alias_sheet_name, "alias")
 
     canonical_rows = []
     region_rows = []
     if alias_rows and any(safe_str(row.get("location_id")) for row in alias_rows):
-        canonical_ws = get_routing_worksheet_by_name(trace_id, canonical_sheet_name) if canonical_sheet_name else None
-        region_map_ws = get_routing_worksheet_by_name(trace_id, region_map_sheet_name) if region_map_sheet_name else None
-        if canonical_ws and canonical_sheet_name:
-            canonical_rows = get_records_safe(canonical_ws, trace_id, canonical_sheet_name)
-        if region_map_ws and region_map_sheet_name:
-            region_rows = get_records_safe(region_map_ws, trace_id, region_map_sheet_name)
+        if canonical_sheet_name:
+            canonical_rows = load_location_master_records(trace_id, canonical_sheet_name, "canonical")
+        if region_map_sheet_name:
+            region_rows = load_location_master_records(trace_id, region_map_sheet_name, "region_map")
 
     candidate_matches = collect_routing_location_candidates(text, alias_rows, matched_keywords) if alias_rows else []
     candidate_aliases = [safe_str(item.get("matched_alias")) for item in candidate_matches if safe_str(item.get("matched_alias"))]
