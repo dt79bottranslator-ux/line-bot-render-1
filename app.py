@@ -154,7 +154,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -2957,7 +2957,7 @@ def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict
         return empty_result
     ws = ensure_processed_event_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_SKIPPED reason=worksheet_unavailable event_key={event_key}")
+        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_SKIPPED reason=worksheet_unavailable event_ref={event_ref(event_key)}")
         return empty_result
     values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME)
     if not values:
@@ -2967,7 +2967,7 @@ def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict
     event_key_idx = header_map.get("event_key")
     processed_at_idx = header_map.get("processed_at")
     if event_key_idx is None or processed_at_idx is None:
-        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_COLUMN_MISSING event_key={event_key}")
+        logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_COLUMN_MISSING event_ref={event_ref(event_key)}")
         return empty_result
     for row_index, row in enumerate(values[1:], start=2):
         current_event_key = safe_str(row[event_key_idx]) if event_key_idx < len(row) else ""
@@ -2979,22 +2979,22 @@ def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict
             status = "processing" if is_processing_marker_fresh(marker_dt) else "stale_processing"
         else:
             status = marker_status
-        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP event_key={event_key} status={status} row_index={row_index}")
+        logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP event_ref={event_ref(event_key)} status={status} row_index={row_index}")
         return {"status": status, "row_index": row_index, "processed_at_value": processed_at_value}
-    logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_MISS event_key={event_key}")
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_MISS event_ref={event_ref(event_key)}")
     return empty_result
 def set_processed_event_runtime_state(event_key: str, status: str, trace_id: str) -> None:
     if not event_key:
         return
     prune_processed_event_state(trace_id)
     _PROCESSED_EVENT_STATE[event_key] = {"status": safe_str(status), "updated_at_ts": get_now_ts()}
-    logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_SET event_key={event_key} status={status}")
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_SET event_ref={event_ref(event_key)} status={status}")
 def clear_processed_event_runtime_state(event_key: str, trace_id: str) -> None:
     if not event_key:
         return
     existed = event_key in _PROCESSED_EVENT_STATE
     _PROCESSED_EVENT_STATE.pop(event_key, None)
-    logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_CLEARED event_key={event_key} existed={existed}")
+    logger.info(f"[{trace_id}] PROCESSED_EVENT_RUNTIME_STATE_CLEARED event_ref={event_ref(event_key)} existed={existed}")
 def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     event_key = get_event_unique_key(event)
     if not event_key:
@@ -3005,24 +3005,24 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     runtime_status = safe_str(runtime_item.get("status"))
     runtime_updated_at_ts = int(runtime_item.get("updated_at_ts", 0) or 0)
     if runtime_status == "done":
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=runtime_done")
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=runtime_done")
         return False, "duplicate_done_runtime", event_key
     if runtime_status == "processing" and (get_now_ts() - runtime_updated_at_ts) <= EVENT_PROCESSING_LOCK_SECONDS:
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=runtime_processing")
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=runtime_processing")
         return False, "duplicate_processing_runtime", event_key
     lookup = get_persistent_processed_event_record(event_key, trace_id)
     persistent_status = safe_str(lookup.get("status"))
     row_index = int(lookup.get("row_index", 0) or 0)
     ws = ensure_processed_event_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] EVENT_PROCESSING_BEGIN_FAILED reason=worksheet_unavailable event_key={event_key}")
+        logger.error(f"[{trace_id}] EVENT_PROCESSING_BEGIN_FAILED reason=worksheet_unavailable event_ref={event_ref(event_key)}")
         return False, "worksheet_unavailable", event_key
     if persistent_status == "done":
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=persistent_done")
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=persistent_done")
         set_processed_event_runtime_state(event_key, "done", trace_id)
         return False, "duplicate_done_persistent", event_key
     if persistent_status == "processing":
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_key={event_key} source=persistent_processing")
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=persistent_processing")
         set_processed_event_runtime_state(event_key, "processing", trace_id)
         return False, "duplicate_processing_persistent", event_key
     message = event.get("message") or {}
@@ -3043,24 +3043,24 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
             event_key,
             marker,
             trace_id,
-            safe_str(event.get("webhookEventId")),
-            safe_str(message.get("id")),
-            safe_str(event.get("replyToken")),
-            get_event_user_id(event),
+            stable_hash(safe_str(event.get("webhookEventId"))),
+            stable_hash(safe_str(message.get("id"))),
+            stable_hash(safe_str(event.get("replyToken"))),
+            user_ref(get_event_user_id(event)),
             get_event_type(event),
         ]
         try:
             append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
             _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
-            logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_key={event_key}")
+            logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_ref={event_ref(event_key)}")
             persist_ok = True
         except Exception as e:
-            logger.exception(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
+            logger.exception(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
             persist_ok = False
     if not persist_ok:
         return False, "processing_marker_write_failed", event_key
     set_processed_event_runtime_state(event_key, "processing", trace_id)
-    logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_key={event_key} source={'reclaim' if row_index > 0 else 'new'}")
+    logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_ref={event_ref(event_key)} source={'reclaim' if row_index > 0 else 'new'}")
     return True, "processing_started", event_key
 def persist_event_processing_finalize(event: dict, trace_id: str, success: bool) -> bool:
     event_key = get_event_unique_key(event)
@@ -3086,10 +3086,10 @@ def persist_event_processing_finalize(event: dict, trace_id: str, success: bool)
             event_key,
             marker,
             trace_id,
-            safe_str(event.get("webhookEventId")),
-            safe_str(message.get("id")),
-            safe_str(event.get("replyToken")),
-            get_event_user_id(event),
+            stable_hash(safe_str(event.get("webhookEventId"))),
+            stable_hash(safe_str(message.get("id"))),
+            stable_hash(safe_str(event.get("replyToken"))),
+            user_ref(get_event_user_id(event)),
             get_event_type(event),
         ]
         try:
@@ -3103,9 +3103,9 @@ def persist_event_processing_finalize(event: dict, trace_id: str, success: bool)
             _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
             persist_ok = True
         except Exception as e:
-            logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
+            logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
             persist_ok = False
-    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_key={event_key} success={success} persist_ok={persist_ok}")
+    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
     return persist_ok
 
 
@@ -3134,13 +3134,13 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
             success,
         )
         if queued:
-            logger.info(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_ENQUEUED event_key={event_key} success={success}")
-            logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_key={event_key} success={success} persist_ok=queued")
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_ENQUEUED event_ref={event_ref(event_key)} success={success}")
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_ref={event_ref(event_key)} success={success} persist_ok=queued")
             return
-        logger.error(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_QUEUE_FAILED event_key={event_key} fallback=sync")
+        logger.error(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_QUEUE_FAILED event_ref={event_ref(event_key)} fallback=sync")
 
     persist_ok = persist_event_processing_finalize(event, trace_id, success)
-    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_key={event_key} success={success} persist_ok={persist_ok}")
+    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
 
 # --- language state ---
 def prune_runtime_user_language_state(trace_id: str) -> None:
@@ -5314,7 +5314,7 @@ def callback():
         try:
             can_process, processing_reason, processing_event_key = begin_event_processing(event, trace_id)
             if not can_process:
-                logger.info(f"[{trace_id}] CALLBACK_EVENT_DUPLICATE_SKIP event_key={processing_event_key} reason={processing_reason}")
+                logger.info(f"[{trace_id}] CALLBACK_EVENT_DUPLICATE_SKIP event_ref={event_ref(processing_event_key)} reason={processing_reason}")
                 results.append({"handled": False, "reason": processing_reason, "event_key": processing_event_key})
                 continue
             result = dispatch_line_event(event, trace_id)
@@ -5323,15 +5323,15 @@ def callback():
             results.append(result)
         except GSheetCircuitOpenError as e:
             finalize_event_processing(event, trace_id, success=False)
-            logger.error(f"[{trace_id}] CALLBACK_EVENT_GSHEET_CIRCUIT_OPEN event_key={event_key} exception={type(e).__name__}:{e}")
+            logger.error(f"[{trace_id}] CALLBACK_EVENT_GSHEET_CIRCUIT_OPEN event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
             results.append({"handled": False, "reason": "gsheet_circuit_open", "event_key": event_key})
         except (gspread.WorksheetNotFound, gspread.exceptions.APIError, requests.RequestException, ValueError, KeyError, TypeError) as e:
             finalize_event_processing(event, trace_id, success=False)
-            logger.exception(f"[{trace_id}] CALLBACK_EVENT_KNOWN_EXCEPTION event_key={event_key} exception={type(e).__name__}:{e}")
+            logger.exception(f"[{trace_id}] CALLBACK_EVENT_KNOWN_EXCEPTION event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
             results.append({"handled": False, "reason": "known_exception", "event_key": event_key, "exception_type": type(e).__name__})
         except Exception as e:
             finalize_event_processing(event, trace_id, success=False)
-            logger.exception(f"[{trace_id}] CALLBACK_EVENT_UNKNOWN_EXCEPTION event_key={event_key} exception={type(e).__name__}:{e}")
+            logger.exception(f"[{trace_id}] CALLBACK_EVENT_UNKNOWN_EXCEPTION event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
             results.append({"handled": False, "reason": "unknown_exception", "event_key": event_key})
     latency_ms = ms_since(started)
     logger.info(f"[{trace_id}] CALLBACK_DONE events={len(events)} latency_ms={latency_ms}")
