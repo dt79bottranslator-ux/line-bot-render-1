@@ -75,7 +75,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -102,6 +102,7 @@ ASYNC_LOG_QUEUE_MAX = int(os.getenv("ASYNC_LOG_QUEUE_MAX", "1000").strip() or "1
 ASYNC_LOG_WORKER_TIMEOUT_SECONDS = float(os.getenv("ASYNC_LOG_WORKER_TIMEOUT_SECONDS", "1").strip() or "1")
 SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS = int(os.getenv("SIM_FASTPATH_VARIANT_CACHE_TTL_SECONDS", "900").strip() or "900")
 ROUTING_MASTER_CACHE_TTL_SECONDS = int(os.getenv("ROUTING_MASTER_CACHE_TTL_SECONDS", "900").strip() or "900")
+EVENT_STATE_FAST_FINALIZE_ENABLED = os.getenv("EVENT_STATE_FAST_FINALIZE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 SIM_FASTPATH_ENABLED = os.getenv("SIM_FASTPATH_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_LEVEL_CRITICAL = "CRITICAL"
 ASYNC_LOG_LEVEL_AUDIT = "AUDIT"
@@ -377,7 +378,8 @@ def _async_log_worker_loop() -> None:
             break
         level, trace_id, task_name, fn, args, kwargs = task
         try:
-            fn(*args, **kwargs)
+            with app.app_context():
+                fn(*args, **kwargs)
             logger.info(f"[{trace_id}] ASYNC_LOG_DONE level={level} task={task_name}")
         except GSheetCircuitOpenError as exc:
             logger.error(f"[{trace_id}] ASYNC_LOG_CIRCUIT_BLOCKED level={level} task={task_name} exception={type(exc).__name__}:{exc}")
@@ -2965,19 +2967,24 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     set_processed_event_runtime_state(event_key, "processing", trace_id)
     logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_key={event_key} source={'reclaim' if row_index > 0 else 'new'}")
     return True, "processing_started", event_key
-def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None:
+def persist_event_processing_finalize(event: dict, trace_id: str, success: bool) -> bool:
     event_key = get_event_unique_key(event)
     if not event_key:
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_SKIPPED reason=missing_event_key")
-        return
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_SKIPPED reason=missing_event_key")
+        return False
     lookup = get_persistent_processed_event_record(event_key, trace_id)
     row_index = int(lookup.get("row_index", 0) or 0)
     ws = ensure_processed_event_worksheet(trace_id)
     marker = make_done_marker() if success else make_failed_marker()
-    target_status = "done" if success else "failed"
     persist_ok = False
     if ws and row_index > 0:
-        persist_ok = update_row_fields_by_header(ws, row_index, {"processed_at": marker, "trace_id": trace_id}, trace_id, PROCESSED_EVENT_SHEET_NAME)
+        persist_ok = update_row_fields_by_header(
+            ws,
+            row_index,
+            {"processed_at": marker, "trace_id": trace_id},
+            trace_id,
+            PROCESSED_EVENT_SHEET_NAME,
+        )
     elif ws and not row_index and success:
         message = event.get("message") or {}
         row = [
@@ -2991,16 +2998,55 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
             get_event_type(event),
         ]
         try:
-            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
+            append_row_guarded(
+                ws,
+                trace_id,
+                locals().get("worksheet_name", getattr(ws, "title", "unknown")),
+                row,
+                value_input_option="USER_ENTERED",
+            )
+            _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
             persist_ok = True
         except Exception as e:
             logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_key={event_key} exception={type(e).__name__}:{e}")
             persist_ok = False
+    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_key={event_key} success={success} persist_ok={persist_ok}")
+    return persist_ok
+
+
+def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None:
+    event_key = get_event_unique_key(event)
+    if not event_key:
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_SKIPPED reason=missing_event_key")
+        return
+
+    target_status = "done" if success else "failed"
+
     if success:
         set_processed_event_runtime_state(event_key, target_status, trace_id)
     else:
         clear_processed_event_runtime_state(event_key, trace_id)
+
+    if EVENT_STATE_FAST_FINALIZE_ENABLED and success:
+        event_snapshot = json.loads(json.dumps(event, ensure_ascii=False))
+        queued = enqueue_async_log(
+            ASYNC_LOG_LEVEL_AUDIT,
+            trace_id,
+            "persist_event_processing_finalize",
+            persist_event_processing_finalize,
+            event_snapshot,
+            trace_id,
+            success,
+        )
+        if queued:
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_ENQUEUED event_key={event_key} success={success}")
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_key={event_key} success={success} persist_ok=queued")
+            return
+        logger.error(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_QUEUE_FAILED event_key={event_key} fallback=sync")
+
+    persist_ok = persist_event_processing_finalize(event, trace_id, success)
     logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_key={event_key} success={success} persist_ok={persist_ok}")
+
 # --- language state ---
 def prune_runtime_user_language_state(trace_id: str) -> None:
     now_ts = get_now_ts()
