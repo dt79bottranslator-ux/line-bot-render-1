@@ -170,7 +170,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -1012,7 +1012,13 @@ def detect_routing_intent(text: str, intent_rows: List[dict]) -> Tuple[str, List
             continue
         hits = []
         for keyword in [safe_str(x) for x in keywords_raw.split(",") if safe_str(x)]:
-            if _phrase_present(normalized, keyword):
+            normalized_keyword = normalize_routing_text(keyword)
+            if not normalized_keyword:
+                continue
+            # DT79 ROUTING_INTENT_SUBSTRING_FIX_V1:
+            # keyword ngắn phải match theo cụm nằm trong message đã normalize.
+            # Ví dụ: "ban dang" phải match "ban dang di choi o dau vay".
+            if _phrase_present(normalized, normalized_keyword):
                 hits.append(keyword)
         if not hits:
             continue
@@ -2464,6 +2470,22 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
             "result_type": "smart_fallback",
         }
 
+    if intent_name == "chat_general":
+        logger.info(
+            f"[{trace_id}] ROUTING_CHAT_GENERAL_MATCH "
+            f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
+        )
+        return {
+            "reply_text": build_default_intent_reply(text, language_group, trace_id),
+            "intent_name": intent_name,
+            "service_row": None,
+            "location_hint": "",
+            "location_id": "",
+            "service_region_key": "",
+            "matched_keywords": matched_keywords,
+            "result_type": "general_chat",
+        }
+
     if intent_name == "sim_mang_di_dong":
         sim_fastpath_result = try_build_sim_fastpath_reply(
             text=text,
@@ -3719,6 +3741,7 @@ def _normalize_match_text(value: str) -> str:
         return ""
     normalized = unicodedata.normalize("NFKC", raw)
     normalized = _strip_combining_marks(normalized)
+    normalized = normalized.replace("đ", "d").replace("Đ", "D")
     normalized = re.sub(r"[\u200B-\u200F\u2060\uFEFF]", "", normalized)
     normalized = re.sub(r"[\t\r\n\f\v]+", " ", normalized)
     normalized = re.sub(r"[^\w\s\u0E00-\u0E7F\u3400-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", " ", normalized)
