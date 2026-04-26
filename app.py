@@ -170,7 +170,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -2094,6 +2094,7 @@ def _append_routing_log_event_sync(user_id: str, intent_name: str, service_row: 
     if not ws:
         logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=worksheet_unavailable")
         return False
+    service_row = service_row or {}
     resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     cleaned_message = sanitize_incoming_text(message)
     row = [
@@ -2131,6 +2132,7 @@ def log_routing_reply_result(
     reply_text: str,
     reply_ok: bool,
 ) -> None:
+    service_row = service_row or {}
     resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     logger.info(
         f"[{trace_id}] ROUTING_REPLY_RESULT "
@@ -2472,13 +2474,13 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
 
     if intent_name == "chat_general":
         logger.info(
-            f"[{trace_id}] ROUTING_CHAT_GENERAL_MATCH "
+            f"[{trace_id}] ROUTING_CHAT_GENERAL_EARLY_RETURN "
             f"matched_keywords={json.dumps(matched_keywords, ensure_ascii=False)}"
         )
         return {
-            "reply_text": build_default_intent_reply(text, language_group, trace_id),
+            "reply_text": t(language_group, "default_general_intent"),
             "intent_name": intent_name,
-            "service_row": None,
+            "service_row": {},
             "location_hint": "",
             "location_id": "",
             "service_region_key": "",
