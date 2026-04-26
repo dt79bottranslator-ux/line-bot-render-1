@@ -169,7 +169,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -1842,11 +1842,16 @@ def _append_routing_shadow_suggestion_sync(
 
 
 def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, location_hint: str, location_id: str, message: str, trace_id: str) -> bool:
-    return enqueue_async_log(
-        ASYNC_LOG_LEVEL_AUDIT,
-        trace_id,
-        "append_routing_log_event",
-        _append_routing_log_event_sync,
+    """Write ROUTING_LOG synchronously.
+
+    Security reason:
+    ROUTING_LOG is an audit/privacy-critical write. If it is only enqueued
+    asynchronously, Render can restart before the worker flushes the queue,
+    leaving the legacy raw-log sheet unchanged and making privacy validation
+    impossible.
+    """
+    logger.info(f"[{trace_id}] ROUTING_LOG_SYNC_WRITE_START user_ref={user_ref(user_id)}")
+    ok = _append_routing_log_event_sync(
         user_id,
         intent_name,
         service_row,
@@ -1855,6 +1860,8 @@ def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, 
         message,
         trace_id,
     )
+    logger.info(f"[{trace_id}] ROUTING_LOG_SYNC_WRITE_DONE success={ok}")
+    return ok
 
 def append_routing_miss_event(
     user_id: str,
