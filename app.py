@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -258,6 +258,14 @@ EVENT_INBOX_BATCH_SIZE = int(os.getenv("EVENT_INBOX_BATCH_SIZE", "10").strip() o
 LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 LINE_OA_ID = os.getenv("LINE_OA_ID", "@688xvjuc").strip() or "@688xvjuc"
 LINE_OA_DEEP_LINK = os.getenv("LINE_OA_DEEP_LINK", f"https://line.me/R/ti/p/{LINE_OA_ID}").strip() or f"https://line.me/R/ti/p/{LINE_OA_ID}"
+
+# --- GROUP_PRIVATE_LEAD_LOCK_FIX_V2 ---
+def is_private_source_type(source_type: str) -> bool:
+    return safe_str(source_type).lower() == "user"
+
+def build_group_private_deeplink(service_id: str = "") -> str:
+    base = safe_str(LINE_OA_DEEP_LINK) or f"https://line.me/R/ti/p/{LINE_OA_ID}"
+    return base
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 WORKER_ENTRY_COMMAND = "/worker"
 ADS_ENTRY_COMMAND = "/ads"
@@ -2196,7 +2204,7 @@ def build_routing_reply(
     service_row: dict,
     language_group: str,
     resolved_region_key: str = "",
-    source_type: str = "user",
+    source_type: str = "unknown",
 ) -> str:
     """Build reply for routing results.
     GROUP/ROOM: hide seller contact to prevent lead hijacking.
@@ -2220,8 +2228,8 @@ def build_routing_reply(
     else:
         title = scope or service_name
 
-    is_group_context = safe_str(source_type).lower() in {"group", "room"}
-    if is_group_context:
+    is_private_context = is_private_source_type(source_type)
+    if not is_private_context:
         lines = []
         if title:
             lines.append(f"✅ Đã ghi nhận nhu cầu: {title}")
@@ -2231,7 +2239,7 @@ def build_routing_reply(
             lines.append(f"Mã yêu cầu: {service_id}")
         lines.append("")
         lines.append("🔒 Thông tin liên hệ được ẩn trong nhóm để tránh người khác cướp khách.")
-        lines.append(f"👉 Nhắn riêng bot để xử lý tiếp: {LINE_OA_DEEP_LINK}")
+        lines.append(f"👉 Nhắn riêng bot để xử lý tiếp: {build_group_private_deeplink(service_id)}")
         return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
     lines = []
@@ -2282,12 +2290,13 @@ def find_sim_variant(service_id: str, network: str, duration: str, variant_type:
         return row
     return None
 
-def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group: str) -> str:
+def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group: str, source_type: str = "unknown") -> str:
     lang = normalize_language_group(language_group)
     prefix = ROUTING_REPLY_PREFIX_BY_LANGUAGE.get(lang, ROUTING_REPLY_PREFIX_BY_LANGUAGE["vi"])
     labels = ROUTING_LABELS_BY_LANGUAGE.get(lang, ROUTING_LABELS_BY_LANGUAGE["vi"])
     contact_id = safe_str(service_row.get("contact_id"))
     contact_link = safe_str(service_row.get("contact_link"))
+    service_id = safe_str(service_row.get("service_id"))
     network = safe_str(variant_row.get("network"))
     duration = safe_str(variant_row.get("duration"))
     price = safe_str(variant_row.get("price"))
@@ -2299,9 +2308,18 @@ def build_sim_variant_reply(service_row: dict, variant_row: dict, language_group
     lines = [f"{labels['service']}: SIM {network} {duration_label} ({type_label})"]
     if price:
         lines.append(f"{labels['price']}: {price} TWD")
+
+    if not is_private_source_type(source_type):
+        if service_id:
+            lines.append(f"Mã yêu cầu: {service_id}")
+        lines.append("")
+        lines.append("🔒 Thông tin liên hệ được ẩn trong nhóm để tránh người khác cướp khách.")
+        lines.append(f"👉 Nhắn riêng bot để xử lý tiếp: {build_group_private_deeplink(service_id)}")
+        return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
+
     if contact_link:
         lines.append(f"Nhắn trực tiếp: {contact_link}")
-    else:
+    elif contact_id:
         lines.append(f"{prefix}: {contact_id}")
     return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
@@ -2379,7 +2397,7 @@ def try_build_sim_fastpath_reply(
                 f"[{trace_id}] SIM_FASTPATH_VARIANT_MATCH_OK service_id={service_id} network={network} "
                 f"duration={duration} type={variant_type} price={safe_str(variant.get('price'))}"
             )
-            final_reply_text = build_sim_variant_reply(service, variant, language_group)
+            final_reply_text = build_sim_variant_reply(service, variant, language_group, source_type=source_type)
         else:
             append_routing_miss_event(
                 user_id=user_id,
@@ -2832,7 +2850,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
                     f"[{trace_id}] SIM_VARIANT_MATCH_OK service_id={service_id} network={network} "
                     f"duration={duration} type={variant_type} price={safe_str(variant.get('price'))}"
                 )
-                final_reply_text = build_sim_variant_reply(service, variant, language_group)
+                final_reply_text = build_sim_variant_reply(service, variant, language_group, source_type=source_type)
             else:
                 append_routing_miss_event(
                     user_id=user_id,
@@ -4347,6 +4365,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     text = get_message_text(event)
     normalized = normalize_command_text(text)
     source_type = get_event_source_type(event)
+    logger.info(f"[{trace_id}] LINE_SOURCE_CONTEXT source_type={safe_str(source_type) or 'unknown'} user_ref={user_ref(user_id)}")
     if not check_user_rate_limit(user_id, trace_id):
         reply_sent = reply_line_text(reply_token, USER_RATE_LIMIT_REPLY_TEXT, trace_id, "vi") if reply_token else False
         return {
@@ -4473,10 +4492,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 flow_used = "default"
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
     if routing_result and routing_result.get("service_row"):
-        if source_type in {"group", "room"}:
-            logger.info(f"[{trace_id}] GROUP_LEAD_LOCK_APPLIED service_id={safe_str((routing_result.get("service_row") or {}).get("service_id"))} contact_hidden=True")
+        if not is_private_source_type(source_type):
+            logger.info(f"[{trace_id}] GROUP_LEAD_LOCK_APPLIED source_type={safe_str(source_type) or 'unknown'} service_id={safe_str((routing_result.get('service_row') or {}).get('service_id'))} contact_hidden=True")
         else:
-            logger.info(f"[{trace_id}] PRIVATE_SERVICE_DETAIL_ALLOWED service_id={safe_str((routing_result.get("service_row") or {}).get("service_id"))}")
+            logger.info(f"[{trace_id}] PRIVATE_SERVICE_DETAIL_ALLOWED source_type={safe_str(source_type)} service_id={safe_str((routing_result.get('service_row') or {}).get('service_id'))}")
         log_routing_reply_result(
             trace_id=trace_id,
             user_id=user_id,
