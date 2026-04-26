@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__LOCATION_CANDIDATE_DECISION_FIX_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -1268,6 +1268,13 @@ def collect_routing_location_candidates(text: str, alias_rows: List[dict], match
     return results
 
 def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> dict:
+    """Select the best routing location candidate.
+
+    DT79 LOCATION_CANDIDATE_DECISION_FIX_V1:
+    - Exact/hash alias matches must not be dropped only because score/gap is low.
+    - If alias target_key is already a service region/root key (for example "台中"),
+      use it as service_region_key when canonical/region sheets do not provide one.
+    """
     if not candidates:
         return {
             "decision": "no_candidate",
@@ -1275,6 +1282,7 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
             "selected_candidate": None,
             "top_score": 0,
             "second_score": 0,
+            "candidates": [],
         }
 
     canonical_index = build_canonical_location_index(canonical_rows or [])
@@ -1283,15 +1291,25 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
     enriched = []
     for candidate in candidates:
         current = dict(candidate)
-        if safe_str(current.get("target_type")) == "root_location":
+        target_key = safe_str(current.get("target_key"))
+        target_type = safe_str(current.get("target_type"))
+
+        if target_type == "root_location":
             current["location_id"] = ""
-            current["service_region_key"] = safe_str(current.get("target_key"))
+            current["service_region_key"] = target_key
         else:
-            location_id = safe_str(current.get("target_key"))
+            location_id = target_key
             canonical_row = canonical_index.get(location_id) or {}
             region_row = region_index.get(location_id) or {}
-            current["location_id"] = location_id
-            current["service_region_key"] = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
+            service_region_key = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
+
+            # Guard: some alias rows store the actual service/root region directly in target_key
+            # while target_type is not root_location. Do not drop a confirmed alias match.
+            if not service_region_key and target_key:
+                service_region_key = target_key
+
+            current["location_id"] = location_id if (canonical_row or region_row) else ""
+            current["service_region_key"] = service_region_key
         enriched.append(current)
 
     enriched = [c for c in enriched if safe_str(c.get("service_region_key"))]
@@ -1302,15 +1320,33 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
             "selected_candidate": None,
             "top_score": 0,
             "second_score": 0,
+            "candidates": [],
         }
+
+    enriched.sort(
+        key=lambda item: (
+            0 if safe_str(item.get("match_mode")) == "hash_exact" else 1,
+            -int(item.get("score", 0) or 0),
+            -len(safe_str(item.get("matched_alias"))),
+            safe_str(item.get("target_key")),
+        )
+    )
 
     top = enriched[0]
     second = enriched[1] if len(enriched) > 1 else {}
     top_score = int(top.get("score", 0) or 0)
     second_score = int(second.get("score", 0) or 0) if isinstance(second, dict) else 0
     gap = top_score - second_score
+    match_mode = safe_str(top.get("match_mode"))
+    matched_alias = safe_str(top.get("matched_alias"))
 
-    if top_score >= 85 and gap >= 10:
+    if match_mode == "hash_exact" and matched_alias:
+        decision = "route"
+        confidence = "high" if top_score >= 75 else "medium"
+    elif matched_alias and safe_str(top.get("service_region_key")):
+        decision = "route"
+        confidence = "medium" if top_score >= 60 else "low"
+    elif top_score >= 85 and gap >= 10:
         decision = "route"
         confidence = "high"
     elif 75 <= top_score <= 84 and gap >= 15:
