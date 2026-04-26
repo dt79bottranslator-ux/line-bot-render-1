@@ -160,6 +160,31 @@ def build_direct_translation_reply(text: str, language_group: str, trace_id: str
     logger.info(f"[{trace_id}] DIRECT_TRANSLATION_OK target_lang={target_lang} input_fp={message_fingerprint(text)} output_len={len(translated)}")
     return translated, "ok"
 
+def has_service_keyword_in_intent_rows(text: str, intent_rows: List[dict]) -> bool:
+    normalized = normalize_routing_text(text)
+    if not normalized or not intent_rows:
+        return False
+    for row in intent_rows:
+        intent_name = safe_str(row.get("intent_name"))
+        if not intent_name or intent_name == "chat_general":
+            continue
+        keywords_raw = safe_str(row.get("keywords"))
+        if not keywords_raw:
+            continue
+        for keyword in [safe_str(x) for x in keywords_raw.split(",") if safe_str(x)]:
+            normalized_keyword = normalize_routing_text(keyword)
+            if normalized_keyword and _phrase_present(normalized, normalized_keyword):
+                return True
+    return False
+
+def has_service_keyword_for_routing(text: str, trace_id: str) -> bool:
+    config_map = load_bot_config_map(trace_id)
+    intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
+    intent_rows = load_routing_master_records(trace_id, intent_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
+    result = has_service_keyword_in_intent_rows(text, intent_rows)
+    logger.info(f"[{trace_id}] MIXED_ZH_SERVICE_KEYWORD_CHECK result={result} text_fp={message_fingerprint(text)}")
+    return result
+
 def is_supported_flow(value: str) -> bool:
     normalized = safe_str(value)
     return normalized in {FLOW_WORKER, FLOW_ADS}
@@ -189,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -4381,11 +4406,13 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         flow_used = "ads_detail_view"
     elif current_flow == FLOW_ADS:
         clear_user_flow(user_id, trace_id)
-        if is_cjk_text(text):
+        if is_cjk_text(text) and not has_service_keyword_for_routing(text, trace_id):
             reply_text, translation_status = build_direct_translation_reply(text, current_language, trace_id)
             flow_used = f"ads_auto_cleared_zh_text_translation_guard_{translation_status}"
             logger.info(f"[{trace_id}] ZH_TEXT_TRANSLATION_GUARD flow_used={flow_used} text_fp={message_fingerprint(text)}")
         else:
+            if is_cjk_text(text):
+                logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=ads_auto_cleared_routing text_fp={message_fingerprint(text)}")
             routing_result = try_build_routing_reply(text, current_language, trace_id, user_id)
             if routing_result:
                 reply_text = routing_result["reply_text"]
@@ -4394,11 +4421,13 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 reply_text = build_default_intent_reply(text, current_language, trace_id)
                 flow_used = "ads_auto_cleared"
     else:
-        if is_cjk_text(text):
+        if is_cjk_text(text) and not has_service_keyword_for_routing(text, trace_id):
             reply_text, translation_status = build_direct_translation_reply(text, current_language, trace_id)
             flow_used = f"zh_text_translation_guard_{translation_status}"
             logger.info(f"[{trace_id}] ZH_TEXT_TRANSLATION_GUARD flow_used={flow_used} text_fp={message_fingerprint(text)}")
         else:
+            if is_cjk_text(text):
+                logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=routing text_fp={message_fingerprint(text)}")
             routing_result = try_build_routing_reply(text, current_language, trace_id, user_id)
             if routing_result:
                 reply_text = routing_result["reply_text"]
