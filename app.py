@@ -9,6 +9,7 @@ import time
 import uuid
 import logging
 import threading
+import sqlite3
 from queue import Queue, Full, Empty
 from collections import deque
 import unicodedata
@@ -169,7 +170,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -205,6 +206,11 @@ ASYNC_LOG_LEVEL_DEBUG = "DEBUG"
 PROCESSED_EVENT_TTL_SECONDS = int(os.getenv("PROCESSED_EVENT_TTL_SECONDS", "21600").strip() or "21600")
 PROCESSED_EVENT_MAX_KEYS = int(os.getenv("PROCESSED_EVENT_MAX_KEYS", "10000").strip() or "10000")
 PROCESSED_EVENT_SHEET_NAME = os.getenv("PROCESSED_EVENT_SHEET_NAME", "processed_event_state").strip() or "processed_event_state"
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "dt79.db").strip() or "dt79.db"
+EVENT_INBOX_WORKER_ENABLED = os.getenv("EVENT_INBOX_WORKER_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+EVENT_INBOX_WORKER_POLL_SECONDS = float(os.getenv("EVENT_INBOX_WORKER_POLL_SECONDS", "0.2").strip() or "0.2")
+EVENT_INBOX_MAX_RETRY = int(os.getenv("EVENT_INBOX_MAX_RETRY", "5").strip() or "5")
+EVENT_INBOX_BATCH_SIZE = int(os.getenv("EVENT_INBOX_BATCH_SIZE", "10").strip() or "10")
 LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 WORKER_ENTRY_COMMAND = "/worker"
@@ -5333,6 +5339,7 @@ def internal_publish_sync():
 @app.route("/callback", methods=["POST"])
 def callback():
     start_async_log_worker()
+    start_event_inbox_worker()
     trace_id = make_trace_id()
     started = time.perf_counter()
     raw_body = request.get_data() or b""
@@ -5349,37 +5356,61 @@ def callback():
     if len(events) == 0:
         latency_ms = ms_since(started)
         logger.info(f"[{trace_id}] CALLBACK_VERIFY_EMPTY_EVENTS_OK latency_ms={latency_ms}")
-        return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": 0, "results": [], "reason": "empty_events_verify_ok"}), 200
+        return jsonify({
+            "ok": True,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": latency_ms,
+            "event_count": 0,
+            "results": [],
+            "reason": "empty_events_verify_ok"
+        }), 200
+
     results = []
-    for event in events:
-        set_current_tenant_id_from_event(event, trace_id)
-        event_key = get_event_unique_key(event)
-        set_current_event_ref(event_key)
-        try:
-            can_process, processing_reason, processing_event_key = begin_event_processing(event, trace_id)
-            if not can_process:
-                logger.info(f"[{trace_id}] CALLBACK_EVENT_DUPLICATE_SKIP event_ref={event_ref(processing_event_key)} reason={processing_reason}")
-                results.append({"handled": False, "reason": processing_reason, "event_key": processing_event_key})
-                continue
-            result = dispatch_line_event(event, trace_id)
-            event_success = bool(result.get("handled")) and bool(result.get("reply_sent", True))
-            finalize_event_processing(event, trace_id, success=event_success)
-            results.append(result)
-        except GSheetCircuitOpenError as e:
-            finalize_event_processing(event, trace_id, success=False)
-            logger.error(f"[{trace_id}] CALLBACK_EVENT_GSHEET_CIRCUIT_OPEN event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
-            results.append({"handled": False, "reason": "gsheet_circuit_open", "event_key": event_key})
-        except (gspread.WorksheetNotFound, gspread.exceptions.APIError, requests.RequestException, ValueError, KeyError, TypeError) as e:
-            finalize_event_processing(event, trace_id, success=False)
-            logger.exception(f"[{trace_id}] CALLBACK_EVENT_KNOWN_EXCEPTION event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
-            results.append({"handled": False, "reason": "known_exception", "event_key": event_key, "exception_type": type(e).__name__})
-        except Exception as e:
-            finalize_event_processing(event, trace_id, success=False)
-            logger.exception(f"[{trace_id}] CALLBACK_EVENT_UNKNOWN_EXCEPTION event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
-            results.append({"handled": False, "reason": "unknown_exception", "event_key": event_key})
+    try:
+        for event in events:
+            tenant_id = set_current_tenant_id_from_event(event, trace_id)
+            event_id = insert_event_inbox(event, trace_id, tenant_id)
+            set_current_event_ref(event_id)
+            results.append({
+                "accepted": True,
+                "event_ref": event_ref(event_id),
+                "status": "queued"
+            })
+    except sqlite3.Error as exc:
+        logger.exception(f"[{trace_id}] CALLBACK_EVENT_INBOX_SQLITE_FAILED exception={type(exc).__name__}:{exc}")
+        return jsonify({
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "error": "event_inbox_unavailable"
+        }), 500
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        logger.exception(f"[{trace_id}] CALLBACK_EVENT_INBOX_BAD_PAYLOAD exception={type(exc).__name__}:{exc}")
+        return jsonify({
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "error": "bad_payload"
+        }), 400
+
     latency_ms = ms_since(started)
-    logger.info(f"[{trace_id}] CALLBACK_DONE events={len(events)} latency_ms={latency_ms}")
-    return jsonify({"ok": True, "app_version": APP_VERSION, "trace_id": trace_id, "latency_ms": latency_ms, "event_count": len(events), "results": results}), 200
+    logger.info(f"[{trace_id}] CALLBACK_ACCEPTED events={len(events)} latency_ms={latency_ms}")
+    return jsonify({
+        "ok": True,
+        "app_version": APP_VERSION,
+        "trace_id": trace_id,
+        "latency_ms": latency_ms,
+        "event_count": len(events),
+        "results": results
+    }), 200
+
+try:
+    init_event_inbox_db()
+    start_event_inbox_worker()
+except Exception as exc:
+    logger.exception(f"APP_EVENT_INBOX_INIT_FAILED exception={type(exc).__name__}:{exc}")
+
 try:
     with app.app_context():
         warm_up_cache()
