@@ -5336,6 +5336,213 @@ def internal_publish_sync():
         "result": sync_result,
     }
     return jsonify(payload), status_code
+
+# --- SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
+_EVENT_INBOX_WORKER_STARTED = False
+_EVENT_INBOX_WORKER_LOCK = threading.Lock()
+
+def get_event_inbox_connection():
+    conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+    except sqlite3.Error:
+        pass
+    return conn
+
+def init_event_inbox_db() -> None:
+    conn = get_event_inbox_connection()
+    try:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS event_inbox (
+                event_id TEXT PRIMARY KEY,
+                trace_id TEXT NOT NULL,
+                tenant_id TEXT NOT NULL,
+                group_id TEXT,
+                user_id TEXT,
+                message_type TEXT,
+                raw_payload_json TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                processed_at TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_inbox_status_retry ON event_inbox(status, retry_count, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_event_inbox_tenant_created ON event_inbox(tenant_id, created_at)")
+        conn.commit()
+        logger.info("EVENT_INBOX_DB_READY")
+    finally:
+        conn.close()
+
+def get_event_group_id(event: dict) -> str:
+    source = (event or {}).get("source") or {}
+    return safe_str(source.get("groupId") or source.get("roomId"))
+
+def insert_event_inbox(event: dict, trace_id: str, tenant_id: str = "") -> str:
+    if not isinstance(event, dict):
+        raise ValueError("event_must_be_dict")
+    event_id = get_event_unique_key(event)
+    if not event_id:
+        event_id = f"{safe_str(tenant_id) or DEFAULT_TENANT_ID}:fallback:{stable_hash(json.dumps(event, ensure_ascii=False, sort_keys=True), 24)}"
+    row_tenant_id = safe_str(tenant_id) or resolve_tenant_id_from_event(event)
+    payload_json = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    now_iso = now_tw_iso()
+    conn = get_event_inbox_connection()
+    try:
+        cur = conn.execute("""
+            INSERT OR IGNORE INTO event_inbox (
+                event_id, trace_id, tenant_id, group_id, user_id, message_type,
+                raw_payload_json, status, retry_count, last_error,
+                created_at, updated_at, processed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', ?, ?, '')
+        """, (
+            event_id,
+            trace_id,
+            row_tenant_id,
+            get_event_group_id(event),
+            get_event_user_id(event),
+            get_message_type(event),
+            payload_json,
+            now_iso,
+            now_iso,
+        ))
+        conn.commit()
+        if cur.rowcount:
+            logger.info(f"[{trace_id}] EVENT_INBOX_INSERT_OK event_ref={event_ref(event_id)} tenant_hash={stable_hash(row_tenant_id)}")
+        else:
+            logger.info(f"[{trace_id}] EVENT_INBOX_DUPLICATE_IGNORED event_ref={event_ref(event_id)}")
+        return event_id
+    finally:
+        conn.close()
+
+def _claim_event_inbox_batch(trace_id: str) -> List[dict]:
+    now_iso = now_tw_iso()
+    conn = get_event_inbox_connection()
+    try:
+        rows = conn.execute("""
+            SELECT event_id, raw_payload_json, retry_count
+            FROM event_inbox
+            WHERE status IN ('pending', 'failed')
+              AND retry_count < ?
+            ORDER BY created_at ASC
+            LIMIT ?
+        """, (EVENT_INBOX_MAX_RETRY, EVENT_INBOX_BATCH_SIZE)).fetchall()
+        claimed = []
+        for row in rows:
+            cur = conn.execute("""
+                UPDATE event_inbox
+                SET status = 'processing',
+                    updated_at = ?,
+                    last_error = ''
+                WHERE event_id = ?
+                  AND status IN ('pending', 'failed')
+                  AND retry_count < ?
+            """, (now_iso, row["event_id"], EVENT_INBOX_MAX_RETRY))
+            if cur.rowcount:
+                claimed.append(dict(row))
+        conn.commit()
+        if claimed:
+            logger.info(f"[{trace_id}] EVENT_INBOX_CLAIMED count={len(claimed)}")
+        return claimed
+    finally:
+        conn.close()
+
+def _mark_event_inbox_done(event_id: str, trace_id: str) -> None:
+    now_iso = now_tw_iso()
+    conn = get_event_inbox_connection()
+    try:
+        conn.execute("""
+            UPDATE event_inbox
+            SET status = 'done',
+                updated_at = ?,
+                processed_at = ?,
+                last_error = ''
+            WHERE event_id = ?
+        """, (now_iso, now_iso, event_id))
+        conn.commit()
+        logger.info(f"[{trace_id}] EVENT_INBOX_MARK_DONE event_ref={event_ref(event_id)}")
+    finally:
+        conn.close()
+
+def _mark_event_inbox_failed(event_id: str, trace_id: str, exc: Exception) -> None:
+    now_iso = now_tw_iso()
+    err = f"{type(exc).__name__}:{safe_str(exc)[:500]}"
+    conn = get_event_inbox_connection()
+    try:
+        conn.execute("""
+            UPDATE event_inbox
+            SET status = CASE WHEN retry_count + 1 >= ? THEN 'dead' ELSE 'failed' END,
+                retry_count = retry_count + 1,
+                updated_at = ?,
+                last_error = ?
+            WHERE event_id = ?
+        """, (EVENT_INBOX_MAX_RETRY, now_iso, err, event_id))
+        conn.commit()
+        logger.exception(f"[{trace_id}] EVENT_INBOX_MARK_FAILED event_ref={event_ref(event_id)} error={err}")
+    finally:
+        conn.close()
+
+def process_event_inbox_item(row: dict, worker_trace_id: str) -> None:
+    event_id = safe_str(row.get("event_id"))
+    trace_id = f"{worker_trace_id}_{event_ref(event_id)}"
+    logger.info(f"[{trace_id}] EVENT_INBOX_WORKER_PROCESS_START event_ref={event_ref(event_id)}")
+    try:
+        event = json.loads(row.get("raw_payload_json") or "{}")
+        if not isinstance(event, dict):
+            raise ValueError("event_payload_not_dict")
+        with app.app_context():
+            tenant_id = set_current_tenant_id_from_event(event, trace_id)
+            set_current_event_ref(event_id)
+            should_process, reason, event_key = begin_event_processing(event, trace_id)
+            if not should_process:
+                logger.info(f"[{trace_id}] EVENT_INBOX_SKIPPED reason={reason} event_ref={event_ref(event_id)}")
+                _mark_event_inbox_done(event_id, trace_id)
+                return
+            success = False
+            try:
+                dispatch_line_event(event, trace_id)
+                success = True
+            finally:
+                finalize_event_processing(event, trace_id, success)
+        _mark_event_inbox_done(event_id, trace_id)
+    except Exception as exc:
+        _mark_event_inbox_failed(event_id, trace_id, exc)
+
+def _event_inbox_worker_loop() -> None:
+    logger.info("EVENT_INBOX_WORKER_STARTED")
+    while True:
+        worker_trace_id = make_trace_id()
+        try:
+            batch = _claim_event_inbox_batch(worker_trace_id)
+            if not batch:
+                time.sleep(EVENT_INBOX_WORKER_POLL_SECONDS)
+                continue
+            for row in batch:
+                process_event_inbox_item(row, worker_trace_id)
+        except Exception as exc:
+            logger.exception(f"[{worker_trace_id}] EVENT_INBOX_WORKER_LOOP_FAILED exception={type(exc).__name__}:{exc}")
+            time.sleep(max(EVENT_INBOX_WORKER_POLL_SECONDS, 1.0))
+
+def start_event_inbox_worker() -> None:
+    global _EVENT_INBOX_WORKER_STARTED
+    if not EVENT_INBOX_WORKER_ENABLED:
+        logger.info("EVENT_INBOX_WORKER_DISABLED")
+        return
+    with _EVENT_INBOX_WORKER_LOCK:
+        if _EVENT_INBOX_WORKER_STARTED:
+            return
+        init_event_inbox_db()
+        worker = threading.Thread(target=_event_inbox_worker_loop, name="dt79-event-inbox-worker", daemon=True)
+        worker.start()
+        _EVENT_INBOX_WORKER_STARTED = True
+# --- END SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
+
 @app.route("/callback", methods=["POST"])
 def callback():
     start_async_log_worker()
