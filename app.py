@@ -97,6 +97,21 @@ def user_ref(user_id: str) -> str:
 def event_ref(event_key: str) -> str:
     return stable_hash(event_key)
 
+def set_current_event_ref(event_key: str) -> None:
+    try:
+        g.dt79_event_ref = event_ref(event_key)
+    except Exception:
+        pass
+
+def get_current_event_ref() -> str:
+    try:
+        current = safe_str(getattr(g, "dt79_event_ref", ""))
+        if current:
+            return current
+    except Exception:
+        pass
+    return ""
+
 def message_fingerprint(text: str) -> str:
     cleaned = sanitize_incoming_text(text)
     return f"len={len(cleaned)} sha={stable_hash(cleaned)}"
@@ -154,7 +169,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -221,7 +236,8 @@ PROVIDER_MASTER_SHEET_NAME = "PROVIDER_MASTER"
 LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER"
 SERVICE_VARIANT_MASTER_SHEET_NAME = "SERVICE_VARIANT_MASTER"
 ROUTING_LOG_SHEET_NAME = "ROUTING_LOG"
-ROUTING_LOG_HEADERS = ["timestamp", "tenant_id", "user_ref", "intent", "service_id", "location", "message_fingerprint"]
+ROUTING_LOG_HEADERS = ["timestamp", "tenant_id", "user_ref", "event_ref", "intent", "service_id", "location", "message_fp", "message_len"]
+ROUTING_LOG_LEGACY_PREFIX = "ROUTING_LOG_LEGACY_RAW"
 ROUTING_MISS_HARVEST_SHEET_NAME = "ROUTING_MISS_HARVEST"
 ROUTING_MISS_HARVEST_HEADERS = ["timestamp", "trace_id", "tenant_id", "user_ref", "raw_text_fingerprint", "normalized_text_fingerprint", "intent_guess", "location_token_guess", "candidate_aliases", "miss_type", "recommended_fix", "status", "reviewer_notes"]
 ROUTING_SLOWPATH_QUEUE_SHEET_NAME = "ROUTING_SLOWPATH_QUEUE"
@@ -2001,16 +2017,20 @@ def ensure_routing_log_worksheet(trace_id: str):
     spreadsheet = open_routing_spreadsheet(trace_id)
     if not spreadsheet:
         return None
+
+    def _create_clean_routing_log():
+        ws_new = spreadsheet.add_worksheet(title=ROUTING_LOG_SHEET_NAME, rows=5000, cols=len(ROUTING_LOG_HEADERS))
+        append_row_guarded(ws_new, trace_id, ROUTING_LOG_SHEET_NAME, ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
+        _ROUTING_LOG_WORKSHEET_READY_CACHE["verified"] = True
+        _ROUTING_LOG_WORKSHEET_READY_CACHE["loaded_at_ts"] = _now_ts()
+        logger.info(f"[{trace_id}] ROUTING_LOG_PRIVACY_SHEET_CREATED worksheet_name={ROUTING_LOG_SHEET_NAME}")
+        return ws_new
+
     try:
         ws = spreadsheet.worksheet(ROUTING_LOG_SHEET_NAME)
     except gspread.WorksheetNotFound:
         try:
-            ws = spreadsheet.add_worksheet(title=ROUTING_LOG_SHEET_NAME, rows=5000, cols=6)
-            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
-            _ROUTING_LOG_WORKSHEET_READY_CACHE["verified"] = True
-            _ROUTING_LOG_WORKSHEET_READY_CACHE["loaded_at_ts"] = _now_ts()
-            logger.info(f"[{trace_id}] ROUTING_LOG_SHEET_CREATED worksheet_name={ROUTING_LOG_SHEET_NAME}")
-            return ws
+            return _create_clean_routing_log()
         except Exception as e:
             logger.exception(f"[{trace_id}] ROUTING_LOG_SHEET_CREATE_FAILED exception={type(e).__name__}:{e}")
             return None
@@ -2025,12 +2045,25 @@ def ensure_routing_log_worksheet(trace_id: str):
         return ws
 
     values = get_all_values_safe(ws, trace_id, ROUTING_LOG_SHEET_NAME)
+    current_headers = [safe_str(x) for x in (values[0] if values else [])]
     if not values:
         try:
-            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
-            logger.info(f"[{trace_id}] ROUTING_LOG_HEADERS_INIT_OK")
+            append_row_guarded(ws, trace_id, ROUTING_LOG_SHEET_NAME, ROUTING_LOG_HEADERS, value_input_option="USER_ENTERED")
+            logger.info(f"[{trace_id}] ROUTING_LOG_HEADERS_INIT_OK schema=privacy_v1")
         except Exception as e:
             logger.exception(f"[{trace_id}] ROUTING_LOG_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
+            return None
+    elif current_headers != ROUTING_LOG_HEADERS:
+        legacy_title = f"{ROUTING_LOG_LEGACY_PREFIX}_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}"
+        try:
+            ws.update_title(legacy_title)
+            logger.warning(
+                f"[{trace_id}] ROUTING_LOG_LEGACY_RAW_ARCHIVED "
+                f"legacy_sheet={legacy_title} reason=unsafe_header_detected"
+            )
+            ws = _create_clean_routing_log()
+        except Exception as e:
+            logger.exception(f"[{trace_id}] ROUTING_LOG_LEGACY_ARCHIVE_FAILED exception={type(e).__name__}:{e}")
             return None
 
     _ROUTING_LOG_WORKSHEET_READY_CACHE["verified"] = True
@@ -2043,14 +2076,17 @@ def _append_routing_log_event_sync(user_id: str, intent_name: str, service_row: 
         logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=worksheet_unavailable")
         return False
     resolved_location = safe_str(location_hint) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
+    cleaned_message = sanitize_incoming_text(message)
     row = [
         now_tw_iso(),
         get_current_tenant_id(),
         user_ref(user_id),
+        get_current_event_ref(),
         safe_str(intent_name),
         safe_str(service_row.get("service_id")),
         resolved_location,
-        message_fingerprint(message),
+        message_fingerprint(cleaned_message),
+        str(len(cleaned_message)),
     ]
     try:
         append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
@@ -5311,6 +5347,7 @@ def callback():
     for event in events:
         set_current_tenant_id_from_event(event, trace_id)
         event_key = get_event_unique_key(event)
+        set_current_event_ref(event_key)
         try:
             can_process, processing_reason, processing_event_key = begin_event_processing(event, trace_id)
             if not can_process:
