@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__LOCATION_CANDIDATE_DECISION_FIX_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -256,6 +256,8 @@ EVENT_INBOX_WORKER_POLL_SECONDS = float(os.getenv("EVENT_INBOX_WORKER_POLL_SECON
 EVENT_INBOX_MAX_RETRY = int(os.getenv("EVENT_INBOX_MAX_RETRY", "5").strip() or "5")
 EVENT_INBOX_BATCH_SIZE = int(os.getenv("EVENT_INBOX_BATCH_SIZE", "10").strip() or "10")
 LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
+LINE_OA_ID = os.getenv("LINE_OA_ID", "@688xvjuc").strip() or "@688xvjuc"
+LINE_OA_DEEP_LINK = os.getenv("LINE_OA_DEEP_LINK", f"https://line.me/R/ti/p/{LINE_OA_ID}").strip() or f"https://line.me/R/ti/p/{LINE_OA_ID}"
 GOOGLE_TRANSLATE_API_URL = "https://translation.googleapis.com/language/translate/v2"
 WORKER_ENTRY_COMMAND = "/worker"
 ADS_ENTRY_COMMAND = "/ads"
@@ -1268,13 +1270,6 @@ def collect_routing_location_candidates(text: str, alias_rows: List[dict], match
     return results
 
 def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[dict], region_rows: List[dict]) -> dict:
-    """Select the best routing location candidate.
-
-    DT79 LOCATION_CANDIDATE_DECISION_FIX_V1:
-    - Exact/hash alias matches must not be dropped only because score/gap is low.
-    - If alias target_key is already a service region/root key (for example "台中"),
-      use it as service_region_key when canonical/region sheets do not provide one.
-    """
     if not candidates:
         return {
             "decision": "no_candidate",
@@ -1282,7 +1277,6 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
             "selected_candidate": None,
             "top_score": 0,
             "second_score": 0,
-            "candidates": [],
         }
 
     canonical_index = build_canonical_location_index(canonical_rows or [])
@@ -1291,25 +1285,15 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
     enriched = []
     for candidate in candidates:
         current = dict(candidate)
-        target_key = safe_str(current.get("target_key"))
-        target_type = safe_str(current.get("target_type"))
-
-        if target_type == "root_location":
+        if safe_str(current.get("target_type")) == "root_location":
             current["location_id"] = ""
-            current["service_region_key"] = target_key
+            current["service_region_key"] = safe_str(current.get("target_key"))
         else:
-            location_id = target_key
+            location_id = safe_str(current.get("target_key"))
             canonical_row = canonical_index.get(location_id) or {}
             region_row = region_index.get(location_id) or {}
-            service_region_key = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
-
-            # Guard: some alias rows store the actual service/root region directly in target_key
-            # while target_type is not root_location. Do not drop a confirmed alias match.
-            if not service_region_key and target_key:
-                service_region_key = target_key
-
-            current["location_id"] = location_id if (canonical_row or region_row) else ""
-            current["service_region_key"] = service_region_key
+            current["location_id"] = location_id
+            current["service_region_key"] = safe_str(region_row.get("service_region_key")) or safe_str(canonical_row.get("service_region_key"))
         enriched.append(current)
 
     enriched = [c for c in enriched if safe_str(c.get("service_region_key"))]
@@ -1320,33 +1304,15 @@ def choose_best_location_candidate(candidates: List[dict], canonical_rows: List[
             "selected_candidate": None,
             "top_score": 0,
             "second_score": 0,
-            "candidates": [],
         }
-
-    enriched.sort(
-        key=lambda item: (
-            0 if safe_str(item.get("match_mode")) == "hash_exact" else 1,
-            -int(item.get("score", 0) or 0),
-            -len(safe_str(item.get("matched_alias"))),
-            safe_str(item.get("target_key")),
-        )
-    )
 
     top = enriched[0]
     second = enriched[1] if len(enriched) > 1 else {}
     top_score = int(top.get("score", 0) or 0)
     second_score = int(second.get("score", 0) or 0) if isinstance(second, dict) else 0
     gap = top_score - second_score
-    match_mode = safe_str(top.get("match_mode"))
-    matched_alias = safe_str(top.get("matched_alias"))
 
-    if match_mode == "hash_exact" and matched_alias:
-        decision = "route"
-        confidence = "high" if top_score >= 75 else "medium"
-    elif matched_alias and safe_str(top.get("service_region_key")):
-        decision = "route"
-        confidence = "medium" if top_score >= 60 else "low"
-    elif top_score >= 85 and gap >= 10:
+    if top_score >= 85 and gap >= 10:
         decision = "route"
         confidence = "high"
     elif 75 <= top_score <= 84 and gap >= 15:
@@ -2226,9 +2192,19 @@ def log_routing_reply_result(
     )
 
 
-def build_routing_reply(service_row: dict, language_group: str, resolved_region_key: str = "") -> str:
+def build_routing_reply(
+    service_row: dict,
+    language_group: str,
+    resolved_region_key: str = "",
+    source_type: str = "user",
+) -> str:
+    """Build reply for routing results.
+    GROUP/ROOM: hide seller contact to prevent lead hijacking.
+    PRIVATE: expose seller contact after the user is in 1:1 chat.
+    """
     contact_id = safe_str(service_row.get("contact_id"))
     contact_link = safe_str(service_row.get("contact_link"))
+    service_id = safe_str(service_row.get("service_id"))
     location = safe_str(resolved_region_key) or safe_str(service_row.get("service_region_key")) or safe_str(service_row.get("location"))
     scope = safe_str(service_row.get("service_scope"))
     service_name = safe_str(service_row.get("service_name"))
@@ -2238,10 +2214,25 @@ def build_routing_reply(service_row: dict, language_group: str, resolved_region_
     normalized_scope = normalize_routing_text(scope)
     normalized_service_name = normalize_routing_text(service_name)
 
-    if "phong" in normalized_scope or "phong" in normalized_service_name:
+    is_room_service = "phong" in normalized_scope or "phong" in normalized_service_name
+    if is_room_service:
         title = f"Tìm phòng trọ tại {location_vi}"
     else:
         title = scope or service_name
+
+    is_group_context = safe_str(source_type).lower() in {"group", "room"}
+    if is_group_context:
+        lines = []
+        if title:
+            lines.append(f"✅ Đã ghi nhận nhu cầu: {title}")
+        if location_vi:
+            lines.append(f"Khu vực: {location_vi}")
+        if service_id:
+            lines.append(f"Mã yêu cầu: {service_id}")
+        lines.append("")
+        lines.append("🔒 Thông tin liên hệ được ẩn trong nhóm để tránh người khác cướp khách.")
+        lines.append(f"👉 Nhắn riêng bot để xử lý tiếp: {LINE_OA_DEEP_LINK}")
+        return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
     lines = []
     if title:
@@ -2377,7 +2368,7 @@ def try_build_sim_fastpath_reply(
 
     service_id = safe_str(service.get("service_id"))
     service_region_key = safe_str(service.get("service_region_key")) or safe_str(service.get("location")) or safe_str(fallback_location) or ROUTING_FALLBACK_LOCATION
-    final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key)
+    final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key, source_type=source_type)
     network, duration, variant_type = parse_sim_entities(text)
 
     if service_id == "SIM_TW_001" and network and duration:
@@ -2506,7 +2497,7 @@ def build_routing_smart_fallback_reply(intent_name: str, language_group: str, re
         return "Tôi thấy bạn đang hỏi chưa đủ rõ hoặc nhiều nhu cầu cùng lúc. Bạn gửi từng nhu cầu riêng giúp tôi: phòng hoặc SIM trước."[:LINE_TEXT_HARD_LIMIT]
     return "Tôi đã nhận yêu cầu, nhưng chưa đủ dữ liệu để xử lý chính xác. Bạn gửi lại rõ hơn giúp tôi."[:LINE_TEXT_HARD_LIMIT]
 
-def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_id: str = "") -> Optional[dict]:
+def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_id: str = "", source_type: str = "user") -> Optional[dict]:
     config_map = load_bot_config_map(trace_id)
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
     service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
@@ -2824,7 +2815,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     )
 
     service_id = safe_str(service.get("service_id"))
-    final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key)
+    final_reply_text = build_routing_reply(service, language_group, resolved_region_key=service_region_key, source_type=source_type)
 
     variant_rows = []
     if service_id == "SIM_TW_001":
@@ -3680,6 +3671,14 @@ def parse_line_webhook_payload(raw_body: bytes, trace_id: str) -> dict:
 def get_event_user_id(event: dict) -> str:
     source = event.get("source") or {}
     return safe_str(source.get("userId"))
+
+def get_event_source_type(event: dict) -> str:
+    source = (event or {}).get("source") or {}
+    return safe_str(source.get("type")).lower()
+
+def is_group_or_room_event(event: dict) -> bool:
+    return get_event_source_type(event) in {"group", "room"}
+
 def get_event_type(event: dict) -> str:
     return safe_str(event.get("type")).lower()
 def get_message_type(event: dict) -> str:
@@ -4347,6 +4346,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     reply_token = get_reply_token(event)
     text = get_message_text(event)
     normalized = normalize_command_text(text)
+    source_type = get_event_source_type(event)
     if not check_user_rate_limit(user_id, trace_id):
         reply_sent = reply_line_text(reply_token, USER_RATE_LIMIT_REPLY_TEXT, trace_id, "vi") if reply_token else False
         return {
@@ -4449,7 +4449,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         else:
             if is_cjk_text(text):
                 logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=ads_auto_cleared_routing text_fp={message_fingerprint(text)}")
-            routing_result = try_build_routing_reply(text, current_language, trace_id, user_id)
+            routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
             if routing_result:
                 reply_text = routing_result["reply_text"]
                 flow_used = "ads_auto_cleared_routed"
@@ -4464,7 +4464,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         else:
             if is_cjk_text(text):
                 logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=routing text_fp={message_fingerprint(text)}")
-            routing_result = try_build_routing_reply(text, current_language, trace_id, user_id)
+            routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
             if routing_result:
                 reply_text = routing_result["reply_text"]
                 flow_used = "routing"
@@ -4473,6 +4473,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 flow_used = "default"
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
     if routing_result and routing_result.get("service_row"):
+        if source_type in {"group", "room"}:
+            logger.info(f"[{trace_id}] GROUP_LEAD_LOCK_APPLIED service_id={safe_str((routing_result.get("service_row") or {}).get("service_id"))} contact_hidden=True")
+        else:
+            logger.info(f"[{trace_id}] PRIVATE_SERVICE_DETAIL_ALLOWED service_id={safe_str((routing_result.get("service_row") or {}).get("service_id"))}")
         log_routing_reply_result(
             trace_id=trace_id,
             user_id=user_id,
