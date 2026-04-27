@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -1591,6 +1591,8 @@ def warm_up_cache(trace_id: str = "") -> bool:
         region_rows = load_location_master_records(trace_id, region_map_sheet_name, "region_map") if region_map_sheet_name else []
         get_location_alias_lookup(alias_rows, trace_id)
         variant_rows = load_sim_variant_rows_fastpath(trace_id, variant_sheet_name)
+        if MT_TRANSLATION_ENABLED:
+            get_tenant_config(force_reload=True, trace_id=trace_id)
         logger.info(
             f"[{trace_id}] WARM_UP_CACHE_OK alias_sheet={alias_sheet_name} "
             f"intent_rows={len(intent_rows)} service_rows={len(service_rows)} "
@@ -4480,6 +4482,621 @@ TRANSLATION_USAGE_TEXT = (
     "/vi 需要翻譯的內容"
 )
 
+
+# --- MULTI_TENANT_TRANSLATION_CORE_V1 ---
+# EN-VI:
+# Multi-tenant = đa khách thuê / đa tenant
+# Cache = bộ nhớ đệm
+# Glossary = bảng thuật ngữ khóa
+# Quota Guard = chặn giới hạn lượt dịch
+# Async Logger = ghi log bất đồng bộ
+
+MT_TRANSLATION_ENABLED = os.getenv("MT_TRANSLATION_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+MT_TRANSLATION_SPREADSHEET_SCOPE = os.getenv("MT_TRANSLATION_SPREADSHEET_SCOPE", "routing").strip().lower() or "routing"
+MT_TENANT_SOURCE_MAP_SHEET_NAME = os.getenv("MT_TENANT_SOURCE_MAP_SHEET_NAME", "TENANT_SOURCE_MAP").strip() or "TENANT_SOURCE_MAP"
+MT_TENANT_CONFIG_SHEET_NAME = os.getenv("MT_TENANT_CONFIG_SHEET_NAME", "TENANT_CONFIG").strip() or "TENANT_CONFIG"
+MT_TENANT_GLOSSARY_SHEET_NAME = os.getenv("MT_TENANT_GLOSSARY_SHEET_NAME", "TENANT_GLOSSARY").strip() or "TENANT_GLOSSARY"
+MT_TRANSLATION_LOG_SHEET_NAME = os.getenv("MT_TRANSLATION_LOG_SHEET_NAME", "TRANSLATION_LOG").strip() or "TRANSLATION_LOG"
+MT_TENANT_CONFIG_CACHE_TTL_SECONDS = int(os.getenv("MT_TENANT_CONFIG_CACHE_TTL_SECONDS", "900").strip() or "900")
+MT_TENANT_NOT_FOUND_MODE = os.getenv("MT_TENANT_NOT_FOUND_MODE", "pass_through").strip().lower() or "pass_through"
+MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED = os.getenv("MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+MT_UNKNOWN_SOURCE_TRANSLATION_MODE = os.getenv("MT_UNKNOWN_SOURCE_TRANSLATION_MODE", "silent").strip().lower() or "silent"
+MT_UNKNOWN_SOURCE_TRANSLATION_REPLY_TEXT = os.getenv(
+    "MT_UNKNOWN_SOURCE_TRANSLATION_REPLY_TEXT",
+    "Nguồn này chưa được kích hoạt gói phiên dịch. Vui lòng liên hệ quản trị viên."
+).strip()
+MT_DIRECTION_AMBIGUOUS_MODE = os.getenv("MT_DIRECTION_AMBIGUOUS_MODE", "reply").strip().lower() or "reply"
+MT_DIRECTION_AMBIGUOUS_REPLY_TEXT = os.getenv(
+    "MT_DIRECTION_AMBIGUOUS_REPLY_TEXT",
+    "Không xác định được chiều dịch. Vui lòng gửi văn bản rõ hơn hoặc dùng /zh, /vi."
+).strip()
+MT_TENANT_SUSPENDED_REPLY_TEXT = os.getenv(
+    "MT_TENANT_SUSPENDED_REPLY_TEXT",
+    "Hệ thống phiên dịch hiện tạm dừng. Vui lòng liên hệ quản trị viên."
+).strip()
+MT_TENANT_QUOTA_EMPTY_REPLY_TEXT = os.getenv(
+    "MT_TENANT_QUOTA_EMPTY_REPLY_TEXT",
+    "Gói phiên dịch đã hết lượt. Vui lòng liên hệ quản trị viên để nạp thêm."
+).strip()
+MT_TRANSLATION_QUOTA_WRITEBACK_ENABLED = os.getenv("MT_TRANSLATION_QUOTA_WRITEBACK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+MT_TRANSLATION_HEADERS = {
+    "TENANT_SOURCE_MAP": ["source_id", "source_type", "tenant_id", "status", "note"],
+    "TENANT_CONFIG": ["tenant_id", "tenant_name", "status", "remaining_quota", "quota_unit", "reply_mode", "glossary_enabled", "log_enabled", "target_default", "translation_core_enabled", "note"],
+    "TENANT_GLOSSARY": ["tenant_id", "source_term", "target_term", "match_mode", "case_sensitive", "status", "note"],
+    "TRANSLATION_LOG": ["timestamp", "trace_id", "tenant_id", "source_ref", "source_type", "user_ref", "target_lang", "direction", "direction_confidence", "direction_reason", "raw_text_fp", "glossary_text_fp", "translated_len", "quota_before", "quota_after", "status", "error"],
+}
+
+CACHE_CONFIG: Dict[str, object] = {
+    "loaded": False,
+    "loaded_at_ts": 0.0,
+    "loaded_at_iso": "",
+    "source_to_tenant": {},
+    "source_meta": {},
+    "tenants": {},
+    "glossary": {},
+}
+_CACHE_CONFIG_LOCK = threading.Lock()
+
+
+def mt_safe_bool(value, default: bool = False) -> bool:
+    raw = safe_str(value).lower()
+    if raw in {"1", "true", "yes", "y", "on", "active", "enabled"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off", "inactive", "disabled"}:
+        return False
+    return default
+
+
+def mt_safe_int(value, default: int = 0) -> int:
+    try:
+        raw = safe_str(value)
+        if not raw:
+            return default
+        return int(float(raw))
+    except Exception:
+        return default
+
+
+def mt_status(value: str) -> str:
+    return safe_str(value).upper()
+
+
+def get_mt_translation_worksheet(trace_id: str, worksheet_name: str):
+    if MT_TRANSLATION_SPREADSHEET_SCOPE == "phase1":
+        return get_worksheet_by_name(trace_id, worksheet_name)
+    return get_routing_worksheet_by_name(trace_id, worksheet_name)
+
+
+def get_source_id_from_event(event: dict) -> Tuple[str, str]:
+    source = (event or {}).get("source") or {}
+    source_type = safe_str(source.get("type")).lower()
+    if source_type == "user":
+        return safe_str(source.get("userId")), "user"
+    if source_type == "group":
+        return safe_str(source.get("groupId")), "group"
+    if source_type == "room":
+        return safe_str(source.get("roomId")), "room"
+    return "", source_type or "unknown"
+
+
+def get_tenant_config(force_reload: bool = False, trace_id: str = "") -> Dict[str, object]:
+    """
+    Fetch dữ liệu tenant từ Google Sheets vào CACHE_CONFIG.
+    Không đọc Google Sheets trong từng message nếu cache còn hạn.
+    """
+    global CACHE_CONFIG
+    trace_id = safe_str(trace_id) or make_trace_id()
+    now_ts = _now_ts()
+    with _CACHE_CONFIG_LOCK:
+        if (
+            not force_reload
+            and CACHE_CONFIG.get("loaded")
+            and _cache_is_fresh(float(CACHE_CONFIG.get("loaded_at_ts", 0.0) or 0.0), MT_TENANT_CONFIG_CACHE_TTL_SECONDS)
+        ):
+            logger.info(f"[{trace_id}] MT_TENANT_CONFIG_CACHE_HIT tenants={len(CACHE_CONFIG.get('tenants') or {})}")
+            return CACHE_CONFIG
+
+    source_ws = get_mt_translation_worksheet(trace_id, MT_TENANT_SOURCE_MAP_SHEET_NAME)
+    tenant_ws = get_mt_translation_worksheet(trace_id, MT_TENANT_CONFIG_SHEET_NAME)
+    glossary_ws = get_mt_translation_worksheet(trace_id, MT_TENANT_GLOSSARY_SHEET_NAME)
+    if not source_ws or not tenant_ws or not glossary_ws:
+        logger.error(
+            f"[{trace_id}] MT_TENANT_CONFIG_SHEET_UNAVAILABLE "
+            f"source_sheet={bool(source_ws)} tenant_sheet={bool(tenant_ws)} glossary_sheet={bool(glossary_ws)}"
+        )
+        return CACHE_CONFIG
+
+    source_rows = get_records_safe(source_ws, trace_id, MT_TENANT_SOURCE_MAP_SHEET_NAME)
+    tenant_rows = get_records_safe(tenant_ws, trace_id, MT_TENANT_CONFIG_SHEET_NAME)
+    glossary_rows = get_records_safe(glossary_ws, trace_id, MT_TENANT_GLOSSARY_SHEET_NAME)
+
+    tenants: Dict[str, dict] = {}
+    source_to_tenant: Dict[str, str] = {}
+    source_meta: Dict[str, dict] = {}
+    glossary: Dict[str, list] = {}
+
+    for idx, row in enumerate(tenant_rows, start=2):
+        tenant_id = safe_str(row.get("tenant_id"))
+        if not tenant_id:
+            continue
+        tenants[tenant_id] = {
+            "tenant_id": tenant_id,
+            "tenant_name": safe_str(row.get("tenant_name")),
+            "status": mt_status(row.get("status")),
+            "remaining_quota": mt_safe_int(row.get("remaining_quota"), 0),
+            "quota_unit": safe_str(row.get("quota_unit")) or "message",
+            "reply_mode": safe_str(row.get("reply_mode")).lower() or "reply",
+            "glossary_enabled": mt_safe_bool(row.get("glossary_enabled"), True),
+            "log_enabled": mt_safe_bool(row.get("log_enabled"), True),
+            "target_default": safe_str(row.get("target_default")) or "auto",
+            "translation_core_enabled": mt_safe_bool(row.get("translation_core_enabled"), True),
+            "__row_index": idx,
+        }
+
+    for row in source_rows:
+        source_id = safe_str(row.get("source_id"))
+        source_type = safe_str(row.get("source_type")).lower()
+        tenant_id = safe_str(row.get("tenant_id"))
+        status = mt_status(row.get("status"))
+        if not source_id or not tenant_id:
+            continue
+        if status != "ACTIVE":
+            continue
+        if tenant_id not in tenants:
+            logger.warning(f"[{trace_id}] MT_SOURCE_MAP_SKIPPED_UNKNOWN_TENANT source_ref={stable_hash(source_id)} tenant_id={tenant_id}")
+            continue
+        source_to_tenant[source_id] = tenant_id
+        source_meta[source_id] = {
+            "source_id": source_id,
+            "source_type": source_type,
+            "tenant_id": tenant_id,
+            "status": status,
+            "note": safe_str(row.get("note")),
+        }
+
+    for row in glossary_rows:
+        tenant_id = safe_str(row.get("tenant_id"))
+        source_term = safe_str(row.get("source_term"))
+        target_term = safe_str(row.get("target_term"))
+        status = mt_status(row.get("status"))
+        if not tenant_id or not source_term or not target_term or status != "ACTIVE":
+            continue
+        if tenant_id not in tenants:
+            continue
+        glossary.setdefault(tenant_id, []).append({
+            "tenant_id": tenant_id,
+            "source_term": source_term,
+            "target_term": target_term,
+            "match_mode": safe_str(row.get("match_mode")).lower() or "contains",
+            "case_sensitive": mt_safe_bool(row.get("case_sensitive"), False),
+            "status": status,
+            "note": safe_str(row.get("note")),
+        })
+
+    for rules in glossary.values():
+        rules.sort(key=lambda item: len(safe_str(item.get("source_term"))), reverse=True)
+
+    new_cache = {
+        "loaded": True,
+        "loaded_at_ts": now_ts,
+        "loaded_at_iso": now_tw_iso(),
+        "source_to_tenant": source_to_tenant,
+        "source_meta": source_meta,
+        "tenants": tenants,
+        "glossary": glossary,
+    }
+    with _CACHE_CONFIG_LOCK:
+        CACHE_CONFIG = new_cache
+    logger.info(
+        f"[{trace_id}] MT_TENANT_CONFIG_CACHE_READY "
+        f"tenants={len(tenants)} sources={len(source_to_tenant)} glossary_tenants={len(glossary)}"
+    )
+    return CACHE_CONFIG
+
+
+def apply_glossary(text: str, tenant_id: str) -> str:
+    """
+    Zero Guessing: chỉ thay thuật ngữ có trong TENANT_GLOSSARY đúng tenant_id.
+    Không fuzzy match, không tự suy diễn biến thể.
+    """
+    output = sanitize_incoming_text(text)
+    tenant_id = safe_str(tenant_id)
+    if not output or not tenant_id:
+        return output
+    cache = get_tenant_config()
+    tenant = (cache.get("tenants") or {}).get(tenant_id) or {}
+    if not tenant or not bool(tenant.get("glossary_enabled", True)):
+        return output
+    rules = (cache.get("glossary") or {}).get(tenant_id) or []
+    for rule in rules:
+        source_term = safe_str(rule.get("source_term"))
+        target_term = safe_str(rule.get("target_term"))
+        match_mode = safe_str(rule.get("match_mode")).lower() or "contains"
+        case_sensitive = bool(rule.get("case_sensitive"))
+        if not source_term or not target_term:
+            continue
+        if match_mode == "exact":
+            if case_sensitive and output == source_term:
+                output = target_term
+            elif not case_sensitive and output.lower() == source_term.lower():
+                output = target_term
+        elif match_mode == "contains":
+            if case_sensitive:
+                output = output.replace(source_term, target_term)
+            else:
+                output = re.sub(re.escape(source_term), target_term, output, flags=re.IGNORECASE)
+        else:
+            logger.warning(f"MT_GLOSSARY_RULE_SKIPPED_UNSUPPORTED_MODE tenant_id={tenant_id} mode={match_mode}")
+    return output
+
+
+def extract_mt_language_features(text: str) -> dict:
+    """
+    EN-VI: Language features = đặc trưng nhận diện ngôn ngữ.
+    Không dựa vào emoji/ký tự đặc biệt. Chỉ đếm chữ Hán CJK và chữ Latin có nghĩa.
+    """
+    raw = sanitize_incoming_text(text)
+    cjk_count = 0
+    latin_count = 0
+    vietnamese_mark_count = 0
+    digit_count = 0
+    other_symbol_count = 0
+
+    vietnamese_chars = set("ăâđêôơưáàảãạắằẳẵặấầẩẫậéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵĂÂĐÊÔƠƯÁÀẢÃẠẮẰẲẴẶẤẦẨẪẬÉÈẺẼẸẾỀỂỄỆÍÌỈĨỊÓÒỎÕỌỐỒỔỖỘỚỜỞỠỢÚÙỦŨỤỨỪỬỮỰÝỲỶỸỴ")
+
+    for ch in raw:
+        if "\u4e00" <= ch <= "\u9fff":
+            cjk_count += 1
+        elif ch.isalpha() and ("A" <= ch <= "Z" or "a" <= ch <= "z" or ch in vietnamese_chars):
+            latin_count += 1
+            if ch in vietnamese_chars:
+                vietnamese_mark_count += 1
+        elif ch.isdigit():
+            digit_count += 1
+        elif not ch.isspace():
+            other_symbol_count += 1
+
+    meaningful_count = cjk_count + latin_count
+    total_visible = meaningful_count + digit_count + other_symbol_count
+
+    return {
+        "cjk_count": cjk_count,
+        "latin_count": latin_count,
+        "vietnamese_mark_count": vietnamese_mark_count,
+        "digit_count": digit_count,
+        "other_symbol_count": other_symbol_count,
+        "meaningful_count": meaningful_count,
+        "total_visible": total_visible,
+        "cjk_ratio": round(cjk_count / meaningful_count, 4) if meaningful_count else 0.0,
+        "latin_ratio": round(latin_count / meaningful_count, 4) if meaningful_count else 0.0,
+    }
+
+
+def resolve_mt_target_language_with_meta(text: str, tenant: dict, trace_id: str = "") -> dict:
+    """
+    Direction Guard V1:
+    - Có cấu hình tenant target_default khác auto thì dùng cấu hình.
+    - Auto chỉ dựa trên chữ có nghĩa, bỏ emoji/ký tự đặc biệt.
+    - Ambiguous = mơ hồ thì không trừ quota; trả hướng dẫn hoặc im lặng theo env.
+    """
+    configured = safe_str((tenant or {}).get("target_default"))
+    features = extract_mt_language_features(text)
+
+    if configured and configured.lower() != "auto":
+        target = TRANSLATION_TARGET_LANG_MAP.get(configured.lower(), configured)
+        result = {
+            "target_lang": target,
+            "direction": f"configured->{target}",
+            "confidence": "configured",
+            "reason": "tenant_target_default",
+            "features": features,
+        }
+        logger.info(f"[{trace_id}] MT_DIRECTION_DECISION target_lang={target} confidence=configured reason=tenant_target_default features={json.dumps(features, ensure_ascii=False)}")
+        return result
+
+    meaningful_count = int(features.get("meaningful_count", 0) or 0)
+    cjk_count = int(features.get("cjk_count", 0) or 0)
+    latin_count = int(features.get("latin_count", 0) or 0)
+    vietnamese_mark_count = int(features.get("vietnamese_mark_count", 0) or 0)
+    cjk_ratio = float(features.get("cjk_ratio", 0.0) or 0.0)
+
+    if meaningful_count < 2:
+        result = {"target_lang": "", "direction": "ambiguous", "confidence": "low", "reason": "not_enough_meaningful_text", "features": features}
+    elif cjk_count >= 2 and cjk_ratio >= 0.35:
+        result = {"target_lang": "vi", "direction": "zh->vi", "confidence": "high", "reason": "cjk_ratio_high", "features": features}
+    elif cjk_count >= 1 and latin_count == 0:
+        result = {"target_lang": "vi", "direction": "zh->vi", "confidence": "medium", "reason": "cjk_only", "features": features}
+    elif cjk_count == 0 and latin_count >= 2:
+        conf = "high" if vietnamese_mark_count >= 1 else "medium"
+        reason = "vietnamese_marks" if vietnamese_mark_count >= 1 else "latin_no_cjk"
+        result = {"target_lang": "zh-TW", "direction": "vi_or_latin->zh", "confidence": conf, "reason": reason, "features": features}
+    else:
+        result = {"target_lang": "", "direction": "ambiguous", "confidence": "low", "reason": "mixed_or_unclear", "features": features}
+
+    logger.info(
+        f"[{trace_id}] MT_DIRECTION_DECISION target_lang={safe_str(result.get('target_lang'))} "
+        f"direction={safe_str(result.get('direction'))} confidence={safe_str(result.get('confidence'))} "
+        f"reason={safe_str(result.get('reason'))} features={json.dumps(features, ensure_ascii=False)}"
+    )
+    return result
+
+
+def resolve_mt_target_language(text: str, tenant: dict) -> str:
+    return safe_str(resolve_mt_target_language_with_meta(text, tenant).get("target_lang"))
+
+
+def is_translation_like_unknown_source_text(text: str) -> bool:
+    """
+    Unknown Source Fuse V1:
+    Chỉ chặn các input có vẻ là yêu cầu dịch. Không chặn routing SIM/phòng bình thường.
+    """
+    raw = sanitize_incoming_text(text)
+    if not raw:
+        return False
+    normalized = normalize_command_text(raw)
+    if parse_translation_command(raw).get("is_translation"):
+        return True
+    if normalized.startswith(("/tr ", "/translate ", "/zh ", "/vi ", "/id ", "/th ")):
+        return True
+    features = extract_mt_language_features(raw)
+    if int(features.get("cjk_count", 0) or 0) >= 2:
+        return True
+    translation_keywords = ["dịch", "dich", "translate", "phiên dịch", "phien dich", "翻譯", "翻译"]
+    return any(keyword in normalized for keyword in translation_keywords)
+
+
+def decrement_mt_quota_in_cache(tenant_id: str, amount: int = 1) -> Tuple[int, int]:
+    with _CACHE_CONFIG_LOCK:
+        tenant = (CACHE_CONFIG.get("tenants") or {}).get(tenant_id)
+        if not tenant:
+            return 0, 0
+        before = mt_safe_int(tenant.get("remaining_quota"), 0)
+        after = max(0, before - int(amount or 1))
+        tenant["remaining_quota"] = after
+    return before, after
+
+
+def writeback_mt_tenant_quota(tenant_id: str, remaining_quota: int, trace_id: str) -> bool:
+    if not MT_TRANSLATION_QUOTA_WRITEBACK_ENABLED:
+        return True
+    tenant_id = safe_str(tenant_id)
+    if not tenant_id:
+        return False
+    cache = get_tenant_config(trace_id=trace_id)
+    tenant = (cache.get("tenants") or {}).get(tenant_id) or {}
+    row_index = int(tenant.get("__row_index") or 0)
+    if row_index <= 1:
+        logger.error(f"[{trace_id}] MT_QUOTA_WRITEBACK_SKIPPED_ROW_MISSING tenant_id={tenant_id}")
+        return False
+    ws = get_mt_translation_worksheet(trace_id, MT_TENANT_CONFIG_SHEET_NAME)
+    if not ws:
+        logger.error(f"[{trace_id}] MT_QUOTA_WRITEBACK_SHEET_UNAVAILABLE tenant_id={tenant_id}")
+        return False
+    ok = update_row_fields_by_header(
+        ws,
+        row_index,
+        {"remaining_quota": str(max(0, int(remaining_quota or 0)))},
+        trace_id,
+        MT_TENANT_CONFIG_SHEET_NAME,
+    )
+    if ok:
+        logger.info(f"[{trace_id}] MT_QUOTA_WRITEBACK_OK tenant_id={tenant_id} remaining_quota={remaining_quota}")
+    return ok
+
+
+def append_mt_translation_log_row(row: dict, trace_id: str) -> bool:
+    ws = get_mt_translation_worksheet(trace_id, MT_TRANSLATION_LOG_SHEET_NAME)
+    if not ws:
+        logger.error(f"[{trace_id}] MT_TRANSLATION_LOG_SHEET_UNAVAILABLE")
+        return False
+    values = [
+        safe_str(row.get("timestamp")) or now_tw_iso(),
+        safe_str(row.get("trace_id")) or trace_id,
+        safe_str(row.get("tenant_id")),
+        safe_str(row.get("source_ref")),
+        safe_str(row.get("source_type")),
+        safe_str(row.get("user_ref")),
+        safe_str(row.get("target_lang")),
+        safe_str(row.get("direction")),
+        safe_str(row.get("direction_confidence")),
+        safe_str(row.get("direction_reason")),
+        safe_str(row.get("raw_text_fp")),
+        safe_str(row.get("glossary_text_fp")),
+        safe_str(row.get("translated_len")),
+        safe_str(row.get("quota_before")),
+        safe_str(row.get("quota_after")),
+        safe_str(row.get("status")),
+        safe_str(row.get("error")),
+    ]
+    try:
+        append_row_guarded(ws, trace_id, MT_TRANSLATION_LOG_SHEET_NAME, values, value_input_option="USER_ENTERED")
+        logger.info(f"[{trace_id}] MT_TRANSLATION_LOG_APPEND_OK tenant_id={safe_str(row.get('tenant_id'))} status={safe_str(row.get('status'))}")
+        return True
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] MT_TRANSLATION_LOG_APPEND_FAILED exception={type(exc).__name__}:{exc}")
+        return False
+
+
+def enqueue_mt_translation_log(row: dict, trace_id: str) -> bool:
+    return enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_translation_log", append_mt_translation_log_row, row, trace_id)
+
+
+def should_handle_mt_translation(event: dict, trace_id: str) -> Tuple[bool, dict]:
+    if not MT_TRANSLATION_ENABLED:
+        return False, {"reason": "disabled"}
+    source_id, source_type = get_source_id_from_event(event)
+    if not source_id:
+        return False, {"reason": "missing_source_id", "source_type": source_type}
+    cache = get_tenant_config(trace_id=trace_id)
+    tenant_id = (cache.get("source_to_tenant") or {}).get(source_id)
+    if not tenant_id:
+        return False, {"reason": "tenant_not_found", "source_id": source_id, "source_type": source_type}
+    tenant = (cache.get("tenants") or {}).get(tenant_id) or {}
+    if not mt_safe_bool(tenant.get("translation_core_enabled"), True):
+        return False, {"reason": "translation_core_disabled", "tenant_id": tenant_id, "source_id": source_id, "source_type": source_type}
+    return True, {"tenant_id": tenant_id, "tenant": tenant, "source_id": source_id, "source_type": source_type}
+
+
+def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
+    should_handle, ctx = should_handle_mt_translation(event, trace_id)
+    if not should_handle:
+        reason = safe_str(ctx.get("reason"))
+        if reason == "tenant_not_found":
+            raw_text = get_message_text(event)
+            is_translation_like = is_translation_like_unknown_source_text(raw_text)
+            logger.info(
+                f"[{trace_id}] MT_TENANT_NOT_FOUND source_ref={stable_hash(ctx.get('source_id'))} "
+                f"mode={MT_TENANT_NOT_FOUND_MODE} unknown_source_guard={MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED} "
+                f"translation_like={is_translation_like} text_fp={message_fingerprint(raw_text)}"
+            )
+            if MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED and is_translation_like:
+                reply_ok = False
+                if MT_UNKNOWN_SOURCE_TRANSLATION_MODE == "reply":
+                    reply_ok = reply_line_text(get_reply_token(event), MT_UNKNOWN_SOURCE_TRANSLATION_REPLY_TEXT, trace_id, "vi")
+                enqueue_mt_translation_log({
+                    "timestamp": now_tw_iso(),
+                    "trace_id": trace_id,
+                    "tenant_id": "UNKNOWN",
+                    "source_ref": stable_hash(ctx.get("source_id")),
+                    "source_type": safe_str(ctx.get("source_type")),
+                    "user_ref": user_ref(get_event_user_id(event)),
+                    "target_lang": "",
+                    "direction": "blocked_unknown_source",
+                    "direction_confidence": "guard",
+                    "direction_reason": "unknown_source_translation_like",
+                    "raw_text_fp": message_fingerprint(raw_text),
+                    "glossary_text_fp": "",
+                    "translated_len": "0",
+                    "quota_before": "",
+                    "quota_after": "",
+                    "status": "blocked_unknown_source",
+                    "error": "",
+                }, trace_id)
+                return {"handled": True, "flow_used": "mt_unknown_source_fuse", "reply_sent": reply_ok}
+            if MT_TENANT_NOT_FOUND_MODE == "reply":
+                reply_line_text(get_reply_token(event), "Nguồn này chưa được kích hoạt tenant phiên dịch.", trace_id, "vi")
+                return {"handled": True, "flow_used": "mt_tenant_not_found_reply"}
+        return None
+
+    tenant_id = safe_str(ctx.get("tenant_id"))
+    tenant = ctx.get("tenant") or {}
+    source_id = safe_str(ctx.get("source_id"))
+    source_type = safe_str(ctx.get("source_type"))
+    user_id = get_event_user_id(event)
+    reply_token = get_reply_token(event)
+    raw_text = get_message_text(event)
+
+    status = mt_status(tenant.get("status"))
+    if status == "SUSPENDED":
+        reply_ok = reply_line_text(reply_token, MT_TENANT_SUSPENDED_REPLY_TEXT, trace_id, "vi")
+        logger.info(f"[{trace_id}] MT_TENANT_SUSPENDED tenant_id={tenant_id} reply_ok={reply_ok}")
+        return {"handled": True, "flow_used": "mt_tenant_suspended", "reply_sent": reply_ok}
+    if status != "ACTIVE":
+        logger.info(f"[{trace_id}] MT_TENANT_NOT_ACTIVE tenant_id={tenant_id} status={status}")
+        return {"handled": True, "flow_used": "mt_tenant_not_active", "reply_sent": False}
+
+    remaining_quota = mt_safe_int(tenant.get("remaining_quota"), 0)
+    if remaining_quota <= 0:
+        reply_ok = reply_line_text(reply_token, MT_TENANT_QUOTA_EMPTY_REPLY_TEXT, trace_id, "vi")
+        enqueue_mt_translation_log({
+            "timestamp": now_tw_iso(),
+            "trace_id": trace_id,
+            "tenant_id": tenant_id,
+            "source_ref": stable_hash(source_id),
+            "source_type": source_type,
+            "user_ref": user_ref(user_id),
+            "target_lang": "",
+            "direction": "quota_blocked",
+            "direction_confidence": "guard",
+            "direction_reason": "quota_empty",
+            "raw_text_fp": message_fingerprint(raw_text),
+            "glossary_text_fp": "",
+            "translated_len": "0",
+            "quota_before": str(remaining_quota),
+            "quota_after": str(remaining_quota),
+            "status": "quota_empty",
+            "error": "",
+        }, trace_id)
+        logger.info(f"[{trace_id}] MT_QUOTA_EMPTY tenant_id={tenant_id} reply_ok={reply_ok}")
+        return {"handled": True, "flow_used": "mt_quota_empty", "reply_sent": reply_ok}
+
+    glossary_text = raw_text
+    translated = ""
+    target_lang = ""
+    quota_before = remaining_quota
+    quota_after = remaining_quota
+    reply_ok = False
+    error = ""
+    status_text = "translation_error"
+    direction_meta = {"direction": "", "confidence": "", "reason": ""}
+
+    try:
+        glossary_text = apply_glossary(raw_text, tenant_id)
+        direction_meta = resolve_mt_target_language_with_meta(glossary_text, tenant, trace_id)
+        target_lang = safe_str(direction_meta.get("target_lang"))
+        if not target_lang:
+            status_text = "direction_ambiguous"
+            if MT_DIRECTION_AMBIGUOUS_MODE == "reply":
+                reply_ok = reply_line_text(reply_token, MT_DIRECTION_AMBIGUOUS_REPLY_TEXT, trace_id, "vi")
+            logger.warning(
+                f"[{trace_id}] MT_DIRECTION_AMBIGUOUS tenant_id={tenant_id} source_ref={stable_hash(source_id)} "
+                f"reason={safe_str(direction_meta.get('reason'))} raw_fp={message_fingerprint(raw_text)}"
+            )
+            raise RuntimeError("MT_DIRECTION_AMBIGUOUS")
+        translated, error = google_translate_command_text(glossary_text, target_lang, trace_id)
+        if error:
+            raise RuntimeError(error)
+        quota_before, quota_after = decrement_mt_quota_in_cache(tenant_id, 1)
+        enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_quota_writeback", writeback_mt_tenant_quota, tenant_id, quota_after, trace_id)
+        reply_ok = reply_line_text(reply_token, translated, trace_id, "vi")
+        status_text = "translated" if reply_ok else "reply_failed"
+        logger.info(
+            f"[{trace_id}] MT_TRANSLATION_OK tenant_id={tenant_id} source_type={source_type} "
+            f"source_ref={stable_hash(source_id)} target_lang={target_lang} "
+            f"raw_fp={message_fingerprint(raw_text)} glossary_fp={message_fingerprint(glossary_text)} "
+            f"translated_len={len(translated)} quota_before={quota_before} quota_after={quota_after} reply_ok={reply_ok}"
+        )
+    except Exception as exc:
+        error = safe_str(exc)[:200]
+        if error == "MT_DIRECTION_AMBIGUOUS":
+            logger.warning(f"[{trace_id}] MT_TRANSLATION_SKIPPED_DIRECTION_AMBIGUOUS tenant_id={tenant_id} source_ref={stable_hash(source_id)}")
+        else:
+            logger.exception(f"[{trace_id}] MT_TRANSLATION_FAILED tenant_id={tenant_id} source_ref={stable_hash(source_id)} error={error}")
+            reply_ok = reply_line_text(reply_token, FALLBACK_REPLY_TEXT, trace_id, "vi")
+
+    if mt_safe_bool(tenant.get("log_enabled"), True):
+        enqueue_mt_translation_log({
+            "timestamp": now_tw_iso(),
+            "trace_id": trace_id,
+            "tenant_id": tenant_id,
+            "source_ref": stable_hash(source_id),
+            "source_type": source_type,
+            "user_ref": user_ref(user_id),
+            "target_lang": target_lang,
+            "direction": safe_str(direction_meta.get("direction")),
+            "direction_confidence": safe_str(direction_meta.get("confidence")),
+            "direction_reason": safe_str(direction_meta.get("reason")),
+            "raw_text_fp": message_fingerprint(raw_text),
+            "glossary_text_fp": message_fingerprint(glossary_text),
+            "translated_len": str(len(translated)),
+            "quota_before": str(quota_before),
+            "quota_after": str(quota_after),
+            "status": status_text,
+            "error": error,
+        }, trace_id)
+
+    return {
+        "handled": True,
+        "event_type": "message",
+        "message_type": "text",
+        "flow_used": f"mt_translation_core_{status_text}",
+        "tenant_id": tenant_id,
+        "source_ref": stable_hash(source_id),
+        "reply_sent": reply_ok,
+    }
+# --- END MULTI_TENANT_TRANSLATION_CORE_V1 ---
+
 def parse_translation_command(text: str) -> dict:
     raw = sanitize_incoming_text(text)
     if not raw:
@@ -4639,6 +5256,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             "reply_sent": reply_sent,
             "reason": "gsheet_circuit_open",
         }
+    mt_translation_result = handle_mt_translation_message(event, trace_id)
+    if mt_translation_result:
+        return mt_translation_result
+
     current_flow = resolve_user_flow(user_id, trace_id)
     current_language = resolve_user_language(user_id, trace_id)
     requested_language = parse_lang_command(text)
