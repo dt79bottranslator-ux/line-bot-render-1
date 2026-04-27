@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -4532,6 +4532,7 @@ CACHE_CONFIG: Dict[str, object] = {
     "loaded_at_ts": 0.0,
     "loaded_at_iso": "",
     "source_to_tenant": {},
+    "source_ref_to_tenant": {},
     "source_meta": {},
     "tenants": {},
     "glossary": {},
@@ -4613,6 +4614,7 @@ def get_tenant_config(force_reload: bool = False, trace_id: str = "") -> Dict[st
 
     tenants: Dict[str, dict] = {}
     source_to_tenant: Dict[str, str] = {}
+    source_ref_to_tenant: Dict[str, str] = {}
     source_meta: Dict[str, dict] = {}
     glossary: Dict[str, list] = {}
 
@@ -4646,14 +4648,32 @@ def get_tenant_config(force_reload: bool = False, trace_id: str = "") -> Dict[st
         if tenant_id not in tenants:
             logger.warning(f"[{trace_id}] MT_SOURCE_MAP_SKIPPED_UNKNOWN_TENANT source_ref={stable_hash(source_id)} tenant_id={tenant_id}")
             continue
-        source_to_tenant[source_id] = tenant_id
-        source_meta[source_id] = {
-            "source_id": source_id,
-            "source_type": source_type,
-            "tenant_id": tenant_id,
-            "status": status,
-            "note": safe_str(row.get("note")),
-        }
+        # SOURCE_REF_MAP_V1: map bằng source_id thật hoặc ref:<source_ref_from_log>.
+        if source_id.lower().startswith("ref:"):
+            source_ref_value = safe_str(source_id[4:])
+            if source_ref_value:
+                source_ref_to_tenant[source_ref_value] = tenant_id
+                source_meta[f"ref:{source_ref_value}"] = {
+                    "source_id": "",
+                    "source_ref": source_ref_value,
+                    "source_type": source_type,
+                    "tenant_id": tenant_id,
+                    "status": status,
+                    "note": safe_str(row.get("note")),
+                    "lookup_mode": "source_ref",
+                }
+        else:
+            source_to_tenant[source_id] = tenant_id
+            source_ref_to_tenant[stable_hash(source_id)] = tenant_id
+            source_meta[source_id] = {
+                "source_id": source_id,
+                "source_ref": stable_hash(source_id),
+                "source_type": source_type,
+                "tenant_id": tenant_id,
+                "status": status,
+                "note": safe_str(row.get("note")),
+                "lookup_mode": "source_id",
+            }
 
     for row in glossary_rows:
         tenant_id = safe_str(row.get("tenant_id"))
@@ -4682,6 +4702,7 @@ def get_tenant_config(force_reload: bool = False, trace_id: str = "") -> Dict[st
         "loaded_at_ts": now_ts,
         "loaded_at_iso": now_tw_iso(),
         "source_to_tenant": source_to_tenant,
+        "source_ref_to_tenant": source_ref_to_tenant,
         "source_meta": source_meta,
         "tenants": tenants,
         "glossary": glossary,
@@ -4690,7 +4711,7 @@ def get_tenant_config(force_reload: bool = False, trace_id: str = "") -> Dict[st
         CACHE_CONFIG = new_cache
     logger.info(
         f"[{trace_id}] MT_TENANT_CONFIG_CACHE_READY "
-        f"tenants={len(tenants)} sources={len(source_to_tenant)} glossary_tenants={len(glossary)}"
+        f"tenants={len(tenants)} sources={len(source_to_tenant)} source_refs={len(source_ref_to_tenant)} glossary_tenants={len(glossary)}"
     )
     return CACHE_CONFIG
 
@@ -4929,9 +4950,15 @@ def should_handle_mt_translation(event: dict, trace_id: str) -> Tuple[bool, dict
     if not source_id:
         return False, {"reason": "missing_source_id", "source_type": source_type}
     cache = get_tenant_config(trace_id=trace_id)
+    source_ref_value = stable_hash(source_id)
     tenant_id = (cache.get("source_to_tenant") or {}).get(source_id)
+    lookup_mode = "source_id" if tenant_id else ""
     if not tenant_id:
-        return False, {"reason": "tenant_not_found", "source_id": source_id, "source_type": source_type}
+        tenant_id = (cache.get("source_ref_to_tenant") or {}).get(source_ref_value)
+        lookup_mode = "source_ref" if tenant_id else ""
+    if not tenant_id:
+        return False, {"reason": "tenant_not_found", "source_id": source_id, "source_type": source_type, "source_ref": source_ref_value}
+    logger.info(f"[{trace_id}] MT_TENANT_RESOLVED tenant_id={tenant_id} source_ref={source_ref_value} lookup_mode={lookup_mode}")
     tenant = (cache.get("tenants") or {}).get(tenant_id) or {}
     if not mt_safe_bool(tenant.get("translation_core_enabled"), True):
         return False, {"reason": "translation_core_disabled", "tenant_id": tenant_id, "source_id": source_id, "source_type": source_type}
