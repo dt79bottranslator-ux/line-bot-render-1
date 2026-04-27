@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -285,6 +285,13 @@ ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
 OWNER_ADS_INPUT_SHEET_NAME = "OWNER_ADS_INPUT"
 OWNER_SETTINGS_SHEET_NAME = "OWNER_SETTINGS"
 ADS_LEADS_SHEET_NAME = "ADS_LEADS"
+ADS_LEADS_V1_SHEET_NAME = os.getenv("ADS_LEADS_V1_SHEET_NAME", "ADS_LEADS_V1").strip() or "ADS_LEADS_V1"
+ADS_LEADS_V1_HEADERS = [
+    "lead_id", "timestamp", "user_id", "source_type", "source_group_id", "intent",
+    "service_id", "service_type", "location", "budget", "people_count", "move_in_date",
+    "telco_preference", "duration", "phone_or_line_contact", "lead_status", "last_message",
+    "created_by", "updated_at",
+]
 ADS_CLICK_LOG_SHEET_NAME = "ads_click_log"
 ADS_PHONE_LEADS_SHEET_NAME = "ads_phone_leads"
 TENANT_REGISTRY_SHEET_NAME = "TENANT_REGISTRY"
@@ -1928,6 +1935,220 @@ def append_routing_log_event(user_id: str, intent_name: str, service_row: dict, 
     )
     logger.info(f"[{trace_id}] ROUTING_LOG_SYNC_WRITE_DONE success={ok}")
     return ok
+
+
+def normalize_lead_service_type(intent_name: str, service_row: dict) -> str:
+    service_row = service_row or {}
+    raw = " ".join([
+        safe_str(intent_name),
+        safe_str(service_row.get("service_id")),
+        safe_str(service_row.get("service_scope")),
+        safe_str(service_row.get("service_name")),
+    ])
+    normalized = normalize_routing_text(raw)
+    if "sim" in normalized:
+        return "SIM"
+    if "phong" in normalized or "room" in normalized:
+        return "ROOM"
+    return safe_str(service_row.get("service_type")) or safe_str(service_row.get("service_scope")) or "SERVICE"
+
+
+def extract_room_budget(text: str) -> str:
+    normalized = normalize_routing_text(text)
+    patterns = [
+        r"(?:ngan sach|budget|gia|gia phong|tien phong)\s*(?:la|tam|khoang|duoi|toi da)?\s*([0-9]{3,6})",
+        r"([0-9]{1,3})\s*k\b",
+        r"([0-9]{3,6})\s*(?:dai te|twd|ntd|台幣|元)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, normalized)
+        if not m:
+            continue
+        value = safe_str(m.group(1))
+        if not value:
+            continue
+        if "k" in pattern and value.isdigit():
+            return str(int(value) * 1000)
+        return value
+    m = re.search(r"\b([3-9][0-9]{3}|1[0-9]{4}|2[0-9]{4})\b", normalized)
+    return safe_str(m.group(1)) if m else ""
+
+
+def extract_people_count(text: str) -> str:
+    normalized = normalize_routing_text(text)
+    patterns = [
+        r"([0-9]{1,2})\s*(?:nguoi|ng|人)",
+        r"o\s*([0-9]{1,2})\s*(?:nguoi|ng)?",
+        r"cho\s*([0-9]{1,2})\s*(?:nguoi|ng)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, normalized)
+        if m:
+            return safe_str(m.group(1))
+    return ""
+
+
+def extract_move_in_date(text: str) -> str:
+    raw = sanitize_incoming_text(text)
+    normalized = normalize_routing_text(raw)
+    m = re.search(r"\b([0-3]?\d[/-][0-1]?\d(?:[/-]\d{2,4})?)\b", raw)
+    if m:
+        return safe_str(m.group(1))
+    m = re.search(r"(?:ngay|ngày)\s*([0-3]?\d)(?:\s*(?:thang|tháng)\s*([0-1]?\d))?", raw, flags=re.IGNORECASE)
+    if m:
+        day = safe_str(m.group(1))
+        month = safe_str(m.group(2))
+        return f"ngày {day}" + (f" tháng {month}" if month else "")
+    for keyword in ["dau thang", "giua thang", "cuoi thang", "thang sau", "hom nay", "ngay mai"]:
+        if keyword in normalized:
+            return keyword
+    return ""
+
+
+def ensure_ads_leads_v1_schema(ws, trace_id: str) -> bool:
+    values = get_all_values_safe(ws, trace_id, ADS_LEADS_V1_SHEET_NAME)
+    headers = [safe_str(x) for x in (values[0] if values else [])]
+    if headers[:len(ADS_LEADS_V1_HEADERS)] == ADS_LEADS_V1_HEADERS:
+        logger.info(f"[{trace_id}] ADS_LEADS_V1_SCHEMA_OK column_count={len(ADS_LEADS_V1_HEADERS)}")
+        return True
+    if not values:
+        try:
+            append_row_guarded(ws, trace_id, ADS_LEADS_V1_SHEET_NAME, ADS_LEADS_V1_HEADERS, value_input_option="USER_ENTERED")
+            _invalidate_worksheet_caches(ADS_LEADS_V1_SHEET_NAME)
+            logger.info(f"[{trace_id}] ADS_LEADS_V1_HEADERS_INIT_OK")
+            return True
+        except Exception as exc:
+            logger.exception(f"[{trace_id}] ADS_LEADS_V1_HEADERS_INIT_FAILED exception={type(exc).__name__}:{exc}")
+            return False
+    logger.error(
+        f"[{trace_id}] ADS_LEADS_V1_SCHEMA_INVALID "
+        f"expected={json.dumps(ADS_LEADS_V1_HEADERS, ensure_ascii=False)} "
+        f"actual={json.dumps(headers, ensure_ascii=False)}"
+    )
+    return False
+
+
+def private_lead_id_for_event(user_id: str, trace_id: str) -> str:
+    ref = get_current_event_ref() or stable_hash(f"{trace_id}:{user_id}", 12)
+    return f"LEAD_{datetime.now(TW_TZ).strftime('%Y%m%d')}_{ref}"
+
+
+def ads_lead_id_exists(ws, lead_id: str, trace_id: str) -> bool:
+    values = get_all_values_safe(ws, trace_id, ADS_LEADS_V1_SHEET_NAME)
+    if not values:
+        return False
+    headers = values[0]
+    header_map = build_header_index_map(headers)
+    lead_idx = header_map.get("lead_id")
+    if lead_idx is None:
+        return False
+    for row in values[1:]:
+        if lead_idx < len(row) and safe_str(row[lead_idx]) == safe_str(lead_id):
+            logger.info(f"[{trace_id}] PRIVATE_LEAD_CAPTURE_DUPLICATE_SKIPPED lead_id={lead_id}")
+            return True
+    return False
+
+
+def extract_private_lead_fields(text: str, intent_name: str, service_row: dict, location_hint: str) -> dict:
+    service_type = normalize_lead_service_type(intent_name, service_row)
+    location = safe_str(location_hint) or safe_str((service_row or {}).get("service_region_key")) or safe_str((service_row or {}).get("location"))
+    telco_preference = ""
+    duration = ""
+    budget = ""
+    people_count = ""
+    move_in_date = ""
+    if service_type == "SIM" or safe_str(intent_name) == "sim_mang_di_dong":
+        telco_preference, duration, _variant_type = parse_sim_entities(text)
+    if service_type == "ROOM" or safe_str(intent_name) == "thue_phong_tro":
+        budget = extract_room_budget(text)
+        people_count = extract_people_count(text)
+        move_in_date = extract_move_in_date(text)
+    return {
+        "service_type": service_type,
+        "location": location,
+        "budget": budget,
+        "people_count": people_count,
+        "move_in_date": move_in_date,
+        "telco_preference": telco_preference,
+        "duration": duration,
+        "phone_or_line_contact": "",
+    }
+
+
+def append_private_lead_capture_event(
+    event: dict,
+    user_id: str,
+    intent_name: str,
+    service_row: dict,
+    location_hint: str,
+    message: str,
+    trace_id: str,
+) -> bool:
+    """Append private 1:1 service inquiry into ADS_LEADS_V1.
+
+    Scope guard:
+    - Only private LINE source_type=user is captured.
+    - Group/room inquiries stay CTA-only and must not write seller contact exposure as lead.
+    """
+    source_type = get_event_source_type(event)
+    if not is_private_source_type(source_type):
+        logger.info(
+            f"[{trace_id}] PRIVATE_LEAD_CAPTURE_SKIPPED reason=not_private "
+            f"source_type={safe_str(source_type) or 'unknown'}"
+        )
+        return False
+
+    ws = get_worksheet_by_name(trace_id, ADS_LEADS_V1_SHEET_NAME)
+    if not ws:
+        logger.error(f"[{trace_id}] PRIVATE_LEAD_CAPTURE_SKIPPED reason=worksheet_unavailable worksheet_name={ADS_LEADS_V1_SHEET_NAME}")
+        return False
+
+    service_row = service_row or {}
+    if not ensure_ads_leads_v1_schema(ws, trace_id):
+        logger.error(f"[{trace_id}] PRIVATE_LEAD_CAPTURE_SKIPPED reason=schema_invalid worksheet_name={ADS_LEADS_V1_SHEET_NAME}")
+        return False
+
+    fields = extract_private_lead_fields(message, intent_name, service_row, location_hint)
+    now_iso = now_tw_iso()
+    lead_id = private_lead_id_for_event(user_id, trace_id)
+    if ads_lead_id_exists(ws, lead_id, trace_id):
+        return True
+    source_group_id = get_event_group_id(event)
+    row = [
+        lead_id,
+        now_iso,
+        user_ref(user_id),
+        safe_str(source_type),
+        safe_str(source_group_id),
+        safe_str(intent_name),
+        safe_str(service_row.get("service_id")),
+        safe_str(fields.get("service_type")),
+        safe_str(fields.get("location")),
+        safe_str(fields.get("budget")),
+        safe_str(fields.get("people_count")),
+        safe_str(fields.get("move_in_date")),
+        safe_str(fields.get("telco_preference")),
+        safe_str(fields.get("duration")),
+        safe_str(fields.get("phone_or_line_contact")),
+        "new",
+        sanitize_incoming_text(message)[:500],
+        "line_bot",
+        now_iso,
+    ]
+    try:
+        append_row_guarded(ws, trace_id, ADS_LEADS_V1_SHEET_NAME, row, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(ADS_LEADS_V1_SHEET_NAME)
+        logger.info(
+            f"[{trace_id}] PRIVATE_LEAD_CAPTURE_APPEND_OK lead_id={lead_id} "
+            f"user_ref={user_ref(user_id)} intent_name={safe_str(intent_name)} "
+            f"service_id={safe_str(service_row.get('service_id'))} "
+            f"service_type={safe_str(fields.get('service_type'))} "
+            f"location={json.dumps(safe_str(fields.get('location')), ensure_ascii=False)}"
+        )
+        return True
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] PRIVATE_LEAD_CAPTURE_APPEND_FAILED exception={type(exc).__name__}:{exc}")
+        return False
 
 def append_routing_miss_event(
     user_id: str,
@@ -4548,6 +4769,16 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 message=text,
                 trace_id=trace_id,
             )
+            if is_private_source_type(source_type):
+                append_private_lead_capture_event(
+                    event=event,
+                    user_id=user_id,
+                    intent_name=routing_result["intent_name"],
+                    service_row=routing_result["service_row"],
+                    location_hint=routing_result["location_hint"],
+                    message=text,
+                    trace_id=trace_id,
+                )
         else:
             logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=reply_failed")
     return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": flow_used, "user_ref": user_ref(user_id), "reply_sent": reply_ok}
