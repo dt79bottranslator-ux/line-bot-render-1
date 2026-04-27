@@ -214,7 +214,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1"
 TW_TZ = timezone(timedelta(hours=8))
 LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -2222,24 +2222,54 @@ def build_routing_reply(
     normalized_scope = normalize_routing_text(scope)
     normalized_service_name = normalize_routing_text(service_name)
 
-    is_room_service = "phong" in normalized_scope or "phong" in normalized_service_name
+    normalized_service_id = normalize_routing_text(service_id)
+    is_room_service = "phong" in normalized_scope or "phong" in normalized_service_name or "room" in normalized_service_id
+    is_sim_service = "sim" in normalized_scope or "sim" in normalized_service_name or "sim" in normalized_service_id
     if is_room_service:
         title = f"Tìm phòng trọ tại {location_vi}"
+    elif is_sim_service:
+        title = "Nhu cầu làm SIM"
     else:
         title = scope or service_name
 
     is_private_context = is_private_source_type(source_type)
     if not is_private_context:
-        lines = []
-        if title:
-            lines.append(f"✅ Đã ghi nhận nhu cầu: {title}")
-        if location_vi:
-            lines.append(f"Khu vực: {location_vi}")
-        if service_id:
-            lines.append(f"Mã yêu cầu: {service_id}")
-        lines.append("")
-        lines.append("🔒 Thông tin liên hệ được ẩn trong nhóm để tránh người khác cướp khách.")
-        lines.append(f"👉 Nhắn riêng bot để xử lý tiếp: {build_group_private_deeplink(service_id)}")
+        deep_link = build_group_private_deeplink(service_id)
+        if is_room_service:
+            lines = [
+                f"✅ Đã ghi nhận: Tìm phòng tại {location_vi}",
+                "",
+                "Để chọn phòng phù hợp, vui lòng nhắn riêng bot và gửi thêm:",
+                "• Ngân sách",
+                "• Số người ở",
+                "• Ngày muốn dọn vào",
+                "",
+                "👉 Nhận phòng phù hợp:",
+                deep_link,
+            ]
+        elif is_sim_service:
+            lines = [
+                "✅ Đã ghi nhận: Nhu cầu làm SIM",
+                "",
+                "Nhắn riêng bot để chọn gói phù hợp và gửi thêm:",
+                "• Nhà mạng muốn dùng: OK / IF / Chunghwa",
+                "• Thời hạn: 6 tháng / 12 tháng / gia hạn",
+                "• Khu vực đang ở",
+                "",
+                "👉 Nhận tư vấn SIM phù hợp:",
+                deep_link,
+            ]
+        else:
+            lines = []
+            if title:
+                lines.append(f"✅ Đã ghi nhận: {title}")
+            if location_vi:
+                lines.append(f"Khu vực: {location_vi}")
+            lines.extend([
+                "",
+                "Để xử lý nhanh và bảo mật thông tin, vui lòng nhắn riêng bot để tiếp tục.",
+                f"👉 Tiếp tục tại đây: {deep_link}",
+            ])
         return "\n".join(lines)[:LINE_TEXT_HARD_LIMIT]
 
     lines = []
