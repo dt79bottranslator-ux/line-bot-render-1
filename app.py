@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -5462,6 +5462,111 @@ def build_translation_command_reply(text: str, trace_id: str) -> tuple:
     )
     return translated, "ok"
 
+
+def is_control_or_translation_command_text(normalized: str, text: str) -> bool:
+    """Return True for explicit commands that must not be intercepted by service routing."""
+    command = safe_str(normalized)
+    if command in {
+        WORKER_ENTRY_COMMAND,
+        ADS_ENTRY_COMMAND,
+        RESET_ENTRY_COMMAND,
+        EXIT_ENTRY_COMMAND,
+        STATUS_ENTRY_COMMAND,
+        HELP_ENTRY_COMMAND,
+    }:
+        return True
+    if command.startswith(LANG_COMMAND_PREFIX):
+        return True
+    if parse_translation_command(text).get("is_translation"):
+        return True
+    return False
+
+
+def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, reply_token: str, text: str, source_type: str) -> Optional[dict]:
+    """Route service-intent messages before MT translation core.
+
+    DT79 SERVICE_ROUTING_BEFORE_MT_V1:
+    - Prevents private service requests like room/SIM inquiries from being consumed by MT_TRANSLATION_CORE.
+    - Explicit translation commands still go to translation.
+    - Group/room source keeps group-private lead lock behavior.
+    - Private source can write ADS_LEADS_V1 after successful routing reply.
+    """
+    normalized = normalize_command_text(text)
+    if is_control_or_translation_command_text(normalized, text):
+        return None
+
+    if not has_service_keyword_for_routing(text, trace_id):
+        return None
+
+    current_language = resolve_user_language(user_id, trace_id)
+    routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
+    if not routing_result:
+        logger.info(f"[{trace_id}] SERVICE_ROUTING_BEFORE_MT_NO_RESULT text_fp={message_fingerprint(text)}")
+        return None
+
+    reply_text = safe_str(routing_result.get("reply_text")) or build_default_intent_reply(text, current_language, trace_id)
+    reply_ok = reply_line_text(reply_token, reply_text, trace_id, current_language)
+    service_row = routing_result.get("service_row") or {}
+
+    if service_row:
+        if not is_private_source_type(source_type):
+            logger.info(
+                f"[{trace_id}] GROUP_LEAD_LOCK_APPLIED source_type={safe_str(source_type) or 'unknown'} "
+                f"service_id={safe_str(service_row.get('service_id'))} contact_hidden=True"
+            )
+        else:
+            logger.info(
+                f"[{trace_id}] PRIVATE_SERVICE_DETAIL_ALLOWED source_type={safe_str(source_type)} "
+                f"service_id={safe_str(service_row.get('service_id'))}"
+            )
+        log_routing_reply_result(
+            trace_id=trace_id,
+            user_id=user_id,
+            intent_name=safe_str(routing_result.get("intent_name")),
+            service_row=service_row,
+            location_hint=safe_str(routing_result.get("location_hint")),
+            location_id=safe_str(routing_result.get("location_id")),
+            reply_text=reply_text,
+            reply_ok=reply_ok,
+        )
+        if reply_ok:
+            append_routing_log_event(
+                user_id=user_id,
+                intent_name=safe_str(routing_result.get("intent_name")),
+                service_row=service_row,
+                location_hint=safe_str(routing_result.get("location_hint")),
+                location_id=safe_str(routing_result.get("location_id")),
+                message=text,
+                trace_id=trace_id,
+            )
+            if is_private_source_type(source_type):
+                append_private_lead_capture_event(
+                    event=event,
+                    user_id=user_id,
+                    intent_name=safe_str(routing_result.get("intent_name")),
+                    service_row=service_row,
+                    location_hint=safe_str(routing_result.get("location_hint")),
+                    message=text,
+                    trace_id=trace_id,
+                )
+        else:
+            logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=reply_failed")
+
+    logger.info(
+        f"[{trace_id}] SERVICE_ROUTING_BEFORE_MT_HANDLED source_type={safe_str(source_type) or 'unknown'} "
+        f"intent_name={safe_str(routing_result.get('intent_name'))} "
+        f"service_id={safe_str(service_row.get('service_id')) if service_row else ''} "
+        f"reply_ok={reply_ok}"
+    )
+    return {
+        "handled": True,
+        "event_type": "message",
+        "message_type": "text",
+        "flow_used": "service_routing_before_mt",
+        "user_ref": user_ref(user_id),
+        "reply_sent": reply_ok,
+    }
+
 def dispatch_text_event(event: dict, trace_id: str) -> dict:
     user_id = get_event_user_id(event)
     reply_token = get_reply_token(event)
@@ -5489,6 +5594,10 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             "reply_sent": reply_sent,
             "reason": "gsheet_circuit_open",
         }
+    pre_mt_routing_result = handle_service_routing_before_mt(event, trace_id, user_id, reply_token, text, source_type)
+    if pre_mt_routing_result:
+        return pre_mt_routing_result
+
     mt_translation_result = handle_mt_translation_message(event, trace_id)
     if mt_translation_result:
         return mt_translation_result
