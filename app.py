@@ -202,21 +202,30 @@ LINE_RICH_MENU_ID_ID = os.getenv("LINE_RICH_MENU_ID_ID", "").strip()
 LINE_RICH_MENU_ID_TH = os.getenv("LINE_RICH_MENU_ID_TH", "").strip()
 LINE_RICH_MENU_ID_ZH = os.getenv("LINE_RICH_MENU_ID_ZH", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
-PHASE1_SPREADSHEET_NAME = os.getenv("PHASE1_SPREADSHEET_NAME", "DT79_PHASE1_WORKER_CASES_V1").strip()
+ACTIVE_PHASE1_SPREADSHEET_NAME = "DT79_PHASE1_WORKER_CASES_TENANT_002"
+LEGACY_PHASE1_SPREADSHEET_NAMES = {
+    "DT79_PHASE1_WORKER_CASES_V1",
+    "ARCHIVE__DT79_PHASE1_WORKER_CASES_V1__DO_NOT_USE",
+}
+_PHASE1_SPREADSHEET_NAME_RAW = os.getenv("PHASE1_SPREADSHEET_NAME", ACTIVE_PHASE1_SPREADSHEET_NAME).strip() or ACTIVE_PHASE1_SPREADSHEET_NAME
+if _PHASE1_SPREADSHEET_NAME_RAW in LEGACY_PHASE1_SPREADSHEET_NAMES:
+    logger.warning(
+        "PHASE1_SPREADSHEET_LEGACY_ENV_OVERRIDDEN "
+        f"requested={_PHASE1_SPREADSHEET_NAME_RAW} active={ACTIVE_PHASE1_SPREADSHEET_NAME}"
+    )
+    PHASE1_SPREADSHEET_NAME = ACTIVE_PHASE1_SPREADSHEET_NAME
+else:
+    PHASE1_SPREADSHEET_NAME = _PHASE1_SPREADSHEET_NAME_RAW
 INTERNAL_SYNC_TOKEN = os.getenv("INTERNAL_SYNC_TOKEN", "").strip()
 USER_STATE_SHEET_NAME = "user_state"
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").strip()
 ADMIN_LIST = [x.strip() for x in ADMIN_IDS.split(",") if x.strip()]
-ALL_COOLDOWN_SECONDS = int(os.getenv("ALL_COOLDOWN_SECONDS", "15").strip() or "15")
-MAX_ALL_CHARS = int(os.getenv("MAX_ALL_CHARS", "500").strip() or "500")
 RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-USER_LANGUAGE_MAP_JSON = os.getenv("USER_LANGUAGE_MAP_JSON", "").strip()
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1"
 TW_TZ = timezone(timedelta(hours=8))
-LOCKED_TARGET_LANG = "zh-TW"
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
 OUTBOUND_TIMEOUT = (CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS)
@@ -246,7 +255,6 @@ EVENT_STATE_FAST_FINALIZE_ENABLED = os.getenv("EVENT_STATE_FAST_FINALIZE_ENABLED
 SIM_FASTPATH_ENABLED = os.getenv("SIM_FASTPATH_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 ASYNC_LOG_LEVEL_CRITICAL = "CRITICAL"
 ASYNC_LOG_LEVEL_AUDIT = "AUDIT"
-ASYNC_LOG_LEVEL_DEBUG = "DEBUG"
 PROCESSED_EVENT_TTL_SECONDS = int(os.getenv("PROCESSED_EVENT_TTL_SECONDS", "21600").strip() or "21600")
 PROCESSED_EVENT_MAX_KEYS = int(os.getenv("PROCESSED_EVENT_MAX_KEYS", "10000").strip() or "10000")
 PROCESSED_EVENT_SHEET_NAME = os.getenv("PROCESSED_EVENT_SHEET_NAME", "processed_event_state").strip() or "processed_event_state"
@@ -282,7 +290,6 @@ RICH_MENU_ID_BY_LANGUAGE = {
     "zh": LINE_RICH_MENU_ID_ZH,
 }
 ADS_CATALOG_V2_SHEET_NAME = "ADS_CATALOG_V2"
-OWNER_ADS_INPUT_SHEET_NAME = "OWNER_ADS_INPUT"
 OWNER_SETTINGS_SHEET_NAME = "OWNER_SETTINGS"
 ADS_LEADS_SHEET_NAME = "ADS_LEADS"
 ADS_LEADS_V1_SHEET_NAME = os.getenv("ADS_LEADS_V1_SHEET_NAME", "ADS_LEADS_V1").strip() or "ADS_LEADS_V1"
@@ -300,7 +307,25 @@ BOT_CONFIG_SHEET_NAME = "BOT_CONFIG"
 INTENT_MASTER_SHEET_NAME = "INTENT_MASTER"
 SERVICE_MASTER_SHEET_NAME = "SERVICE_MASTER"
 PROVIDER_MASTER_SHEET_NAME = "PROVIDER_MASTER"
-LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER"
+ACTIVE_LOCATION_ALIAS_MASTER_SHEET_NAME = "LOCATION_ALIAS_MASTER_V2"
+LEGACY_LOCATION_ALIAS_SHEET_NAMES = {
+    "LOCATION_ALIAS_MASTER",
+    "ARCHIVE__LOCATION_ALIAS_MASTER__LEGACY_DO_NOT_USE",
+}
+LOCATION_ALIAS_MASTER_SHEET_NAME = ACTIVE_LOCATION_ALIAS_MASTER_SHEET_NAME
+
+def resolve_location_alias_sheet_name(config_map: Optional[Dict[str, str]], trace_id: str = "", context: str = "runtime") -> str:
+    requested = safe_str((config_map or {}).get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+    if requested in LEGACY_LOCATION_ALIAS_SHEET_NAMES:
+        if trace_id:
+            logger.warning(
+                f"[{trace_id}] LOCATION_ALIAS_LEGACY_SHEET_OVERRIDDEN "
+                f"context={safe_str(context) or 'runtime'} requested={requested} "
+                f"active={ACTIVE_LOCATION_ALIAS_MASTER_SHEET_NAME}"
+            )
+        return ACTIVE_LOCATION_ALIAS_MASTER_SHEET_NAME
+    return requested
+
 SERVICE_VARIANT_MASTER_SHEET_NAME = "SERVICE_VARIANT_MASTER"
 ROUTING_LOG_SHEET_NAME = "ROUTING_LOG"
 ROUTING_LOG_HEADERS = ["timestamp", "tenant_id", "user_ref", "event_ref", "intent", "service_id", "location", "message_fp", "message_len"]
@@ -1579,7 +1604,7 @@ def warm_up_cache(trace_id: str = "") -> bool:
         config_map = load_bot_config_map(trace_id)
         intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
         service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
-        alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+        alias_sheet_name = resolve_location_alias_sheet_name(config_map, trace_id, "warm_up_cache")
         variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
 
         intent_rows = load_routing_master_records(trace_id, intent_sheet_name, ROUTING_MASTER_CACHE_TTL_SECONDS)
@@ -2773,7 +2798,7 @@ def try_build_routing_reply(text: str, language_group: str, trace_id: str, user_
     config_map = load_bot_config_map(trace_id)
     intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
     service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
-    alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+    alias_sheet_name = resolve_location_alias_sheet_name(config_map, trace_id, "routing_reply")
     canonical_sheet_name = safe_str(config_map.get("location_canonical_sheet"))
     region_map_sheet_name = safe_str(config_map.get("location_region_map_sheet"))
     variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
@@ -5635,7 +5660,7 @@ def verify_internal_sync_token(trace_id: str) -> bool:
 
 def resolve_location_alias_writeback_sheet_name(trace_id: str) -> str:
     config_map = load_bot_config_map(trace_id)
-    return safe_str(config_map.get("location_alias_sheet")) or "LOCATION_ALIAS_MASTER_V2"
+    return resolve_location_alias_sheet_name(config_map, trace_id, "shadow_writeback")
 
 def _normalize_shadow_alias_text(value: str) -> str:
     return normalize_routing_text(value)
