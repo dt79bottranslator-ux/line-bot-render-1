@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -4072,6 +4072,88 @@ def get_event_source_type(event: dict) -> str:
 def is_group_or_room_event(event: dict) -> bool:
     return get_event_source_type(event) in {"group", "room"}
 
+def is_group_safe_mode_enabled() -> bool:
+    return os.getenv("GROUP_SAFE_MODE_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+def is_group_safe_source_type(source_type: str) -> bool:
+    return safe_str(source_type).lower() in {"group", "room"}
+
+def is_group_safe_explicit_command(text: str, normalized: str = "") -> bool:
+    raw = sanitize_incoming_text(text)
+    norm = safe_str(normalized) or normalize_command_text(raw)
+    if not raw:
+        return False
+    if norm.startswith("/"):
+        return True
+    aliases_raw = os.getenv("GROUP_SAFE_BOT_CALL_ALIASES", "@bot,@dt79,dt79 bot,bot ơi,bot oi").strip()
+    aliases = [normalize_routing_text(x) for x in aliases_raw.split(",") if safe_str(x)]
+    normalized_text = normalize_routing_text(raw)
+    if any(alias and _phrase_present(normalized_text, alias) for alias in aliases):
+        return True
+    try:
+        parsed = parse_translation_command(raw)
+        if parsed.get("is_translation"):
+            return True
+    except Exception:
+        pass
+    natural_translation_prefixes = (
+        "dịch:", "dich:", "translate:", "phiên dịch:", "phien dich:",
+        "dịch ", "dich ", "translate "
+    )
+    return normalized_text.startswith(natural_translation_prefixes)
+
+def group_safe_has_location_hint(text: str, trace_id: str) -> bool:
+    try:
+        config_map = load_bot_config_map(trace_id)
+        alias_sheet_name = resolve_location_alias_sheet_name(config_map, trace_id, "group_safe_gate")
+        alias_rows = load_location_master_records(trace_id, alias_sheet_name, "group_safe_alias")
+        if not alias_rows:
+            return bool(extract_location_alias(text))
+        candidates = collect_routing_location_candidates(text, alias_rows, [])
+        return bool(candidates or extract_location_alias(text, alias_rows))
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] GROUP_SAFE_LOCATION_CHECK_FAILED exception={type(exc).__name__}:{exc}")
+        return False
+
+def evaluate_group_safe_gate(event: dict, trace_id: str, text: str, source_type: str, normalized: str = "") -> dict:
+    if not is_group_safe_mode_enabled():
+        return {"allow": True, "reason": "disabled"}
+    if not is_group_safe_source_type(source_type):
+        return {"allow": True, "reason": "private_source"}
+    if is_group_safe_explicit_command(text, normalized):
+        logger.info(f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} reason=explicit_command text_fp={message_fingerprint(text)}")
+        return {"allow": True, "reason": "explicit_command"}
+    service_keyword = False
+    try:
+        service_keyword = has_service_keyword_for_routing(text, trace_id)
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] GROUP_SAFE_SERVICE_CHECK_FAILED exception={type(exc).__name__}:{exc}")
+    if not service_keyword:
+        logger.info(f"[{trace_id}] GROUP_SAFE_SILENT source_type={safe_str(source_type)} reason=no_service_keyword text_fp={message_fingerprint(text)}")
+        return {"allow": False, "reason": "no_service_keyword"}
+    location_hint = group_safe_has_location_hint(text, trace_id)
+    reason = "service_location_clear" if location_hint else "service_keyword_only"
+    logger.info(f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} reason={reason} text_fp={message_fingerprint(text)}")
+    return {"allow": True, "reason": reason, "service_keyword": service_keyword, "location_hint": location_hint}
+
+def group_safe_routing_result_allows_reply(routing_result: Optional[dict]) -> bool:
+    if not routing_result:
+        return False
+    result_type = safe_str(routing_result.get("result_type"))
+    service_row = routing_result.get("service_row") or {}
+    return result_type == "routed" and bool(service_row)
+
+def build_group_safe_silent_result(user_id: str, reason: str = "group_safe_silent") -> dict:
+    return {
+        "handled": True,
+        "event_type": "message",
+        "message_type": "text",
+        "flow_used": "group_safe_silent",
+        "user_ref": user_ref(user_id),
+        "reply_sent": False,
+        "reason": safe_str(reason) or "group_safe_silent",
+    }
+
 def get_event_type(event: dict) -> str:
     return safe_str(event.get("type")).lower()
 def get_message_type(event: dict) -> str:
@@ -5959,6 +6041,14 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         logger.info(f"[{trace_id}] SERVICE_ROUTING_BEFORE_MT_NO_RESULT text_fp={message_fingerprint(text)}")
         return None
 
+    if is_group_safe_source_type(source_type) and not group_safe_routing_result_allows_reply(routing_result):
+        logger.info(
+            f"[{trace_id}] GROUP_SAFE_BLOCKED_UNCLEAR source_type={safe_str(source_type)} "
+            f"reason=routing_result_not_routed result_type={safe_str(routing_result.get('result_type'))} "
+            f"intent_name={safe_str(routing_result.get('intent_name'))} text_fp={message_fingerprint(text)}"
+        )
+        return build_group_safe_silent_result(user_id, "routing_result_not_routed")
+
     reply_text = safe_str(routing_result.get("reply_text")) or build_default_intent_reply(text, current_language, trace_id)
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, current_language)
     service_row = routing_result.get("service_row") or {}
@@ -6029,6 +6119,9 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     normalized = normalize_command_text(text)
     source_type = get_event_source_type(event)
     logger.info(f"[{trace_id}] LINE_SOURCE_CONTEXT source_type={safe_str(source_type) or 'unknown'} user_ref={user_ref(user_id)}")
+    group_safe_decision = evaluate_group_safe_gate(event, trace_id, text, source_type, normalized)
+    if not group_safe_decision.get("allow"):
+        return build_group_safe_silent_result(user_id, safe_str(group_safe_decision.get("reason")) or "group_safe_silent")
     if not check_user_rate_limit(user_id, trace_id):
         reply_sent = reply_line_text(reply_token, USER_RATE_LIMIT_REPLY_TEXT, trace_id, "vi") if reply_token else False
         return {
@@ -6151,9 +6244,19 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=ads_auto_cleared_routing text_fp={message_fingerprint(text)}")
             routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
             if routing_result:
+                if is_group_safe_source_type(source_type) and not group_safe_routing_result_allows_reply(routing_result):
+                    logger.info(
+                        f"[{trace_id}] GROUP_SAFE_BLOCKED_UNCLEAR source_type={safe_str(source_type)} "
+                        f"reason=ads_auto_cleared_routing_not_routed result_type={safe_str(routing_result.get('result_type'))} "
+                        f"intent_name={safe_str(routing_result.get('intent_name'))} text_fp={message_fingerprint(text)}"
+                    )
+                    return build_group_safe_silent_result(user_id, "ads_auto_cleared_routing_not_routed")
                 reply_text = routing_result["reply_text"]
                 flow_used = "ads_auto_cleared_routed"
             else:
+                if is_group_safe_source_type(source_type):
+                    logger.info(f"[{trace_id}] GROUP_SAFE_BLOCKED_UNCLEAR source_type={safe_str(source_type)} reason=ads_auto_cleared_no_routing_result text_fp={message_fingerprint(text)}")
+                    return build_group_safe_silent_result(user_id, "ads_auto_cleared_no_routing_result")
                 reply_text = build_default_intent_reply(text, current_language, trace_id)
                 flow_used = "ads_auto_cleared"
     else:
@@ -6166,9 +6269,19 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=routing text_fp={message_fingerprint(text)}")
             routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
             if routing_result:
+                if is_group_safe_source_type(source_type) and not group_safe_routing_result_allows_reply(routing_result):
+                    logger.info(
+                        f"[{trace_id}] GROUP_SAFE_BLOCKED_UNCLEAR source_type={safe_str(source_type)} "
+                        f"reason=routing_not_routed result_type={safe_str(routing_result.get('result_type'))} "
+                        f"intent_name={safe_str(routing_result.get('intent_name'))} text_fp={message_fingerprint(text)}"
+                    )
+                    return build_group_safe_silent_result(user_id, "routing_not_routed")
                 reply_text = routing_result["reply_text"]
                 flow_used = "routing"
             else:
+                if is_group_safe_source_type(source_type):
+                    logger.info(f"[{trace_id}] GROUP_SAFE_BLOCKED_UNCLEAR source_type={safe_str(source_type)} reason=no_routing_result text_fp={message_fingerprint(text)}")
+                    return build_group_safe_silent_result(user_id, "no_routing_result")
                 reply_text = build_default_intent_reply(text, current_language, trace_id)
                 flow_used = "default"
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
