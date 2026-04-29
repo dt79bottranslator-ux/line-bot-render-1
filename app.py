@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -4522,6 +4522,7 @@ MT_TENANT_SOURCE_MAP_SHEET_NAME = os.getenv("MT_TENANT_SOURCE_MAP_SHEET_NAME", "
 MT_TENANT_CONFIG_SHEET_NAME = os.getenv("MT_TENANT_CONFIG_SHEET_NAME", "TENANT_CONFIG").strip() or "TENANT_CONFIG"
 MT_TENANT_GLOSSARY_SHEET_NAME = os.getenv("MT_TENANT_GLOSSARY_SHEET_NAME", "TENANT_GLOSSARY").strip() or "TENANT_GLOSSARY"
 MT_TRANSLATION_LOG_SHEET_NAME = os.getenv("MT_TRANSLATION_LOG_SHEET_NAME", "TRANSLATION_LOG").strip() or "TRANSLATION_LOG"
+MT_TRANSLATION_HEALTH_LOG_SHEET_NAME = os.getenv("MT_TRANSLATION_HEALTH_LOG_SHEET_NAME", "TRANSLATION_HEALTH_LOG").strip() or "TRANSLATION_HEALTH_LOG"
 MT_TENANT_CONFIG_CACHE_TTL_SECONDS = int(os.getenv("MT_TENANT_CONFIG_CACHE_TTL_SECONDS", "900").strip() or "900")
 MT_TENANT_NOT_FOUND_MODE = os.getenv("MT_TENANT_NOT_FOUND_MODE", "pass_through").strip().lower() or "pass_through"
 MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED = os.getenv("MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
@@ -4991,6 +4992,187 @@ def enqueue_mt_translation_log(row: dict, trace_id: str) -> bool:
 
 
 
+
+# --- SEMANTIC_HEALTH_LOG_V1 ---
+def mt_normalize_health_source_lang(direction: str) -> str:
+    raw = safe_str(direction).lower()
+    if "->" in raw:
+        src = raw.split("->", 1)[0]
+    else:
+        src = raw
+    if src in {"vi_or_latin", "latin", "vietnamese"}:
+        return "vi"
+    if src in {"zh", "cjk", "zh_tw", "zh-tw"}:
+        return "zh-TW"
+    return safe_str(direction) or "auto"
+
+
+def analyze_mt_glossary_application(source_text: str, glossary_text: str, tenant_id: str) -> dict:
+    cache = get_tenant_config(trace_id="semantic_health_glossary_cache")
+    rules = ((cache.get("glossary") or {}).get(safe_str(tenant_id)) or [])
+    detected = 0
+    applied = 0
+    conflict = False
+    source_raw = safe_str(source_text)
+    glossary_raw = safe_str(glossary_text)
+    source_lower = source_raw.lower()
+    glossary_lower = glossary_raw.lower()
+    for rule in rules:
+        source_term = safe_str(rule.get("source_term"))
+        target_term = safe_str(rule.get("target_term"))
+        if not source_term or not target_term:
+            continue
+        case_sensitive = mt_safe_bool(rule.get("case_sensitive"), False)
+        if case_sensitive:
+            term_detected = source_term in source_raw
+            term_applied = target_term in glossary_raw
+        else:
+            term_detected = source_term.lower() in source_lower
+            term_applied = target_term.lower() in glossary_lower
+        if term_detected:
+            detected += 1
+            if term_applied:
+                applied += 1
+            else:
+                conflict = True
+    match_rate = 1.0 if detected == 0 else round(applied / detected, 4)
+    return {"detected": detected, "applied": applied, "match_rate": match_rate, "conflict": conflict}
+
+
+def mt_semantic_risk_level(status_text: str, error: str, direction_meta: dict, glossary_stats: dict) -> str:
+    status_norm = safe_str(status_text).lower()
+    error_norm = safe_str(error).lower()
+    confidence = safe_str((direction_meta or {}).get("confidence")).lower()
+    conflict = bool((glossary_stats or {}).get("conflict"))
+    if status_norm == "translated" and not conflict and confidence in {"high", "configured", "explicit"}:
+        return "LOW"
+    if status_norm in {"direction_ambiguous", "translation_error", "reply_failed"} or error_norm:
+        return "HIGH"
+    if conflict or confidence in {"low", "ambiguous"}:
+        return "MEDIUM"
+    return "LOW"
+
+
+def mt_health_confidence_score(direction_meta: dict, glossary_stats: dict, status_text: str) -> float:
+    confidence = safe_str((direction_meta or {}).get("confidence")).lower()
+    if safe_str(status_text).lower() != "translated":
+        return 0.0
+    base = 0.9 if confidence in {"high", "configured", "explicit"} else 0.65 if confidence == "medium" else 0.4
+    match_rate = float((glossary_stats or {}).get("match_rate", 1.0) or 0.0)
+    return round(min(1.0, max(0.0, (base * 0.7) + (match_rate * 0.3))), 4)
+
+
+def mt_winner_score(confidence_score: float, glossary_stats: dict, latency_ms: int, status_text: str) -> float:
+    if safe_str(status_text).lower() != "translated":
+        return 0.0
+    match_rate = float((glossary_stats or {}).get("match_rate", 1.0) or 0.0)
+    latency_score = 1.0 if latency_ms <= 1500 else 0.8 if latency_ms <= 3000 else 0.6 if latency_ms <= 6000 else 0.4
+    conflict_penalty = 0.25 if bool((glossary_stats or {}).get("conflict")) else 0.0
+    return round(max(0.0, min(1.0, (confidence_score * 0.45) + (match_rate * 0.35) + (latency_score * 0.20) - conflict_penalty)), 4)
+
+
+def append_mt_translation_health_log_row(row: dict, trace_id: str) -> bool:
+    ws = get_mt_translation_worksheet(trace_id, MT_TRANSLATION_HEALTH_LOG_SHEET_NAME)
+    if not ws:
+        logger.error(f"[{trace_id}] MT_TRANSLATION_HEALTH_LOG_SHEET_UNAVAILABLE")
+        return False
+    values = [
+        safe_str(row.get("timestamp")) or now_tw_iso(),
+        safe_str(row.get("event_id")),
+        safe_str(row.get("source_type")),
+        safe_str(row.get("tenant_id")),
+        safe_str(row.get("user_id_hash")),
+        safe_str(row.get("source_lang")),
+        safe_str(row.get("target_lang")),
+        safe_str(row.get("domain")),
+        safe_str(row.get("raw_text_hash")),
+        safe_str(row.get("raw_text_redacted")),
+        safe_str(row.get("selected_model")),
+        safe_str(row.get("fallback_used")),
+        safe_str(row.get("latency_ms")),
+        safe_str(row.get("json_valid")),
+        safe_str(row.get("glossary_terms_detected")),
+        safe_str(row.get("glossary_terms_applied")),
+        safe_str(row.get("glossary_match_rate")),
+        safe_str(row.get("glossary_conflict")),
+        safe_str(row.get("confidence_score")),
+        safe_str(row.get("semantic_risk_level")),
+        safe_str(row.get("winner_score")),
+        safe_str(row.get("candidate_count")),
+        safe_str(row.get("push_status_code")),
+        safe_str(row.get("final_status")),
+        safe_str(row.get("error_code")),
+    ]
+    try:
+        append_row_guarded(ws, trace_id, MT_TRANSLATION_HEALTH_LOG_SHEET_NAME, values, value_input_option="USER_ENTERED")
+        logger.info(
+            f"[{trace_id}] MT_TRANSLATION_HEALTH_LOG_APPEND_OK "
+            f"tenant_id={safe_str(row.get('tenant_id'))} final_status={safe_str(row.get('final_status'))} "
+            f"semantic_risk_level={safe_str(row.get('semantic_risk_level'))}"
+        )
+        return True
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] MT_TRANSLATION_HEALTH_LOG_APPEND_FAILED exception={type(exc).__name__}:{exc}")
+        return False
+
+
+def enqueue_mt_translation_health_log(row: dict, trace_id: str) -> bool:
+    return enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_translation_health_log", append_mt_translation_health_log_row, row, trace_id)
+
+
+def enqueue_mt_semantic_health_log(
+    event: dict,
+    trace_id: str,
+    tenant_id: str,
+    source_id: str,
+    source_type: str,
+    user_id: str,
+    raw_text: str,
+    translation_text: str,
+    glossary_text: str,
+    translated: str,
+    target_lang: str,
+    direction_meta: dict,
+    status_text: str,
+    error: str,
+    latency_ms: int,
+    reply_ok: bool,
+    translation_command: str = "",
+) -> bool:
+    glossary_stats = analyze_mt_glossary_application(translation_text, glossary_text, tenant_id)
+    confidence_score = mt_health_confidence_score(direction_meta, glossary_stats, status_text)
+    semantic_risk = mt_semantic_risk_level(status_text, error, direction_meta, glossary_stats)
+    winner = mt_winner_score(confidence_score, glossary_stats, latency_ms, status_text)
+    row = {
+        "timestamp": now_tw_iso(),
+        "event_id": get_current_event_ref() or event_ref(safe_str((event or {}).get("webhookEventId")) or trace_id),
+        "source_type": source_type,
+        "tenant_id": tenant_id,
+        "user_id_hash": user_ref(user_id),
+        "source_lang": mt_normalize_health_source_lang(safe_str((direction_meta or {}).get("direction"))),
+        "target_lang": target_lang,
+        "domain": safe_str(translation_command) or "translation",
+        "raw_text_hash": stable_hash(sanitize_incoming_text(raw_text), 16),
+        "raw_text_redacted": redact_message_for_storage(raw_text),
+        "selected_model": "google_translate_v2",
+        "fallback_used": "false",
+        "latency_ms": str(int(latency_ms)),
+        "json_valid": "N/A",
+        "glossary_terms_detected": str(glossary_stats.get("detected")),
+        "glossary_terms_applied": str(glossary_stats.get("applied")),
+        "glossary_match_rate": str(glossary_stats.get("match_rate")),
+        "glossary_conflict": str(bool(glossary_stats.get("conflict"))).lower(),
+        "confidence_score": str(confidence_score),
+        "semantic_risk_level": semantic_risk,
+        "winner_score": str(winner),
+        "candidate_count": "1",
+        "push_status_code": "200" if reply_ok else "0",
+        "final_status": safe_str(status_text),
+        "error_code": safe_str(error),
+    }
+    return enqueue_mt_translation_health_log(row, trace_id)
+
+
 def mt_prepare_translation_request(raw_text: str, tenant: dict) -> dict:
     """
     SAAS_HARDENING_V3:
@@ -5256,6 +5438,7 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
     error = ""
     status_text = "translation_error"
     direction_meta = {"direction": "", "confidence": "", "reason": ""}
+    translation_start_perf = time.perf_counter()
 
     try:
         # DT79 DIRECTION_RAW_FIRST_FIX_V1 + SAAS_HARDENING_V3:
@@ -5318,6 +5501,25 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             "status": status_text,
             "error": error,
         }, trace_id)
+        enqueue_mt_semantic_health_log(
+            event=event,
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            source_id=source_id,
+            source_type=source_type,
+            user_id=user_id,
+            raw_text=raw_text,
+            translation_text=translation_text,
+            glossary_text=glossary_text,
+            translated=translated,
+            target_lang=target_lang,
+            direction_meta=direction_meta,
+            status_text=status_text,
+            error=error,
+            latency_ms=ms_since(translation_start_perf),
+            reply_ok=reply_ok,
+            translation_command=translation_command,
+        )
 
     return {
         "handled": True,
