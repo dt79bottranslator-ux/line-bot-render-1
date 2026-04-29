@@ -392,6 +392,8 @@ WORKER_CASES_SHEET_NAME = "worker_cases"
 WORKER_CASES_RUNTIME_WRITE_ENABLED = os.getenv("WORKER_CASES_RUNTIME_WRITE_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
 def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
+def now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 def now_tw_dt() -> datetime:
     return datetime.now(TW_TZ)
 def make_trace_id() -> str:
@@ -417,7 +419,8 @@ def parse_iso_datetime(value: str) -> Optional[datetime]:
     except Exception:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=TW_TZ)
+        logger.error(f"NAIVE_DATETIME_REJECTED value={raw[:80]}")
+        return None
     return dt.astimezone(TW_TZ)
 def is_ad_active_in_time_window(start_at: str, end_at: str) -> bool:
     now_dt = now_tw_dt()
@@ -446,10 +449,53 @@ _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts"
 _ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_ADMIN_AUDIT_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+SHARED_CACHE_MAX_KEYS = int(os.getenv("SHARED_CACHE_MAX_KEYS", "128").strip() or "128")
+SHARED_CACHE_SWEEP_INTERVAL_SECONDS = int(os.getenv("SHARED_CACHE_SWEEP_INTERVAL_SECONDS", "60").strip() or "60")
+_SHARED_CACHE_LAST_SWEEP_TS = 0.0
+
 def _now_ts() -> float:
     return time.time()
 def _cache_is_fresh(loaded_at_ts: float, ttl_seconds: int) -> bool:
     return bool(loaded_at_ts) and (_now_ts() - loaded_at_ts) < ttl_seconds
+
+def _bounded_cache_cleanup(trace_id: str = "") -> None:
+    global _SHARED_CACHE_LAST_SWEEP_TS
+    now_ts = _now_ts()
+    if _SHARED_CACHE_LAST_SWEEP_TS and (now_ts - _SHARED_CACHE_LAST_SWEEP_TS) < SHARED_CACHE_SWEEP_INTERVAL_SECONDS:
+        return
+    _SHARED_CACHE_LAST_SWEEP_TS = now_ts
+    cache_specs = [
+        (_WORKSHEET_VALUES_SHARED_CACHE, GSHEET_VALUES_CACHE_TTL_SECONDS, "worksheet_values"),
+        (_WORKSHEET_RECORDS_SHARED_CACHE, GSHEET_VALUES_CACHE_TTL_SECONDS, "worksheet_records"),
+        (_WORKSHEET_OBJECT_SHARED_CACHE, GSHEET_SPREADSHEET_CACHE_TTL_SECONDS, "worksheet_objects"),
+        (_ROUTING_MASTER_RECORDS_SHARED_CACHE, ROUTING_MASTER_CACHE_TTL_SECONDS, "routing_master_records"),
+    ]
+    removed_total = 0
+    for cache_obj, ttl_seconds, cache_name in cache_specs:
+        stale_keys = []
+        for key, item in list(cache_obj.items()):
+            loaded_at_ts = 0.0
+            if isinstance(item, dict):
+                loaded_at_ts = float(item.get("loaded_at_ts", 0.0) or 0.0)
+            if loaded_at_ts and not _cache_is_fresh(loaded_at_ts, ttl_seconds):
+                stale_keys.append(key)
+        for key in stale_keys:
+            cache_obj.pop(key, None)
+            removed_total += 1
+        if len(cache_obj) > SHARED_CACHE_MAX_KEYS:
+            sortable = []
+            for key, item in list(cache_obj.items()):
+                loaded_at_ts = 0.0
+                if isinstance(item, dict):
+                    loaded_at_ts = float(item.get("loaded_at_ts", 0.0) or 0.0)
+                sortable.append((loaded_at_ts, key))
+            sortable.sort(key=lambda x: x[0])
+            overflow = len(cache_obj) - SHARED_CACHE_MAX_KEYS
+            for _, key in sortable[:overflow]:
+                cache_obj.pop(key, None)
+                removed_total += 1
+    if removed_total and trace_id:
+        logger.info(f"[{trace_id}] SHARED_CACHE_SWEEP_DONE removed={removed_total}")
 def _is_gsheet_quota_error(exc: Exception) -> bool:
     text = safe_str(exc)
     return "429" in text or "Quota exceeded" in text or "Read requests per minute per user" in text
@@ -601,8 +647,12 @@ def enqueue_async_log(level: str, trace_id: str, task_name: str, fn, *args, **kw
         logger.info(f"[{trace_id}] ASYNC_LOG_ENQUEUED level={level} task={task_name} queue_size={_ASYNC_LOG_QUEUE.qsize()}")
         return True
     except Full:
-        logger.error(f"[{trace_id}] ASYNC_LOG_QUEUE_FULL level={level} task={task_name}")
-        return False
+        logger.error(f"[{trace_id}] ASYNC_LOG_QUEUE_FULL level={level} task={task_name} fallback=sync")
+        try:
+            return bool(fn(*args, **kwargs))
+        except Exception as exc:
+            logger.exception(f"[{trace_id}] ASYNC_LOG_SYNC_FALLBACK_FAILED level={level} task={task_name} exception={type(exc).__name__}:{exc}")
+            return False
 def _values_to_records(values: List[List[str]]) -> List[dict]:
     if not values:
         return []
@@ -732,17 +782,18 @@ def get_worksheet_by_name(trace_id: str, worksheet_name: str):
             logger.info(f"[{trace_id}] WORKSHEET_STALE_CACHE_FALLBACK worksheet_name={worksheet_name}")
             return ws
         return None
-def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str]]:
+def get_all_values_safe(ws, trace_id: str, worksheet_name: str, allow_stale_fallback: bool = True, force_fresh: bool = False) -> List[List[str]]:
+    _bounded_cache_cleanup(trace_id)
     values_cache = getattr(g, "_dt79_values_cache", None)
     if values_cache is None:
         values_cache = {}
         g._dt79_values_cache = values_cache
-    if worksheet_name in values_cache:
+    if (not force_fresh) and worksheet_name in values_cache:
         values = values_cache[worksheet_name]
         logger.info(f"[{trace_id}] WORKSHEET_VALUES_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
         return values
     shared_entry = _WORKSHEET_VALUES_SHARED_CACHE.get(worksheet_name)
-    if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
+    if (not force_fresh) and shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
         values = shared_entry.get("values", []) or []
         values_cache[worksheet_name] = values
         logger.info(f"[{trace_id}] WORKSHEET_VALUES_SHARED_CACHE_HIT worksheet_name={worksheet_name} row_count={len(values)}")
@@ -756,28 +807,29 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str) -> List[List[str
         return values
     except Exception as e:
         logger.exception(f"[{trace_id}] WORKSHEET_READ_FAILED worksheet_name={worksheet_name} exception={type(e).__name__}:{e}")
-        if shared_entry:
+        if allow_stale_fallback and shared_entry:
             values = shared_entry.get("values", []) or []
             values_cache[worksheet_name] = values
             logger.info(f"[{trace_id}] WORKSHEET_VALUES_STALE_CACHE_FALLBACK worksheet_name={worksheet_name} row_count={len(values)}")
             return values
         return []
-def get_records_safe(ws, trace_id: str, worksheet_name: str) -> List[dict]:
+def get_records_safe(ws, trace_id: str, worksheet_name: str, allow_stale_fallback: bool = True, force_fresh: bool = False) -> List[dict]:
+    _bounded_cache_cleanup(trace_id)
     records_cache = getattr(g, "_dt79_records_cache", None)
     if records_cache is None:
         records_cache = {}
         g._dt79_records_cache = records_cache
-    if worksheet_name in records_cache:
+    if (not force_fresh) and worksheet_name in records_cache:
         records = records_cache[worksheet_name]
         logger.info(f"[{trace_id}] WORKSHEET_RECORDS_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
         return records
     shared_entry = _WORKSHEET_RECORDS_SHARED_CACHE.get(worksheet_name)
-    if shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
+    if (not force_fresh) and shared_entry and _cache_is_fresh(float(shared_entry.get("loaded_at_ts", 0.0) or 0.0), GSHEET_VALUES_CACHE_TTL_SECONDS):
         records = shared_entry.get("records", []) or []
         records_cache[worksheet_name] = records
         logger.info(f"[{trace_id}] WORKSHEET_RECORDS_SHARED_CACHE_HIT worksheet_name={worksheet_name} count={len(records)}")
         return records
-    values = get_all_values_safe(ws, trace_id, worksheet_name)
+    values = get_all_values_safe(ws, trace_id, worksheet_name, allow_stale_fallback=allow_stale_fallback, force_fresh=force_fresh)
     records = _values_to_records(values)
     records_cache[worksheet_name] = records
     _WORKSHEET_RECORDS_SHARED_CACHE[worksheet_name] = {"records": records, "loaded_at_ts": _now_ts()}
@@ -787,6 +839,12 @@ def find_first_row_index_by_column_value(ws, column_name: str, expected_value: s
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
         return 0
+    if identity_column and identity_value and not _verify_row_identity(values, row_index, identity_column, identity_value):
+        logger.error(
+            f"[{trace_id}] ROW_DRIFT_DETECTED worksheet_name={worksheet_name} row_index={row_index} "
+            f"identity_column={identity_column}"
+        )
+        return False
     headers = values[0]
     header_map = build_header_index_map(headers)
     target_idx = header_map.get(normalize_header_key(column_name))
@@ -801,8 +859,20 @@ def find_first_row_index_by_column_value(ws, column_name: str, expected_value: s
             return row_idx
     logger.info(f"[{trace_id}] FIND_ROW_NOT_FOUND worksheet_name={worksheet_name} column_name={column_name} expected_value={expected_value}")
     return 0
-def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str) -> bool:
-    values = get_all_values_safe(ws, trace_id, worksheet_name)
+def _verify_row_identity(values: List[List[str]], row_index: int, identity_column: str, identity_value: str) -> bool:
+    if not values or row_index < 2 or row_index > len(values):
+        return False
+    headers = values[0]
+    header_map = build_header_index_map(headers)
+    target_idx = header_map.get(normalize_header_key(identity_column))
+    if target_idx is None:
+        return False
+    row = values[row_index - 1] if row_index - 1 < len(values) else []
+    current_value = safe_str(row[target_idx]) if target_idx < len(row) else ""
+    return current_value == safe_str(identity_value)
+
+def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str, identity_column: str = "", identity_value: str = "") -> bool:
+    values = get_all_values_safe(ws, trace_id, worksheet_name, allow_stale_fallback=False, force_fresh=True)
     if not values:
         return False
     headers = values[0]
@@ -3171,6 +3241,17 @@ PROCESSED_EVENT_HEADERS = ["event_key", "processed_at", "trace_id", "webhook_eve
 EVENT_PROCESSING_LOCK_SECONDS = int(os.getenv("EVENT_PROCESSING_LOCK_SECONDS", "120").strip() or "120")
 _USER_LANGUAGE_STATE: Dict[str, dict] = {}
 _PROCESSED_EVENT_STATE: Dict[str, dict] = {}
+_EVENT_KEY_LOCKS: Dict[str, threading.Lock] = {}
+_EVENT_KEY_LOCKS_GUARD = threading.Lock()
+
+def get_event_key_lock(event_key: str) -> threading.Lock:
+    key = safe_str(event_key)
+    with _EVENT_KEY_LOCKS_GUARD:
+        lock = _EVENT_KEY_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _EVENT_KEY_LOCKS[key] = lock
+        return lock
 LOCALIZED_TEXT = {
     "vi": {
         "busy": "Hệ thống bận, thử lại sau.",
@@ -3306,11 +3387,11 @@ def t(language_group: str, key: str, **kwargs) -> str:
     template = LOCALIZED_TEXT.get(lang, LOCALIZED_TEXT["vi"]).get(key, "")
     return template.format(**kwargs)
 def make_processing_marker() -> str:
-    return f"PROCESSING::{now_tw_iso()}"
+    return f"PROCESSING::{now_utc_iso()}"
 def make_done_marker() -> str:
-    return f"DONE::{now_tw_iso()}"
+    return f"DONE::{now_utc_iso()}"
 def make_failed_marker() -> str:
-    return f"FAILED::{now_tw_iso()}"
+    return f"FAILED::{now_utc_iso()}"
 def parse_processed_state_marker(value: str) -> Tuple[str, Optional[datetime]]:
     raw = safe_str(value)
     if not raw:
@@ -3369,7 +3450,7 @@ def ensure_processed_event_worksheet(trace_id: str):
     except Exception as e:
         logger.exception(f"[{trace_id}] PROCESSED_EVENT_SHEET_OPEN_FAILED exception={type(e).__name__}:{e}")
         return None
-    values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME)
+    values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME, allow_stale_fallback=False, force_fresh=True)
     if not values:
         try:
             append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), PROCESSED_EVENT_HEADERS, value_input_option="USER_ENTERED")
@@ -3401,7 +3482,7 @@ def get_persistent_processed_event_record(event_key: str, trace_id: str) -> dict
     if not ws:
         logger.error(f"[{trace_id}] PROCESSED_EVENT_PERSIST_LOOKUP_SKIPPED reason=worksheet_unavailable event_ref={event_ref(event_key)}")
         return empty_result
-    values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME)
+    values = get_all_values_safe(ws, trace_id, PROCESSED_EVENT_SHEET_NAME, allow_stale_fallback=False, force_fresh=True)
     if not values:
         return empty_result
     headers = values[0]
@@ -3442,114 +3523,128 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
     if not event_key:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_SKIPPED reason=missing_event_key")
         return True, "missing_event_key", ""
-    prune_processed_event_state(trace_id)
-    runtime_item = _PROCESSED_EVENT_STATE.get(event_key) or {}
-    runtime_status = safe_str(runtime_item.get("status"))
-    runtime_updated_at_ts = int(runtime_item.get("updated_at_ts", 0) or 0)
-    if runtime_status == "done":
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=runtime_done")
-        return False, "duplicate_done_runtime", event_key
-    if runtime_status == "processing" and (get_now_ts() - runtime_updated_at_ts) <= EVENT_PROCESSING_LOCK_SECONDS:
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=runtime_processing")
-        return False, "duplicate_processing_runtime", event_key
-    lookup = get_persistent_processed_event_record(event_key, trace_id)
-    persistent_status = safe_str(lookup.get("status"))
-    row_index = int(lookup.get("row_index", 0) or 0)
-    ws = ensure_processed_event_worksheet(trace_id)
-    if not ws:
-        logger.error(f"[{trace_id}] EVENT_PROCESSING_BEGIN_FAILED reason=worksheet_unavailable event_ref={event_ref(event_key)}")
-        return False, "worksheet_unavailable", event_key
-    if persistent_status == "done":
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=persistent_done")
-        set_processed_event_runtime_state(event_key, "done", trace_id)
-        return False, "duplicate_done_persistent", event_key
-    if persistent_status == "processing":
-        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=persistent_processing")
+    event_lock = get_event_key_lock(event_key)
+    with event_lock:
+        prune_processed_event_state(trace_id)
+        runtime_item = _PROCESSED_EVENT_STATE.get(event_key) or {}
+        runtime_status = safe_str(runtime_item.get("status"))
+        runtime_updated_at_ts = int(runtime_item.get("updated_at_ts", 0) or 0)
+        if runtime_status == "done":
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=runtime_done")
+            return False, "duplicate_done_runtime", event_key
+        if runtime_status == "processing" and (get_now_ts() - runtime_updated_at_ts) <= EVENT_PROCESSING_LOCK_SECONDS:
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=runtime_processing")
+            return False, "duplicate_processing_runtime", event_key
+        lookup = get_persistent_processed_event_record(event_key, trace_id)
+        persistent_status = safe_str(lookup.get("status"))
+        row_index = int(lookup.get("row_index", 0) or 0)
+        ws = ensure_processed_event_worksheet(trace_id)
+        if not ws:
+            logger.error(f"[{trace_id}] EVENT_PROCESSING_BEGIN_FAILED reason=worksheet_unavailable event_ref={event_ref(event_key)}")
+            return False, "worksheet_unavailable", event_key
+        if persistent_status == "done":
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=persistent_done")
+            set_processed_event_runtime_state(event_key, "done", trace_id)
+            return False, "duplicate_done_persistent", event_key
+        if persistent_status == "processing":
+            logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_DUPLICATE event_ref={event_ref(event_key)} source=persistent_processing")
+            set_processed_event_runtime_state(event_key, "processing", trace_id)
+            return False, "duplicate_processing_persistent", event_key
+        message = event.get("message") or {}
+        marker = make_processing_marker()
+        row_payload = {
+            "processed_at": marker,
+            "trace_id": trace_id,
+            "webhook_event_id": safe_str(event.get("webhookEventId")),
+            "message_id": safe_str(message.get("id")),
+            "reply_token_hash": stable_hash(safe_str(event.get("replyToken"))),
+            "user_ref": user_ref(get_event_user_id(event)),
+            "event_type": get_event_type(event),
+        }
+        if row_index > 0:
+            persist_ok = update_row_fields_by_header(
+                ws,
+                row_index,
+                row_payload,
+                trace_id,
+                PROCESSED_EVENT_SHEET_NAME,
+                identity_column="event_key",
+                identity_value=event_key,
+            )
+        else:
+            row = [
+                event_key,
+                marker,
+                trace_id,
+                stable_hash(safe_str(event.get("webhookEventId"))),
+                stable_hash(safe_str(message.get("id"))),
+                stable_hash(safe_str(event.get("replyToken"))),
+                user_ref(get_event_user_id(event)),
+                get_event_type(event),
+            ]
+            try:
+                append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
+                _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
+                logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_ref={event_ref(event_key)}")
+                persist_ok = True
+            except Exception as e:
+                logger.exception(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
+                persist_ok = False
+        if not persist_ok:
+            return False, "processing_marker_write_failed", event_key
         set_processed_event_runtime_state(event_key, "processing", trace_id)
-        return False, "duplicate_processing_persistent", event_key
-    message = event.get("message") or {}
-    marker = make_processing_marker()
-    row_payload = {
-        "processed_at": marker,
-        "trace_id": trace_id,
-        "webhook_event_id": safe_str(event.get("webhookEventId")),
-        "message_id": safe_str(message.get("id")),
-        "reply_token_hash": stable_hash(safe_str(event.get("replyToken"))),
-        "user_ref": user_ref(get_event_user_id(event)),
-        "event_type": get_event_type(event),
-    }
-    if row_index > 0:
-        persist_ok = update_row_fields_by_header(ws, row_index, row_payload, trace_id, PROCESSED_EVENT_SHEET_NAME)
-    else:
-        row = [
-            event_key,
-            marker,
-            trace_id,
-            stable_hash(safe_str(event.get("webhookEventId"))),
-            stable_hash(safe_str(message.get("id"))),
-            stable_hash(safe_str(event.get("replyToken"))),
-            user_ref(get_event_user_id(event)),
-            get_event_type(event),
-        ]
-        try:
-            append_row_guarded(ws, trace_id, locals().get("worksheet_name", getattr(ws, "title", "unknown")), row, value_input_option="USER_ENTERED")
-            _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
-            logger.info(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_OK event_ref={event_ref(event_key)}")
-            persist_ok = True
-        except Exception as e:
-            logger.exception(f"[{trace_id}] PROCESSED_EVENT_PROCESSING_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
-            persist_ok = False
-    if not persist_ok:
-        return False, "processing_marker_write_failed", event_key
-    set_processed_event_runtime_state(event_key, "processing", trace_id)
-    logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_ref={event_ref(event_key)} source={'reclaim' if row_index > 0 else 'new'}")
-    return True, "processing_started", event_key
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_ref={event_ref(event_key)} source={'reclaim' if row_index > 0 else 'new'}")
+        return True, "processing_started", event_key
+
 def persist_event_processing_finalize(event: dict, trace_id: str, success: bool) -> bool:
     event_key = get_event_unique_key(event)
     if not event_key:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_SKIPPED reason=missing_event_key")
         return False
-    lookup = get_persistent_processed_event_record(event_key, trace_id)
-    row_index = int(lookup.get("row_index", 0) or 0)
-    ws = ensure_processed_event_worksheet(trace_id)
-    marker = make_done_marker() if success else make_failed_marker()
-    persist_ok = False
-    if ws and row_index > 0:
-        persist_ok = update_row_fields_by_header(
-            ws,
-            row_index,
-            {"processed_at": marker, "trace_id": trace_id},
-            trace_id,
-            PROCESSED_EVENT_SHEET_NAME,
-        )
-    elif ws and not row_index and success:
-        message = event.get("message") or {}
-        row = [
-            event_key,
-            marker,
-            trace_id,
-            stable_hash(safe_str(event.get("webhookEventId"))),
-            stable_hash(safe_str(message.get("id"))),
-            stable_hash(safe_str(event.get("replyToken"))),
-            user_ref(get_event_user_id(event)),
-            get_event_type(event),
-        ]
-        try:
-            append_row_guarded(
+    event_lock = get_event_key_lock(event_key)
+    with event_lock:
+        lookup = get_persistent_processed_event_record(event_key, trace_id)
+        row_index = int(lookup.get("row_index", 0) or 0)
+        ws = ensure_processed_event_worksheet(trace_id)
+        marker = make_done_marker() if success else make_failed_marker()
+        persist_ok = False
+        if ws and row_index > 0:
+            persist_ok = update_row_fields_by_header(
                 ws,
+                row_index,
+                {"processed_at": marker, "trace_id": trace_id},
                 trace_id,
-                locals().get("worksheet_name", getattr(ws, "title", "unknown")),
-                row,
-                value_input_option="USER_ENTERED",
+                PROCESSED_EVENT_SHEET_NAME,
+                identity_column="event_key",
+                identity_value=event_key,
             )
-            _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
-            persist_ok = True
-        except Exception as e:
-            logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
-            persist_ok = False
-    logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
-    return persist_ok
-
+        elif ws and not row_index and success:
+            message = event.get("message") or {}
+            row = [
+                event_key,
+                marker,
+                trace_id,
+                stable_hash(safe_str(event.get("webhookEventId"))),
+                stable_hash(safe_str(message.get("id"))),
+                stable_hash(safe_str(event.get("replyToken"))),
+                user_ref(get_event_user_id(event)),
+                get_event_type(event),
+            ]
+            try:
+                append_row_guarded(
+                    ws,
+                    trace_id,
+                    locals().get("worksheet_name", getattr(ws, "title", "unknown")),
+                    row,
+                    value_input_option="USER_ENTERED",
+                )
+                _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
+                persist_ok = True
+            except Exception as e:
+                logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
+                persist_ok = False
+        logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
+        return persist_ok
 
 def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None:
     event_key = get_event_unique_key(event)
