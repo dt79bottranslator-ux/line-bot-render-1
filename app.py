@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -4522,7 +4522,6 @@ MT_TENANT_SOURCE_MAP_SHEET_NAME = os.getenv("MT_TENANT_SOURCE_MAP_SHEET_NAME", "
 MT_TENANT_CONFIG_SHEET_NAME = os.getenv("MT_TENANT_CONFIG_SHEET_NAME", "TENANT_CONFIG").strip() or "TENANT_CONFIG"
 MT_TENANT_GLOSSARY_SHEET_NAME = os.getenv("MT_TENANT_GLOSSARY_SHEET_NAME", "TENANT_GLOSSARY").strip() or "TENANT_GLOSSARY"
 MT_TRANSLATION_LOG_SHEET_NAME = os.getenv("MT_TRANSLATION_LOG_SHEET_NAME", "TRANSLATION_LOG").strip() or "TRANSLATION_LOG"
-MT_TRANSLATION_HEALTH_LOG_SHEET_NAME = os.getenv("MT_TRANSLATION_HEALTH_LOG_SHEET_NAME", "TRANSLATION_HEALTH_LOG").strip() or "TRANSLATION_HEALTH_LOG"
 MT_TENANT_CONFIG_CACHE_TTL_SECONDS = int(os.getenv("MT_TENANT_CONFIG_CACHE_TTL_SECONDS", "900").strip() or "900")
 MT_TENANT_NOT_FOUND_MODE = os.getenv("MT_TENANT_NOT_FOUND_MODE", "pass_through").strip().lower() or "pass_through"
 MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED = os.getenv("MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
@@ -4559,12 +4558,25 @@ MT_SOURCE_TYPE_MISMATCH_REPLY_TEXT = os.getenv(
     "MT_SOURCE_TYPE_MISMATCH_REPLY_TEXT",
     "Nguồn này chưa khớp cấu hình tenant. Vui lòng liên hệ quản trị viên."
 ).strip()
+MT_TRANSLATION_HEALTH_LOG_SHEET_NAME = os.getenv(
+    "MT_TRANSLATION_HEALTH_LOG_SHEET_NAME",
+    "TRANSLATION_HEALTH_LOG"
+).strip() or "TRANSLATION_HEALTH_LOG"
+MT_POST_GLOSSARY_ENFORCE_ENABLED = os.getenv(
+    "MT_POST_GLOSSARY_ENFORCE_ENABLED",
+    "1"
+).strip().lower() not in {"0", "false", "no"}
+MT_POST_GLOSSARY_APPEND_MODE = os.getenv(
+    "MT_POST_GLOSSARY_APPEND_MODE",
+    "append_note"
+).strip().lower() or "append_note"
 
 MT_TRANSLATION_HEADERS = {
     "TENANT_SOURCE_MAP": ["source_id", "source_type", "tenant_id", "status", "note"],
     "TENANT_CONFIG": ["tenant_id", "tenant_name", "status", "remaining_quota", "quota_unit", "reply_mode", "glossary_enabled", "log_enabled", "target_default", "translation_core_enabled", "note"],
     "TENANT_GLOSSARY": ["tenant_id", "source_term", "target_term", "match_mode", "case_sensitive", "status", "note"],
     "TRANSLATION_LOG": ["timestamp", "trace_id", "tenant_id", "source_ref", "source_type", "user_ref", "target_lang", "direction", "direction_confidence", "direction_reason", "raw_text_fp", "glossary_text_fp", "translated_len", "quota_before", "quota_after", "status", "error"],
+    "TRANSLATION_HEALTH_LOG": ["timestamp", "event_id", "source_type", "tenant_id", "user_id_hash", "source_lang", "target_lang", "domain", "raw_text_hash", "raw_text_redacted", "selected_model", "fallback_used", "latency_ms", "json_valid", "glossary_terms_detected", "glossary_terms_applied", "glossary_match_rate", "glossary_conflict", "confidence_score", "semantic_risk_level", "winner_score", "candidate_count", "push_status_code", "final_status", "error_code"],
 }
 
 CACHE_CONFIG: Dict[str, object] = {
@@ -4991,9 +5003,174 @@ def enqueue_mt_translation_log(row: dict, trace_id: str) -> bool:
     return enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_translation_log", append_mt_translation_log_row, row, trace_id)
 
 
+# --- SEMANTIC_HEALTH_LOG_V1 + POST_TRANSLATION_GLOSSARY_ENFORCE_V1 ---
+def mt_get_glossary_rules(tenant_id: str) -> List[dict]:
+    tenant_id = safe_str(tenant_id)
+    if not tenant_id:
+        return []
+    cache = get_tenant_config()
+    return list((cache.get("glossary") or {}).get(tenant_id) or [])
 
 
-# --- SEMANTIC_HEALTH_LOG_V1 ---
+def mt_rule_matches_text(text: str, rule: dict) -> bool:
+    raw = sanitize_incoming_text(text)
+    source_term = safe_str(rule.get("source_term"))
+    match_mode = safe_str(rule.get("match_mode")).lower() or "contains"
+    case_sensitive = bool(rule.get("case_sensitive"))
+    if not raw or not source_term:
+        return False
+    if match_mode == "exact":
+        return raw == source_term if case_sensitive else raw.lower() == source_term.lower()
+    if match_mode == "contains":
+        return source_term in raw if case_sensitive else source_term.lower() in raw.lower()
+    return False
+
+
+def mt_replace_rule_with_marker(text: str, rule: dict, marker: str) -> str:
+    raw = sanitize_incoming_text(text)
+    source_term = safe_str(rule.get("source_term"))
+    match_mode = safe_str(rule.get("match_mode")).lower() or "contains"
+    case_sensitive = bool(rule.get("case_sensitive"))
+    if not raw or not source_term:
+        return raw
+    if match_mode == "exact":
+        if (case_sensitive and raw == source_term) or ((not case_sensitive) and raw.lower() == source_term.lower()):
+            return marker
+        return raw
+    if match_mode == "contains":
+        if case_sensitive:
+            return raw.replace(source_term, marker)
+        return re.sub(re.escape(source_term), marker, raw, flags=re.IGNORECASE)
+    return raw
+
+
+def mt_build_glossary_protected_text(text: str, tenant_id: str, target_lang: str, trace_id: str = "") -> Tuple[str, List[dict]]:
+    """
+    POST_TRANSLATION_GLOSSARY_ENFORCE_V1:
+    Dùng marker để bảo vệ thuật ngữ đã khóa trước khi gọi Google Translate.
+    Ví dụ: "tăng ca" -> "__DT79TERM0__" -> Google dịch -> restore "__DT79TERM0__" thành "加班".
+    """
+    protected = sanitize_incoming_text(text)
+    replacements: List[dict] = []
+    if not MT_POST_GLOSSARY_ENFORCE_ENABLED:
+        return protected, replacements
+    for idx, rule in enumerate(mt_get_glossary_rules(tenant_id)):
+        source_term = safe_str(rule.get("source_term"))
+        target_term = safe_str(rule.get("target_term"))
+        if not source_term or not target_term:
+            continue
+        if not mt_rule_matches_text(protected, rule):
+            continue
+        marker = f"__DT79TERM{idx}__"
+        protected_next = mt_replace_rule_with_marker(protected, rule, marker)
+        if protected_next != protected:
+            protected = protected_next
+            replacements.append({
+                "marker": marker,
+                "source_term": source_term,
+                "target_term": target_term,
+                "case_sensitive": bool(rule.get("case_sensitive")),
+            })
+    if replacements:
+        logger.info(
+            f"[{trace_id}] MT_GLOSSARY_PROTECT_APPLIED tenant_id={safe_str(tenant_id)} "
+            f"count={len(replacements)} markers={json.dumps([x.get('marker') for x in replacements], ensure_ascii=False)}"
+        )
+    return protected, replacements
+
+
+def mt_restore_glossary_markers(translated: str, replacements: List[dict], trace_id: str = "") -> Tuple[str, dict]:
+    output = sanitize_incoming_text(translated)
+    restored = 0
+    missing_after_restore = []
+    for item in replacements or []:
+        marker = safe_str(item.get("marker"))
+        target_term = safe_str(item.get("target_term"))
+        if not marker or not target_term:
+            continue
+        before = output
+        output = re.sub(r"\s*" + re.escape(marker) + r"\s*", target_term, output)
+        if output != before:
+            restored += 1
+        if target_term not in output:
+            missing_after_restore.append(target_term)
+    if replacements:
+        logger.info(
+            f"[{trace_id}] MT_GLOSSARY_MARKER_RESTORE_DONE restored={restored} "
+            f"expected={len(replacements)} missing_after_restore={json.dumps(missing_after_restore, ensure_ascii=False)}"
+        )
+    return output, {
+        "restored": restored,
+        "expected": len(replacements or []),
+        "missing_after_restore": missing_after_restore,
+    }
+
+
+def mt_post_enforce_glossary(raw_text: str, translated: str, tenant_id: str, target_lang: str, replacements: List[dict], trace_id: str = "") -> Tuple[str, dict]:
+    """
+    Chốt hậu dịch: nếu raw có source_term nhưng final output không có target_term thì ép bằng target_term từ sheet.
+    Không suy diễn thuật ngữ mới.
+    """
+    output, marker_stats = mt_restore_glossary_markers(translated, replacements, trace_id)
+    appended_terms = []
+    if MT_POST_GLOSSARY_ENFORCE_ENABLED:
+        for rule in mt_get_glossary_rules(tenant_id):
+            source_term = safe_str(rule.get("source_term"))
+            target_term = safe_str(rule.get("target_term"))
+            if not source_term or not target_term:
+                continue
+            if mt_rule_matches_text(raw_text, rule) and target_term not in output:
+                appended_terms.append(target_term)
+        if appended_terms:
+            unique_terms = []
+            for term in appended_terms:
+                if term not in unique_terms:
+                    unique_terms.append(term)
+            if MT_POST_GLOSSARY_APPEND_MODE == "silent_append":
+                output = f"{output} {' '.join(unique_terms)}".strip()
+            else:
+                output = f"{output}\n（術語：{'、'.join(unique_terms)}）".strip()
+            logger.warning(
+                f"[{trace_id}] MT_POST_GLOSSARY_ENFORCE_APPLIED tenant_id={safe_str(tenant_id)} "
+                f"terms={json.dumps(unique_terms, ensure_ascii=False)}"
+            )
+    return output[:LINE_TEXT_HARD_LIMIT], {
+        "marker_restored": marker_stats.get("restored", 0),
+        "marker_expected": marker_stats.get("expected", 0),
+        "appended_terms": appended_terms,
+    }
+
+
+def mt_collect_glossary_stats(raw_text: str, final_text: str, tenant_id: str) -> dict:
+    detected = 0
+    applied = 0
+    conflict = False
+    detected_terms = []
+    applied_terms = []
+    for rule in mt_get_glossary_rules(tenant_id):
+        source_term = safe_str(rule.get("source_term"))
+        target_term = safe_str(rule.get("target_term"))
+        if not source_term or not target_term:
+            continue
+        if mt_rule_matches_text(raw_text, rule):
+            detected += 1
+            detected_terms.append(source_term)
+            if target_term in safe_str(final_text):
+                applied += 1
+                applied_terms.append(target_term)
+            else:
+                conflict = True
+    match_rate = 1.0 if detected == 0 else round(applied / detected, 4)
+    return {
+        "detected": detected,
+        "applied": applied,
+        "match_rate": match_rate,
+        "conflict": conflict,
+        "detected_terms": detected_terms,
+        "applied_terms": applied_terms,
+    }
+
+
 def mt_normalize_health_source_lang(direction: str) -> str:
     raw = safe_str(direction).lower()
     if "->" in raw:
@@ -5005,38 +5182,6 @@ def mt_normalize_health_source_lang(direction: str) -> str:
     if src in {"zh", "cjk", "zh_tw", "zh-tw"}:
         return "zh-TW"
     return safe_str(direction) or "auto"
-
-
-def analyze_mt_glossary_application(source_text: str, glossary_text: str, tenant_id: str) -> dict:
-    cache = get_tenant_config(trace_id="semantic_health_glossary_cache")
-    rules = ((cache.get("glossary") or {}).get(safe_str(tenant_id)) or [])
-    detected = 0
-    applied = 0
-    conflict = False
-    source_raw = safe_str(source_text)
-    glossary_raw = safe_str(glossary_text)
-    source_lower = source_raw.lower()
-    glossary_lower = glossary_raw.lower()
-    for rule in rules:
-        source_term = safe_str(rule.get("source_term"))
-        target_term = safe_str(rule.get("target_term"))
-        if not source_term or not target_term:
-            continue
-        case_sensitive = mt_safe_bool(rule.get("case_sensitive"), False)
-        if case_sensitive:
-            term_detected = source_term in source_raw
-            term_applied = target_term in glossary_raw
-        else:
-            term_detected = source_term.lower() in source_lower
-            term_applied = target_term.lower() in glossary_lower
-        if term_detected:
-            detected += 1
-            if term_applied:
-                applied += 1
-            else:
-                conflict = True
-    match_rate = 1.0 if detected == 0 else round(applied / detected, 4)
-    return {"detected": detected, "applied": applied, "match_rate": match_rate, "conflict": conflict}
 
 
 def mt_semantic_risk_level(status_text: str, error: str, direction_meta: dict, glossary_stats: dict) -> str:
@@ -5129,45 +5274,44 @@ def enqueue_mt_semantic_health_log(
     user_id: str,
     raw_text: str,
     translation_text: str,
-    glossary_text: str,
-    translated: str,
+    final_text: str,
     target_lang: str,
     direction_meta: dict,
     status_text: str,
     error: str,
     latency_ms: int,
     reply_ok: bool,
-    translation_command: str = "",
 ) -> bool:
-    glossary_stats = analyze_mt_glossary_application(translation_text, glossary_text, tenant_id)
+    glossary_stats = mt_collect_glossary_stats(translation_text or raw_text, final_text, tenant_id)
     confidence_score = mt_health_confidence_score(direction_meta, glossary_stats, status_text)
     semantic_risk = mt_semantic_risk_level(status_text, error, direction_meta, glossary_stats)
-    winner = mt_winner_score(confidence_score, glossary_stats, latency_ms, status_text)
+    winner_score = mt_winner_score(confidence_score, glossary_stats, int(latency_ms or 0), status_text)
+    event_id = get_current_event_ref() or event_ref(safe_str((event or {}).get("webhookEventId")))
     row = {
         "timestamp": now_tw_iso(),
-        "event_id": get_current_event_ref() or event_ref(safe_str((event or {}).get("webhookEventId")) or trace_id),
+        "event_id": event_id,
         "source_type": source_type,
         "tenant_id": tenant_id,
         "user_id_hash": user_ref(user_id),
         "source_lang": mt_normalize_health_source_lang(safe_str((direction_meta or {}).get("direction"))),
         "target_lang": target_lang,
-        "domain": safe_str(translation_command) or "translation",
-        "raw_text_hash": stable_hash(sanitize_incoming_text(raw_text), 16),
+        "domain": "auto",
+        "raw_text_hash": message_fingerprint(raw_text),
         "raw_text_redacted": redact_message_for_storage(raw_text),
-        "selected_model": "google_translate_v2",
-        "fallback_used": "false",
-        "latency_ms": str(int(latency_ms)),
-        "json_valid": "N/A",
-        "glossary_terms_detected": str(glossary_stats.get("detected")),
-        "glossary_terms_applied": str(glossary_stats.get("applied")),
-        "glossary_match_rate": str(glossary_stats.get("match_rate")),
-        "glossary_conflict": str(bool(glossary_stats.get("conflict"))).lower(),
+        "selected_model": "google_translate",
+        "fallback_used": "FALSE",
+        "latency_ms": str(int(latency_ms or 0)),
+        "json_valid": "TRUE",
+        "glossary_terms_detected": str(glossary_stats.get("detected", 0)),
+        "glossary_terms_applied": str(glossary_stats.get("applied", 0)),
+        "glossary_match_rate": str(glossary_stats.get("match_rate", 1.0)),
+        "glossary_conflict": "TRUE" if glossary_stats.get("conflict") else "FALSE",
         "confidence_score": str(confidence_score),
         "semantic_risk_level": semantic_risk,
-        "winner_score": str(winner),
+        "winner_score": str(winner_score),
         "candidate_count": "1",
-        "push_status_code": "200" if reply_ok else "0",
-        "final_status": safe_str(status_text),
+        "push_status_code": "200" if reply_ok else "",
+        "final_status": status_text,
         "error_code": safe_str(error),
     }
     return enqueue_mt_translation_health_log(row, trace_id)
@@ -5460,9 +5604,25 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
                 f"reason={safe_str(direction_meta.get('reason'))} raw_fp={message_fingerprint(raw_text)}"
             )
             raise RuntimeError("MT_DIRECTION_AMBIGUOUS")
-        translated, error = google_translate_command_text(glossary_text, target_lang, trace_id)
+        protected_text, glossary_replacements = mt_build_glossary_protected_text(translation_text, tenant_id, target_lang, trace_id)
+        text_for_translation = protected_text if glossary_replacements else glossary_text
+        translated, error = google_translate_command_text(text_for_translation, target_lang, trace_id)
         if error:
             raise RuntimeError(error)
+        if glossary_replacements:
+            translated, enforce_stats = mt_post_enforce_glossary(
+                raw_text=translation_text,
+                translated=translated,
+                tenant_id=tenant_id,
+                target_lang=target_lang,
+                replacements=glossary_replacements,
+                trace_id=trace_id,
+            )
+            logger.info(
+                f"[{trace_id}] MT_POST_GLOSSARY_ENFORCE_DONE tenant_id={tenant_id} "
+                f"marker_restored={enforce_stats.get('marker_restored')} appended_terms={json.dumps(enforce_stats.get('appended_terms', []), ensure_ascii=False)} "
+                f"final_fp={message_fingerprint(translated)}"
+            )
         quota_before, quota_after = decrement_mt_quota_in_cache(tenant_id, 1)
         enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_quota_writeback", writeback_mt_tenant_quota, tenant_id, quota_after, trace_id)
         reply_ok = reply_line_text(reply_token, translated, trace_id, "vi")
@@ -5510,15 +5670,13 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             user_id=user_id,
             raw_text=raw_text,
             translation_text=translation_text,
-            glossary_text=glossary_text,
-            translated=translated,
+            final_text=translated,
             target_lang=target_lang,
             direction_meta=direction_meta,
             status_text=status_text,
             error=error,
             latency_ms=ms_since(translation_start_perf),
             reply_ok=reply_ok,
-            translation_command=translation_command,
         )
 
     return {
