@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -445,6 +445,17 @@ _ROUTING_MASTER_RECORDS_SHARED_CACHE: Dict[str, dict] = {}
 _ROUTING_MASTER_CACHE_LOCK = threading.Lock()
 _ROUTING_LOG_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _SIM_FASTPATH_VARIANT_ROWS_CACHE = {"rows": [], "loaded_at_ts": 0.0, "sheet_name": ""}
+
+# --- CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP ---
+CACHE_RELOAD_COOLDOWN_SECONDS = int(
+    os.getenv("CACHE_RELOAD_COOLDOWN_SECONDS", "300").strip() or "300"
+)
+_CACHE_RELOAD_STATE_LOCK = threading.Lock()
+_CACHE_RELOAD_RUNNING = False
+_CACHE_RELOAD_LAST_COMPLETE_TS = 0.0
+_CACHE_RELOAD_LAST_TRACE_ID = ""
+_CACHE_RELOAD_LAST_ERROR = ""
+_ROUTING_CACHE_SWAP_LOCK = threading.RLock()
 _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
@@ -1701,6 +1712,332 @@ def warm_up_cache(trace_id: str = "") -> bool:
     except (gspread.WorksheetNotFound, gspread.exceptions.APIError, requests.RequestException, ValueError, KeyError, TypeError) as exc:
         logger.exception(f"[{trace_id}] WARM_UP_CACHE_FAILED exception={type(exc).__name__}:{exc}")
         return False
+
+# --- CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP HELPERS ---
+
+def _fetch_routing_sheet_rows_direct(spreadsheet, trace_id: str, sheet_name: str) -> Optional[List[dict]]:
+    """
+    Read one routing worksheet directly from the provided spreadsheet object.
+    This bypasses shared worksheet/value/records caches and does not mutate live routing cache.
+    """
+    sheet = safe_str(sheet_name)
+    if not sheet:
+        return []
+
+    try:
+        ws = gsheet_guarded_call(
+            trace_id,
+            f"snapshot.worksheet.open.{sheet}",
+            spreadsheet.worksheet,
+            sheet,
+        )
+        values = gsheet_guarded_call(
+            trace_id,
+            f"snapshot.worksheet.read.{sheet}",
+            ws.get_all_values,
+        )
+        rows = _values_to_records(values or [])
+        logger.info(f"[{trace_id}] ROUTING_CACHE_SNAPSHOT_SHEET_READ sheet={sheet} rows={len(rows)}")
+        return rows
+    except gspread.WorksheetNotFound:
+        logger.error(f"[{trace_id}] ROUTING_CACHE_SNAPSHOT_SHEET_NOT_FOUND sheet={sheet}")
+        return None
+    except Exception as exc:
+        logger.error(
+            f"[{trace_id}] ROUTING_CACHE_SNAPSHOT_SHEET_READ_FAILED "
+            f"sheet={sheet} exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+        )
+        return None
+
+
+def _build_config_map_from_rows(rows: List[dict]) -> Dict[str, str]:
+    """
+    BOT_CONFIG in this app uses Key/Value columns.
+    Lowercase key/value is accepted for forward compatibility only.
+    """
+    config_map: Dict[str, str] = {}
+    for row in rows or []:
+        key = safe_str(row.get("Key") or row.get("key"))
+        value = safe_str(row.get("Value") or row.get("value"))
+        if key:
+            config_map[key] = value
+    return config_map
+
+
+def _validate_routing_cache_snapshot(snapshot: dict, trace_id: str) -> bool:
+    """
+    Minimum viable routing data validation before swapping live cache references.
+    This blocks an empty or structurally broken snapshot from replacing a known-good cache.
+    """
+    meta = snapshot.get("_meta", {}) if isinstance(snapshot, dict) else {}
+    intent_rows = snapshot.get("_intent_rows", []) if isinstance(snapshot, dict) else []
+    service_rows = snapshot.get("_service_rows", []) if isinstance(snapshot, dict) else []
+    alias_rows = snapshot.get("_alias_rows", []) if isinstance(snapshot, dict) else []
+
+    errors = []
+
+    if not intent_rows:
+        errors.append("intent_rows_empty")
+    if not service_rows:
+        errors.append("service_rows_empty")
+    if not alias_rows:
+        errors.append("alias_rows_empty")
+
+    if intent_rows and not any(safe_str(r.get("intent_name")) and safe_str(r.get("keywords")) for r in intent_rows):
+        errors.append("intent_rows_missing_intent_name_or_keywords")
+
+    if service_rows and not any(
+        safe_str(r.get("service_id")) and safe_str(r.get("intent_name")) and safe_str(r.get("contact_id"))
+        for r in service_rows
+    ):
+        errors.append("service_rows_missing_service_id_intent_or_contact")
+
+    if alias_rows and not any(
+        safe_str(r.get("alias_text") or r.get("normalized_alias")) and
+        safe_str(r.get("location_id") or r.get("root_location"))
+        for r in alias_rows
+    ):
+        errors.append("alias_rows_missing_alias_or_target")
+
+    if errors:
+        logger.error(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_SNAPSHOT_FAILED_KEEP_OLD "
+            f"reason=validation_failed errors={json.dumps(errors, ensure_ascii=False)} "
+            f"meta={json.dumps(meta, ensure_ascii=False)}"
+        )
+        return False
+
+    return True
+
+
+def _build_routing_cache_snapshot(trace_id: str) -> Optional[dict]:
+    """
+    Build a fresh routing cache snapshot using local variables only.
+
+    Do not call warm_up_cache(), load_routing_master_records(), load_bot_config_map(),
+    get_location_alias_lookup(), or open_routing_spreadsheet() here because those paths
+    can read/write live shared caches.
+    """
+    try:
+        logger.info(f"[{trace_id}] ROUTING_CACHE_RELOAD_SNAPSHOT_START")
+
+        client = get_gspread_client(trace_id)
+        if not client:
+            raise RuntimeError("gspread_client_unavailable")
+
+        spreadsheet = gsheet_guarded_call(
+            trace_id,
+            "snapshot.client.open.routing",
+            client.open,
+            ROUTING_SPREADSHEET_NAME,
+        )
+
+        bot_config_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, BOT_CONFIG_SHEET_NAME)
+        if bot_config_rows is None:
+            raise RuntimeError("bot_config_fetch_failed")
+
+        config_map = _build_config_map_from_rows(bot_config_rows)
+
+        intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
+        service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
+        alias_sheet_name = resolve_location_alias_sheet_name(config_map, trace_id, "cache_v2_snapshot")
+        variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
+        canonical_sheet_name = safe_str(config_map.get("location_canonical_sheet"))
+        region_map_sheet_name = safe_str(config_map.get("location_region_map_sheet"))
+
+        intent_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, intent_sheet_name)
+        service_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, service_sheet_name)
+        alias_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, alias_sheet_name)
+        variant_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, variant_sheet_name)
+
+        if intent_rows is None or service_rows is None or alias_rows is None or variant_rows is None:
+            raise RuntimeError("critical_snapshot_sheet_fetch_failed")
+
+        canonical_rows = []
+        if canonical_sheet_name:
+            canonical_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, canonical_sheet_name)
+            if canonical_rows is None:
+                raise RuntimeError("canonical_sheet_fetch_failed")
+
+        region_rows = []
+        if region_map_sheet_name:
+            region_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, region_map_sheet_name)
+            if region_rows is None:
+                raise RuntimeError("region_map_sheet_fetch_failed")
+
+        alias_index = build_location_alias_index(alias_rows or [])
+        alias_lengths = {len(alias.split()) for alias in alias_index.keys() if alias} or {1}
+        canonical_index = build_canonical_location_index(canonical_rows or [])
+        region_index = build_region_map_index(region_rows or [])
+        fingerprint = _rows_fingerprint(alias_rows or [])
+
+        now_ts = _now_ts()
+
+        routing_master_records = {
+            BOT_CONFIG_SHEET_NAME: {"records": bot_config_rows, "loaded_at_ts": now_ts},
+            intent_sheet_name: {"records": intent_rows, "loaded_at_ts": now_ts},
+            service_sheet_name: {"records": service_rows, "loaded_at_ts": now_ts},
+            alias_sheet_name: {"records": alias_rows, "loaded_at_ts": now_ts},
+            variant_sheet_name: {"records": variant_rows, "loaded_at_ts": now_ts},
+        }
+
+        if canonical_sheet_name:
+            routing_master_records[canonical_sheet_name] = {"records": canonical_rows, "loaded_at_ts": now_ts}
+        if region_map_sheet_name:
+            routing_master_records[region_map_sheet_name] = {"records": region_rows, "loaded_at_ts": now_ts}
+
+        snapshot = {
+            "routing_spreadsheet": {
+                "spreadsheet": spreadsheet,
+                "loaded_at_ts": now_ts,
+            },
+            "routing_worksheet_objects": {},
+            "routing_config": {
+                "config_map": config_map,
+                "loaded_at_ts": now_ts,
+            },
+            "routing_master_records": routing_master_records,
+            "location_alias_lookup": {
+                "alias_index": alias_index,
+                "alias_lengths": alias_lengths,
+                "canonical_index": canonical_index,
+                "region_index": region_index,
+                "fingerprint": fingerprint,
+                "loaded_at_ts": now_ts,
+            },
+            "sim_fastpath_variant_rows": {
+                "rows": variant_rows,
+                "loaded_at_ts": now_ts,
+                "sheet_name": variant_sheet_name,
+            },
+            "_intent_rows": intent_rows,
+            "_service_rows": service_rows,
+            "_alias_rows": alias_rows,
+            "_meta": {
+                "intent_sheet": intent_sheet_name,
+                "service_sheet": service_sheet_name,
+                "alias_sheet": alias_sheet_name,
+                "canonical_sheet": canonical_sheet_name,
+                "region_map_sheet": region_map_sheet_name,
+                "variant_sheet": variant_sheet_name,
+                "intent_rows": len(intent_rows),
+                "service_rows": len(service_rows),
+                "alias_rows": len(alias_rows),
+                "canonical_rows": len(canonical_rows),
+                "region_rows": len(region_rows),
+                "variant_rows": len(variant_rows),
+            },
+        }
+
+        if not _validate_routing_cache_snapshot(snapshot, trace_id):
+            return None
+
+        logger.info(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_SNAPSHOT_OK "
+            f"meta={json.dumps(snapshot.get('_meta', {}), ensure_ascii=False)}"
+        )
+        return snapshot
+
+    except GSheetCircuitOpenError as exc:
+        logger.error(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_SNAPSHOT_FAILED_KEEP_OLD "
+            f"reason=gsheet_circuit_open exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+        )
+        return None
+    except Exception as exc:
+        logger.exception(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_SNAPSHOT_FAILED_KEEP_OLD "
+            f"reason=unexpected exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+        )
+        return None
+
+
+def _atomic_swap_routing_cache(snapshot: dict, trace_id: str) -> bool:
+    """
+    Swap routing cache references after snapshot is fully built and validated.
+
+    This is atomic-ish, not true atomic, because current runtime readers do not acquire
+    _ROUTING_CACHE_SWAP_LOCK. It still removes the V1 empty-cache window.
+    """
+    global _ROUTING_SPREADSHEET_SHARED_CACHE
+    global _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE
+    global _ROUTING_CONFIG_SHARED_CACHE
+    global _ROUTING_MASTER_RECORDS_SHARED_CACHE
+    global _LOCATION_ALIAS_LOOKUP_SHARED_CACHE
+    global _SIM_FASTPATH_VARIANT_ROWS_CACHE
+
+    with _ROUTING_CACHE_SWAP_LOCK:
+        _ROUTING_SPREADSHEET_SHARED_CACHE = snapshot["routing_spreadsheet"]
+        _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE = snapshot["routing_worksheet_objects"]
+        _ROUTING_CONFIG_SHARED_CACHE = snapshot["routing_config"]
+
+        with _ROUTING_MASTER_CACHE_LOCK:
+            _ROUTING_MASTER_RECORDS_SHARED_CACHE = snapshot["routing_master_records"]
+
+        _LOCATION_ALIAS_LOOKUP_SHARED_CACHE = snapshot["location_alias_lookup"]
+        _SIM_FASTPATH_VARIANT_ROWS_CACHE = snapshot["sim_fastpath_variant_rows"]
+
+    logger.info(
+        f"[{trace_id}] ROUTING_CACHE_RELOAD_ATOMIC_SWAP_DONE "
+        f"meta={json.dumps(snapshot.get('_meta', {}), ensure_ascii=False)}"
+    )
+    return True
+
+
+def _background_reload_worker(trace_id: str) -> None:
+    """
+    Background reload worker.
+
+    Guarantees:
+    - app.app_context() exists.
+    - _CACHE_RELOAD_RUNNING is released in finally.
+    - old cache is preserved if snapshot build/validation fails.
+    """
+    global _CACHE_RELOAD_RUNNING
+    global _CACHE_RELOAD_LAST_COMPLETE_TS
+    global _CACHE_RELOAD_LAST_TRACE_ID
+    global _CACHE_RELOAD_LAST_ERROR
+
+    started = time.perf_counter()
+    ok = False
+    error = ""
+
+    try:
+        with app.app_context():
+            snapshot = _build_routing_cache_snapshot(trace_id)
+            if snapshot is None:
+                error = "snapshot_failed_old_cache_kept"
+                logger.error(
+                    f"[{trace_id}] ROUTING_CACHE_RELOAD_DONE "
+                    f"status=failed reason={error} latency_ms={ms_since(started)}"
+                )
+                return
+
+            _atomic_swap_routing_cache(snapshot, trace_id)
+            ok = True
+            logger.info(
+                f"[{trace_id}] ROUTING_CACHE_RELOAD_DONE "
+                f"status=success warmup_ok=True latency_ms={ms_since(started)}"
+            )
+
+    except Exception as exc:
+        error = f"{type(exc).__name__}:{safe_str(exc)[:200]}"
+        logger.exception(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_BACKGROUND_EXCEPTION "
+            f"exception={error} latency_ms={ms_since(started)}"
+        )
+
+    finally:
+        with _CACHE_RELOAD_STATE_LOCK:
+            _CACHE_RELOAD_RUNNING = False
+            _CACHE_RELOAD_LAST_COMPLETE_TS = _now_ts()
+            _CACHE_RELOAD_LAST_TRACE_ID = trace_id
+            _CACHE_RELOAD_LAST_ERROR = "" if ok else (error or "reload_failed")
+
+        logger.info(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_BACKGROUND_WORKER_EXIT "
+            f"ok={ok} latency_ms={ms_since(started)}"
+        )
 
 def extract_location_token_guess(text: str, matched_keywords: List[str]) -> str:
     normalized = normalize_routing_text(text)
@@ -7415,88 +7752,104 @@ def internal_publish_sync():
 
 @app.route("/internal/reload-routing-cache", methods=["POST"])
 def internal_reload_routing_cache():
-    global _ROUTING_SPREADSHEET_SHARED_CACHE
-    global _ROUTING_CONFIG_SHARED_CACHE
-    global _LOCATION_ALIAS_LOOKUP_SHARED_CACHE
-    global _SIM_FASTPATH_VARIANT_ROWS_CACHE
+    global _CACHE_RELOAD_RUNNING
+    global _CACHE_RELOAD_LAST_TRACE_ID
+    global _CACHE_RELOAD_LAST_ERROR
 
     trace_id = make_trace_id()
     started = time.perf_counter()
+
     logger.info(f"[{trace_id}] ROUTING_CACHE_RELOAD_REQUESTED")
 
     if not verify_internal_sync_token(trace_id):
-        logger.error(f"[{trace_id}] ROUTING_CACHE_RELOAD_FORBIDDEN")
-        payload = {
+        logger.error(f"[{trace_id}] ROUTING_CACHE_RELOAD_FORBIDDEN reason=invalid_token")
+        return jsonify({
             "ok": False,
             "app_version": APP_VERSION,
             "trace_id": trace_id,
             "latency_ms": ms_since(started),
             "error": "unauthorized",
-        }
-        return jsonify(payload), 401
+        }), 401
 
-    cleared = []
+    force_reload = safe_str(request.headers.get("X-Force-Reload", "")).strip() == "1"
+
+    with _CACHE_RELOAD_STATE_LOCK:
+        if _CACHE_RELOAD_RUNNING:
+            logger.warning(
+                f"[{trace_id}] ROUTING_CACHE_RELOAD_ALREADY_RUNNING "
+                f"running_trace_id={_CACHE_RELOAD_LAST_TRACE_ID} force={force_reload}"
+            )
+            return jsonify({
+                "ok": False,
+                "app_version": APP_VERSION,
+                "trace_id": trace_id,
+                "latency_ms": ms_since(started),
+                "error": "reload_already_running",
+                "running_trace_id": _CACHE_RELOAD_LAST_TRACE_ID,
+            }), 409
+
+        elapsed_since_last = _now_ts() - float(_CACHE_RELOAD_LAST_COMPLETE_TS or 0.0)
+        if not force_reload and elapsed_since_last < CACHE_RELOAD_COOLDOWN_SECONDS:
+            remaining = max(0, int(CACHE_RELOAD_COOLDOWN_SECONDS - elapsed_since_last))
+            logger.warning(
+                f"[{trace_id}] ROUTING_CACHE_RELOAD_COOLDOWN "
+                f"remaining_seconds={remaining} cooldown={CACHE_RELOAD_COOLDOWN_SECONDS}"
+            )
+            return jsonify({
+                "ok": False,
+                "app_version": APP_VERSION,
+                "trace_id": trace_id,
+                "latency_ms": ms_since(started),
+                "error": "cooldown_active",
+                "cooldown_remaining_seconds": remaining,
+            }), 429
+
+        _CACHE_RELOAD_RUNNING = True
+        _CACHE_RELOAD_LAST_TRACE_ID = trace_id
+        _CACHE_RELOAD_LAST_ERROR = ""
+
     try:
-        logger.info(f"[{trace_id}] ROUTING_CACHE_RELOAD_CLEARING")
-
-        _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
-        cleared.append("routing_spreadsheet_shared_cache")
-
-        _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE.clear()
-        cleared.append("routing_worksheet_object_shared_cache")
-
-        _ROUTING_CONFIG_SHARED_CACHE = {"config_map": None, "loaded_at_ts": 0.0}
-        cleared.append("routing_config_shared_cache")
-
-        _ROUTING_MASTER_RECORDS_SHARED_CACHE.clear()
-        cleared.append("routing_master_records_shared_cache")
-
-        _LOCATION_ALIAS_LOOKUP_SHARED_CACHE = {
-            "alias_index": {},
-            "alias_lengths": set(),
-            "canonical_index": {},
-            "region_index": {},
-            "fingerprint": "",
-            "loaded_at_ts": 0.0,
-        }
-        cleared.append("location_alias_lookup_shared_cache")
-
-        _SIM_FASTPATH_VARIANT_ROWS_CACHE = {"rows": [], "loaded_at_ts": 0.0, "sheet_name": ""}
-        cleared.append("sim_fastpath_variant_rows_cache")
+        worker = threading.Thread(
+            target=_background_reload_worker,
+            args=(trace_id,),
+            name=f"dt79-cache-reload-{trace_id}",
+            daemon=True,
+        )
+        worker.start()
 
         logger.info(
-            f"[{trace_id}] ROUTING_CACHE_RELOAD_WARMING_UP "
-            f"cleared={json.dumps(cleared, ensure_ascii=False)}"
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_BACKGROUND_SPAWNED "
+            f"force={force_reload}"
         )
-        warmup_ok = bool(warm_up_cache(trace_id))
-        logger.info(
-            f"[{trace_id}] ROUTING_CACHE_RELOAD_DONE "
-            f"warmup_ok={warmup_ok} cleared={json.dumps(cleared, ensure_ascii=False)} "
-            f"latency_ms={ms_since(started)}"
-        )
-        payload = {
-            "ok": warmup_ok,
+
+        return jsonify({
+            "ok": True,
             "app_version": APP_VERSION,
             "trace_id": trace_id,
             "latency_ms": ms_since(started),
-            "cleared": cleared,
-            "warmup_ok": warmup_ok,
-        }
-        return jsonify(payload), (200 if warmup_ok else 207)
+            "status": "reload_started_background",
+            "force": force_reload,
+        }), 202
+
     except Exception as exc:
+        err = f"{type(exc).__name__}:{safe_str(exc)[:200]}"
+        with _CACHE_RELOAD_STATE_LOCK:
+            _CACHE_RELOAD_RUNNING = False
+            _CACHE_RELOAD_LAST_TRACE_ID = trace_id
+            _CACHE_RELOAD_LAST_ERROR = err
+
         logger.exception(
-            f"[{trace_id}] ROUTING_CACHE_RELOAD_FAILED "
-            f"exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_THREAD_SPAWN_FAILED "
+            f"exception={err}"
         )
-        payload = {
+
+        return jsonify({
             "ok": False,
             "app_version": APP_VERSION,
             "trace_id": trace_id,
             "latency_ms": ms_since(started),
-            "error": f"{type(exc).__name__}:{safe_str(exc)[:200]}",
-            "cleared": cleared,
-        }
-        return jsonify(payload), 500
+            "error": "thread_spawn_failed",
+        }), 500
 
 # --- SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
 _EVENT_INBOX_WORKER_STARTED = False
