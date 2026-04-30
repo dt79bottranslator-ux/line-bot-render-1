@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -456,6 +456,14 @@ _CACHE_RELOAD_LAST_COMPLETE_TS = 0.0
 _CACHE_RELOAD_LAST_TRACE_ID = ""
 _CACHE_RELOAD_LAST_ERROR = ""
 _ROUTING_CACHE_SWAP_LOCK = threading.RLock()
+
+# --- TENANT_HANDOFF_SAFETY_V1 ---
+VALIDATE_MIN_INTENT_ROWS = int(os.getenv("VALIDATE_MIN_INTENT_ROWS", "1").strip() or "1")
+VALIDATE_MIN_SERVICE_ROWS = int(os.getenv("VALIDATE_MIN_SERVICE_ROWS", "1").strip() or "1")
+VALIDATE_MIN_ALIAS_ROWS = int(os.getenv("VALIDATE_MIN_ALIAS_ROWS", "1").strip() or "1")
+VALIDATE_BLOCK_INVALID_SERVICE_REGION = os.getenv(
+    "VALIDATE_BLOCK_INVALID_SERVICE_REGION", "1"
+).strip().lower() not in {"0", "false", "no"}
 _ROUTING_MISS_HARVEST_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SLOWPATH_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
 _ROUTING_SHADOW_SUGGESTIONS_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
@@ -1810,6 +1818,428 @@ def _validate_routing_cache_snapshot(snapshot: dict, trace_id: str) -> bool:
     return True
 
 
+
+# --- TENANT_HANDOFF_SAFETY_V1 FUNCTIONS ---
+
+def _append_tenant_handoff_row_error(row_errors: list, sheet: str, row_index: int, error: str, **kwargs) -> None:
+    item = {
+        "sheet": safe_str(sheet),
+        "row_index": row_index,
+        "error": safe_str(error),
+    }
+    for key, value in kwargs.items():
+        if safe_str(value):
+            item[key] = safe_str(value)
+    row_errors.append(item)
+
+
+def _validate_routing_sheets_full(
+    trace_id: str,
+    config_map: Dict[str, str],
+    intent_rows: List[dict],
+    service_rows: List[dict],
+    alias_rows: List[dict],
+    canonical_rows: Optional[List[dict]] = None,
+    region_rows: Optional[List[dict]] = None,
+    variant_rows: Optional[List[dict]] = None,
+) -> dict:
+    """
+    TENANT_HANDOFF_SAFETY_V1 validator.
+    Pure function: no Google Sheets call and no cache/global mutation.
+    Blocks reload only for data loss / broken routing risks.
+    """
+    blocking_errors: List[str] = []
+    warnings: List[str] = []
+    row_errors: List[dict] = []
+
+    canonical_rows = canonical_rows or []
+    region_rows = region_rows or []
+    variant_rows = variant_rows or []
+
+    fallback_location = safe_str(config_map.get("fallback_location")) or ROUTING_FALLBACK_LOCATION
+    intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
+    service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
+    alias_sheet_name = safe_str(config_map.get("location_alias_sheet")) or LOCATION_ALIAS_MASTER_SHEET_NAME
+    canonical_sheet_name = safe_str(config_map.get("location_canonical_sheet")) or "LOCATION_CANONICAL_MASTER"
+    region_map_sheet_name = safe_str(config_map.get("location_region_map_sheet")) or "LOCATION_SERVICE_REGION_MAP"
+    variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
+
+    if not config_map:
+        blocking_errors.append("bot_config_empty_or_unreadable")
+
+    requested_alias_sheet = safe_str(config_map.get("location_alias_sheet"))
+    if requested_alias_sheet in LEGACY_LOCATION_ALIAS_SHEET_NAMES:
+        blocking_errors.append(f"bot_config_legacy_location_alias_sheet:{requested_alias_sheet}")
+
+    if not safe_str(config_map.get("intent_sheet")):
+        warnings.append("bot_config_missing_intent_sheet_using_default")
+    if not safe_str(config_map.get("service_sheet")):
+        warnings.append("bot_config_missing_service_sheet_using_default")
+    if not safe_str(config_map.get("location_alias_sheet")):
+        warnings.append("bot_config_missing_location_alias_sheet_using_default")
+    if not safe_str(config_map.get("location_canonical_sheet")):
+        warnings.append("bot_config_missing_location_canonical_sheet")
+    if not safe_str(config_map.get("location_region_map_sheet")):
+        warnings.append("bot_config_missing_location_region_map_sheet")
+    if not safe_str(config_map.get("variant_sheet")):
+        warnings.append("bot_config_missing_variant_sheet_using_default")
+
+    # INTENT_MASTER
+    valid_intent_names: set = set()
+    seen_intent_names: set = set()
+    duplicate_intent_names: set = set()
+
+    if len(intent_rows or []) < VALIDATE_MIN_INTENT_ROWS:
+        blocking_errors.append(
+            f"intent_rows_below_minimum count={len(intent_rows or [])} min={VALIDATE_MIN_INTENT_ROWS}"
+        )
+
+    for idx, row in enumerate(intent_rows or [], start=2):
+        intent_name = safe_str(row.get("intent_name"))
+        keywords_raw = safe_str(row.get("keywords"))
+
+        if not intent_name:
+            blocking_errors.append(f"intent_name_empty row={idx}")
+            _append_tenant_handoff_row_error(row_errors, intent_sheet_name, idx, "intent_name_empty")
+            continue
+
+        if intent_name in seen_intent_names:
+            duplicate_intent_names.add(intent_name)
+        seen_intent_names.add(intent_name)
+
+        if intent_name != "chat_general" and not keywords_raw:
+            blocking_errors.append(f"intent_keywords_empty:{intent_name}")
+            _append_tenant_handoff_row_error(
+                row_errors,
+                intent_sheet_name,
+                idx,
+                "keywords_empty",
+                intent_name=intent_name,
+            )
+        elif keywords_raw:
+            keywords = [safe_str(x) for x in keywords_raw.split(",") if safe_str(x)]
+            if not keywords and intent_name != "chat_general":
+                blocking_errors.append(f"intent_keywords_parse_empty:{intent_name}")
+            for keyword in keywords:
+                if len(normalize_routing_text(keyword)) < 2:
+                    warnings.append(f"intent_keyword_too_short:intent={intent_name}:keyword={keyword}")
+
+        valid_intent_names.add(intent_name)
+
+    for intent_name in sorted(duplicate_intent_names):
+        blocking_errors.append(f"intent_name_duplicate:{intent_name}")
+
+    if not valid_intent_names:
+        blocking_errors.append("intent_master_no_valid_intent_name")
+
+    # LOCATION_CANONICAL_MASTER
+    canonical_location_ids: set = set()
+    canonical_region_keys: set = set()
+    duplicate_canonical_ids: set = set()
+    seen_canonical_ids: set = set()
+
+    for idx, row in enumerate(canonical_rows, start=2):
+        location_id = safe_str(row.get("location_id"))
+        service_region_key = safe_str(row.get("service_region_key"))
+
+        if not location_id:
+            _append_tenant_handoff_row_error(row_errors, canonical_sheet_name, idx, "location_id_empty")
+            continue
+
+        if location_id in seen_canonical_ids:
+            duplicate_canonical_ids.add(location_id)
+        seen_canonical_ids.add(location_id)
+        canonical_location_ids.add(location_id)
+
+        if service_region_key:
+            canonical_region_keys.add(service_region_key)
+        else:
+            warnings.append(f"canonical_row_missing_service_region_key:location_id={location_id}")
+
+    for location_id in sorted(duplicate_canonical_ids):
+        blocking_errors.append(f"canonical_location_id_duplicate:{location_id}")
+
+    # LOCATION_SERVICE_REGION_MAP
+    region_map_location_ids: set = set()
+    region_map_keys: set = set()
+    duplicate_region_location_ids: set = set()
+    seen_region_location_ids: set = set()
+
+    for idx, row in enumerate(region_rows, start=2):
+        location_id = safe_str(row.get("location_id"))
+        service_region_key = safe_str(row.get("service_region_key"))
+
+        if not location_id:
+            _append_tenant_handoff_row_error(row_errors, region_map_sheet_name, idx, "location_id_empty")
+            continue
+
+        if location_id in seen_region_location_ids:
+            duplicate_region_location_ids.add(location_id)
+        seen_region_location_ids.add(location_id)
+        region_map_location_ids.add(location_id)
+
+        if not service_region_key:
+            _append_tenant_handoff_row_error(
+                row_errors,
+                region_map_sheet_name,
+                idx,
+                "service_region_key_empty",
+                location_id=location_id,
+            )
+        else:
+            region_map_keys.add(service_region_key)
+
+        if canonical_location_ids and location_id not in canonical_location_ids:
+            warnings.append(f"region_map_location_id_not_in_canonical:{location_id}")
+
+    for location_id in sorted(duplicate_region_location_ids):
+        warnings.append(f"region_map_location_id_duplicate:{location_id}")
+
+    all_valid_region_keys = region_map_keys | canonical_region_keys | {fallback_location}
+
+    # LOCATION_ALIAS_MASTER_V2
+    alias_location_ids: set = set()
+    alias_target_map: Dict[str, set] = {}
+
+    if len(alias_rows or []) < VALIDATE_MIN_ALIAS_ROWS:
+        blocking_errors.append(
+            f"alias_rows_below_minimum count={len(alias_rows or [])} min={VALIDATE_MIN_ALIAS_ROWS}"
+        )
+
+    for idx, row in enumerate(alias_rows or [], start=2):
+        alias_text = safe_str(row.get("normalized_alias") or row.get("alias_text"))
+        location_id = safe_str(row.get("location_id"))
+        root_location = safe_str(row.get("root_location"))
+
+        if not alias_text:
+            blocking_errors.append(f"alias_text_empty row={idx}")
+            _append_tenant_handoff_row_error(row_errors, alias_sheet_name, idx, "alias_text_empty")
+            continue
+
+        if not location_id and not root_location:
+            blocking_errors.append(f"alias_missing_location_target:{alias_text}")
+            _append_tenant_handoff_row_error(
+                row_errors,
+                alias_sheet_name,
+                idx,
+                "no_location_id_or_root_location",
+                alias_text=alias_text,
+            )
+
+        target = location_id or root_location
+        if target:
+            alias_target_map.setdefault(normalize_routing_text(alias_text), set()).add(target)
+
+        if location_id:
+            alias_location_ids.add(location_id)
+            if canonical_location_ids and location_id not in canonical_location_ids:
+                warnings.append(f"alias_location_id_not_in_canonical:{location_id}")
+
+    for alias, targets in alias_target_map.items():
+        if len(targets) > 1:
+            blocking_errors.append(
+                f"alias_conflict_different_targets:alias={alias}:targets={','.join(sorted(targets))}"
+            )
+
+    # SERVICE_MASTER
+    seen_service_ids: set = set()
+    duplicate_service_ids: set = set()
+    active_service_ids: set = set()
+    active_service_intent_names: set = set()
+    service_region_keys: set = set()
+    service_ids_with_empty_contact: List[str] = []
+    allowed_statuses = {"", "active", "inactive", "disabled", "paused"}
+
+    if len(service_rows or []) < VALIDATE_MIN_SERVICE_ROWS:
+        blocking_errors.append(
+            f"service_rows_below_minimum count={len(service_rows or [])} min={VALIDATE_MIN_SERVICE_ROWS}"
+        )
+
+    for idx, row in enumerate(service_rows or [], start=2):
+        service_id = safe_str(row.get("service_id"))
+        intent_name = safe_str(row.get("intent_name"))
+        contact_id = safe_str(row.get("contact_id"))
+        status = safe_str(row.get("service_status")).lower()
+        service_region_key = safe_str(row.get("service_region_key")) or safe_str(row.get("location"))
+
+        if not service_id:
+            blocking_errors.append(f"service_id_empty row={idx}")
+            _append_tenant_handoff_row_error(row_errors, service_sheet_name, idx, "service_id_empty")
+            continue
+
+        if service_id in seen_service_ids:
+            duplicate_service_ids.add(service_id)
+        seen_service_ids.add(service_id)
+
+        if status not in allowed_statuses:
+            blocking_errors.append(f"service_status_invalid:{service_id}:{status}")
+            _append_tenant_handoff_row_error(
+                row_errors,
+                service_sheet_name,
+                idx,
+                "service_status_invalid",
+                service_id=service_id,
+                service_status=status,
+            )
+
+        is_active = not status or status == "active"
+
+        if not intent_name:
+            blocking_errors.append(f"service_intent_name_empty:{service_id}")
+            _append_tenant_handoff_row_error(
+                row_errors,
+                service_sheet_name,
+                idx,
+                "intent_name_empty",
+                service_id=service_id,
+            )
+
+        if is_active:
+            active_service_ids.add(service_id)
+
+            if not contact_id:
+                service_ids_with_empty_contact.append(service_id)
+                blocking_errors.append(f"service_active_rows_missing_contact_id:{service_id}")
+                _append_tenant_handoff_row_error(
+                    row_errors,
+                    service_sheet_name,
+                    idx,
+                    "contact_id_empty_on_active_service",
+                    service_id=service_id,
+                )
+
+            if intent_name:
+                active_service_intent_names.add(intent_name)
+
+            if not service_region_key:
+                blocking_errors.append(f"service_region_key_empty:{service_id}")
+                _append_tenant_handoff_row_error(
+                    row_errors,
+                    service_sheet_name,
+                    idx,
+                    "service_region_key_empty",
+                    service_id=service_id,
+                )
+            else:
+                service_region_keys.add(service_region_key)
+
+    for service_id in sorted(duplicate_service_ids):
+        blocking_errors.append(f"service_id_duplicate:{service_id}")
+
+    if not active_service_ids:
+        blocking_errors.append("service_master_no_active_service")
+
+    intent_names_in_service_not_in_intent = sorted(
+        name for name in active_service_intent_names if name not in valid_intent_names
+    )
+    for intent_name in intent_names_in_service_not_in_intent:
+        blocking_errors.append(f"service_intent_name_not_in_intent_master:{intent_name}")
+
+    service_region_keys_not_in_region_map = sorted(
+        key for key in service_region_keys if key and key not in all_valid_region_keys
+    )
+    for key in service_region_keys_not_in_region_map:
+        message = f"service_region_key_not_in_region_map:{key}"
+        if VALIDATE_BLOCK_INVALID_SERVICE_REGION:
+            blocking_errors.append(message)
+        else:
+            warnings.append(message)
+
+    # SERVICE_VARIANT_MASTER
+    has_sim_intent = "sim_mang_di_dong" in valid_intent_names
+    variant_service_ids: set = set()
+    variant_missing_required: List[str] = []
+
+    for idx, row in enumerate(variant_rows or [], start=2):
+        service_id = safe_str(row.get("service_id"))
+        network = safe_str(row.get("network"))
+        duration = safe_str(row.get("duration"))
+        variant_type = safe_str(row.get("type"))
+        price = safe_str(row.get("price"))
+
+        if service_id:
+            variant_service_ids.add(service_id)
+
+        missing = []
+        if not service_id:
+            missing.append("service_id")
+        if not network:
+            missing.append("network")
+        if not duration:
+            missing.append("duration")
+        if not variant_type:
+            missing.append("type")
+
+        if missing:
+            variant_missing_required.append(f"row={idx}:missing={','.join(missing)}")
+            _append_tenant_handoff_row_error(
+                row_errors,
+                variant_sheet_name,
+                idx,
+                "variant_required_field_missing",
+                service_id=service_id,
+            )
+
+        if service_id and seen_service_ids and service_id not in seen_service_ids:
+            warnings.append(f"variant_service_id_not_in_service_master:{service_id}")
+
+        if variant_type and variant_type.lower() not in {"new", "renew"}:
+            warnings.append(f"variant_type_unexpected:row={idx}:type={variant_type}")
+
+        if not price:
+            warnings.append(f"variant_price_empty:row={idx}:service_id={service_id}")
+
+    if has_sim_intent and not variant_rows:
+        warnings.append("variant_rows_empty_but_sim_intent_exists")
+
+    if variant_missing_required:
+        warnings.append("variant_rows_missing_required_fields")
+
+    result = {
+        "blocking_errors": sorted(set(blocking_errors)),
+        "warnings": sorted(set(warnings)),
+        "row_errors": row_errors,
+        "cross_check": {
+            "intent_names_in_service_not_in_intent": intent_names_in_service_not_in_intent,
+            "service_ids_with_empty_contact": sorted(set(service_ids_with_empty_contact)),
+            "service_region_keys_not_in_region_map": service_region_keys_not_in_region_map,
+            "alias_location_ids_not_in_canonical": sorted(
+                lid for lid in alias_location_ids if canonical_location_ids and lid not in canonical_location_ids
+            ),
+            "duplicate_service_ids": sorted(duplicate_service_ids),
+            "duplicate_intent_names": sorted(duplicate_intent_names),
+            "variant_service_ids_not_in_service_master": sorted(
+                sid for sid in variant_service_ids if seen_service_ids and sid not in seen_service_ids
+            ),
+        },
+        "sheet_stats": {
+            "intent_count": len(intent_rows or []),
+            "service_count": len(service_rows or []),
+            "active_service_count": len(active_service_ids),
+            "alias_count": len(alias_rows or []),
+            "canonical_count": len(canonical_rows or []),
+            "region_count": len(region_rows or []),
+            "variant_count": len(variant_rows or []),
+        },
+    }
+
+    if result["row_errors"]:
+        logger.error(
+            f"[{trace_id}] TENANT_HANDOFF_ROW_VALIDATION_FAILED "
+            f"row_errors_count={len(result['row_errors'])}"
+        )
+
+    logger.info(
+        f"[{trace_id}] TENANT_HANDOFF_VALIDATE_RESULT "
+        f"blocking={len(result['blocking_errors'])} warnings={len(result['warnings'])} "
+        f"row_errors={len(result['row_errors'])} "
+        f"stats={json.dumps(result['sheet_stats'], ensure_ascii=False)}"
+    )
+
+    return result
+
+# --- END TENANT_HANDOFF_SAFETY_V1 FUNCTIONS ---
+
 def _build_routing_cache_snapshot(trace_id: str) -> Optional[dict]:
     """
     Build a fresh routing cache snapshot using local variables only.
@@ -1864,6 +2294,42 @@ def _build_routing_cache_snapshot(trace_id: str) -> Optional[dict]:
             region_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, region_map_sheet_name)
             if region_rows is None:
                 raise RuntimeError("region_map_sheet_fetch_failed")
+
+        # --- TENANT_HANDOFF_SAFETY_V1 RELOAD PRECHECK ---
+        precheck = _validate_routing_sheets_full(
+            trace_id=trace_id,
+            config_map=config_map,
+            intent_rows=intent_rows,
+            service_rows=service_rows,
+            alias_rows=alias_rows,
+            canonical_rows=canonical_rows,
+            region_rows=region_rows,
+            variant_rows=variant_rows,
+        )
+
+        if precheck.get("blocking_errors"):
+            logger.error(
+                f"[{trace_id}] TENANT_HANDOFF_SCHEMA_FAILED "
+                f"blocking_errors={json.dumps(precheck.get('blocking_errors') or [], ensure_ascii=False)} "
+                f"row_errors_count={len(precheck.get('row_errors') or [])}"
+            )
+            logger.error(
+                f"[{trace_id}] TENANT_HANDOFF_RELOAD_PRECHECK_BLOCKED "
+                f"reason=schema_failed"
+            )
+            logger.error(
+                f"[{trace_id}] ROUTING_CACHE_RELOAD_SNAPSHOT_FAILED_KEEP_OLD "
+                f"reason=tenant_handoff_schema_failed"
+            )
+            return None
+
+        logger.info(f"[{trace_id}] TENANT_HANDOFF_RELOAD_PRECHECK_ALLOWED")
+
+        if precheck.get("warnings"):
+            logger.warning(
+                f"[{trace_id}] TENANT_HANDOFF_SCHEMA_WARNINGS "
+                f"warnings={json.dumps(precheck.get('warnings') or [], ensure_ascii=False)}"
+            )
 
         alias_index = build_location_alias_index(alias_rows or [])
         alias_lengths = {len(alias.split()) for alias in alias_index.keys() if alias} or {1}
@@ -7849,6 +8315,141 @@ def internal_reload_routing_cache():
             "trace_id": trace_id,
             "latency_ms": ms_since(started),
             "error": "thread_spawn_failed",
+        }), 500
+
+
+# --- TENANT_HANDOFF_SAFETY_V1 ENDPOINT ---
+
+@app.route("/internal/validate-routing-sheets", methods=["POST"])
+def internal_validate_routing_sheets():
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+    logger.info(f"[{trace_id}] TENANT_HANDOFF_VALIDATE_REQUESTED")
+
+    if not verify_internal_sync_token(trace_id):
+        logger.error(f"[{trace_id}] TENANT_HANDOFF_VALIDATE_FORBIDDEN reason=invalid_token")
+        return jsonify({
+            "ok": False,
+            "verdict": "unauthorized",
+            "trace_id": trace_id,
+            "app_version": APP_VERSION,
+            "latency_ms": ms_since(started),
+            "error": "unauthorized",
+        }), 401
+
+    try:
+        client = get_gspread_client(trace_id)
+        if not client:
+            raise RuntimeError("gspread_client_unavailable")
+
+        spreadsheet = gsheet_guarded_call(
+            trace_id,
+            "tenant_handoff_validate.client.open.routing",
+            client.open,
+            ROUTING_SPREADSHEET_NAME,
+        )
+
+        bot_config_rows = _fetch_routing_sheet_rows_direct(
+            spreadsheet,
+            trace_id,
+            BOT_CONFIG_SHEET_NAME,
+        )
+        if bot_config_rows is None:
+            raise RuntimeError("bot_config_fetch_failed")
+
+        config_map = _build_config_map_from_rows(bot_config_rows)
+
+        intent_sheet_name = safe_str(config_map.get("intent_sheet")) or INTENT_MASTER_SHEET_NAME
+        service_sheet_name = safe_str(config_map.get("service_sheet")) or SERVICE_MASTER_SHEET_NAME
+        alias_sheet_name = resolve_location_alias_sheet_name(config_map, trace_id, "tenant_handoff_validate")
+        variant_sheet_name = safe_str(config_map.get("variant_sheet")) or SERVICE_VARIANT_MASTER_SHEET_NAME
+        canonical_sheet_name = safe_str(config_map.get("location_canonical_sheet"))
+        region_map_sheet_name = safe_str(config_map.get("location_region_map_sheet"))
+
+        intent_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, intent_sheet_name)
+        service_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, service_sheet_name)
+        alias_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, alias_sheet_name)
+        variant_rows = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, variant_sheet_name)
+
+        if intent_rows is None or service_rows is None or alias_rows is None or variant_rows is None:
+            raise RuntimeError("critical_routing_sheet_fetch_failed")
+
+        canonical_rows = []
+        if canonical_sheet_name:
+            fetched = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, canonical_sheet_name)
+            if fetched is None:
+                raise RuntimeError(f"canonical_sheet_fetch_failed:{canonical_sheet_name}")
+            canonical_rows = fetched
+
+        region_rows = []
+        if region_map_sheet_name:
+            fetched = _fetch_routing_sheet_rows_direct(spreadsheet, trace_id, region_map_sheet_name)
+            if fetched is None:
+                raise RuntimeError(f"region_map_sheet_fetch_failed:{region_map_sheet_name}")
+            region_rows = fetched
+
+        result = _validate_routing_sheets_full(
+            trace_id=trace_id,
+            config_map=config_map,
+            intent_rows=intent_rows,
+            service_rows=service_rows,
+            alias_rows=alias_rows,
+            canonical_rows=canonical_rows,
+            region_rows=region_rows,
+            variant_rows=variant_rows,
+        )
+
+        schema_ok = len(result.get("blocking_errors") or []) == 0
+
+        if schema_ok:
+            logger.info(f"[{trace_id}] TENANT_HANDOFF_SCHEMA_OK")
+            logger.info(f"[{trace_id}] TENANT_HANDOFF_DRY_RUN_OK")
+        else:
+            logger.error(
+                f"[{trace_id}] TENANT_HANDOFF_SCHEMA_FAILED "
+                f"blocking_errors={json.dumps(result.get('blocking_errors') or [], ensure_ascii=False)}"
+            )
+            logger.error(f"[{trace_id}] TENANT_HANDOFF_DRY_RUN_FAILED")
+
+        return jsonify({
+            "ok": schema_ok,
+            "verdict": "schema_ok" if schema_ok else "schema_failed",
+            "trace_id": trace_id,
+            "app_version": APP_VERSION,
+            "latency_ms": ms_since(started),
+            "blocking_errors": result.get("blocking_errors") or [],
+            "warnings": result.get("warnings") or [],
+            "row_errors": result.get("row_errors") or [],
+            "cross_check": result.get("cross_check") or {},
+            "sheet_stats": result.get("sheet_stats") or {},
+        }), 200
+
+    except GSheetCircuitOpenError as exc:
+        logger.error(
+            f"[{trace_id}] TENANT_HANDOFF_VALIDATE_FAILED "
+            f"reason=gsheet_circuit_open exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+        )
+        return jsonify({
+            "ok": False,
+            "verdict": "gsheet_unavailable",
+            "trace_id": trace_id,
+            "app_version": APP_VERSION,
+            "latency_ms": ms_since(started),
+            "error": "gsheet_circuit_open",
+        }), 503
+
+    except Exception as exc:
+        logger.exception(
+            f"[{trace_id}] TENANT_HANDOFF_VALIDATE_FAILED "
+            f"exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+        )
+        return jsonify({
+            "ok": False,
+            "verdict": "internal_error",
+            "trace_id": trace_id,
+            "app_version": APP_VERSION,
+            "latency_ms": ms_since(started),
+            "error": f"{type(exc).__name__}:{safe_str(exc)[:200]}",
         }), 500
 
 # --- SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
