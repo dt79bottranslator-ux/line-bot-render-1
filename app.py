@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -7412,6 +7412,91 @@ def internal_publish_sync():
         "result": sync_result,
     }
     return jsonify(payload), status_code
+
+@app.route("/internal/reload-routing-cache", methods=["POST"])
+def internal_reload_routing_cache():
+    global _ROUTING_SPREADSHEET_SHARED_CACHE
+    global _ROUTING_CONFIG_SHARED_CACHE
+    global _LOCATION_ALIAS_LOOKUP_SHARED_CACHE
+    global _SIM_FASTPATH_VARIANT_ROWS_CACHE
+
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+    logger.info(f"[{trace_id}] ROUTING_CACHE_RELOAD_REQUESTED")
+
+    if not verify_internal_sync_token(trace_id):
+        logger.error(f"[{trace_id}] ROUTING_CACHE_RELOAD_FORBIDDEN")
+        payload = {
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": ms_since(started),
+            "error": "unauthorized",
+        }
+        return jsonify(payload), 401
+
+    cleared = []
+    try:
+        logger.info(f"[{trace_id}] ROUTING_CACHE_RELOAD_CLEARING")
+
+        _ROUTING_SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
+        cleared.append("routing_spreadsheet_shared_cache")
+
+        _ROUTING_WORKSHEET_OBJECT_SHARED_CACHE.clear()
+        cleared.append("routing_worksheet_object_shared_cache")
+
+        _ROUTING_CONFIG_SHARED_CACHE = {"config_map": None, "loaded_at_ts": 0.0}
+        cleared.append("routing_config_shared_cache")
+
+        _ROUTING_MASTER_RECORDS_SHARED_CACHE.clear()
+        cleared.append("routing_master_records_shared_cache")
+
+        _LOCATION_ALIAS_LOOKUP_SHARED_CACHE = {
+            "alias_index": {},
+            "alias_lengths": set(),
+            "canonical_index": {},
+            "region_index": {},
+            "fingerprint": "",
+            "loaded_at_ts": 0.0,
+        }
+        cleared.append("location_alias_lookup_shared_cache")
+
+        _SIM_FASTPATH_VARIANT_ROWS_CACHE = {"rows": [], "loaded_at_ts": 0.0, "sheet_name": ""}
+        cleared.append("sim_fastpath_variant_rows_cache")
+
+        logger.info(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_WARMING_UP "
+            f"cleared={json.dumps(cleared, ensure_ascii=False)}"
+        )
+        warmup_ok = bool(warm_up_cache(trace_id))
+        logger.info(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_DONE "
+            f"warmup_ok={warmup_ok} cleared={json.dumps(cleared, ensure_ascii=False)} "
+            f"latency_ms={ms_since(started)}"
+        )
+        payload = {
+            "ok": warmup_ok,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": ms_since(started),
+            "cleared": cleared,
+            "warmup_ok": warmup_ok,
+        }
+        return jsonify(payload), (200 if warmup_ok else 207)
+    except Exception as exc:
+        logger.exception(
+            f"[{trace_id}] ROUTING_CACHE_RELOAD_FAILED "
+            f"exception={type(exc).__name__}:{safe_str(exc)[:200]}"
+        )
+        payload = {
+            "ok": False,
+            "app_version": APP_VERSION,
+            "trace_id": trace_id,
+            "latency_ms": ms_since(started),
+            "error": f"{type(exc).__name__}:{safe_str(exc)[:200]}",
+            "cleared": cleared,
+        }
+        return jsonify(payload), 500
 
 # --- SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
 _EVENT_INBOX_WORKER_STARTED = False
