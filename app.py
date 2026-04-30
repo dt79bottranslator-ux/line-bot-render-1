@@ -224,7 +224,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -4066,8 +4066,39 @@ def get_event_user_id(event: dict) -> str:
     return safe_str(source.get("userId"))
 
 def get_event_source_type(event: dict) -> str:
+    """Resolve LINE source type with shape fallback.
+
+    LINE should provide source.type, but group-safe must not depend only on that field.
+    If groupId/roomId exists, treat it as group/room even when source.type is blank/malformed.
+    """
     source = (event or {}).get("source") or {}
-    return safe_str(source.get("type")).lower()
+    raw_type = safe_str(source.get("type")).lower()
+    if raw_type in {"user", "group", "room"}:
+        return raw_type
+    if safe_str(source.get("groupId")):
+        return "group"
+    if safe_str(source.get("roomId")):
+        return "room"
+    if safe_str(source.get("userId")):
+        return "user"
+    return raw_type or "unknown"
+
+def get_event_source_context(event: dict) -> dict:
+    source = (event or {}).get("source") or {}
+    raw_type = safe_str(source.get("type")).lower()
+    resolved_type = get_event_source_type(event)
+    group_id_present = bool(safe_str(source.get("groupId")))
+    room_id_present = bool(safe_str(source.get("roomId")))
+    user_id_present = bool(safe_str(source.get("userId")))
+    return {
+        "raw_type": raw_type or "unknown",
+        "resolved_type": resolved_type,
+        "group_id_present": group_id_present,
+        "room_id_present": room_id_present,
+        "user_id_present": user_id_present,
+        "group_hash": stable_hash(source.get("groupId")) if group_id_present else "",
+        "room_hash": stable_hash(source.get("roomId")) if room_id_present else "",
+    }
 
 def is_group_or_room_event(event: dict) -> bool:
     return get_event_source_type(event) in {"group", "room"}
@@ -4154,6 +4185,65 @@ def build_group_safe_silent_result(user_id: str, reason: str = "group_safe_silen
         "reason": safe_str(reason) or "group_safe_silent",
     }
 
+
+def set_group_safe_runtime_context(event: dict, trace_id: str, text: str, source_type: str, user_id: str) -> None:
+    """Store per-event group-safe context for final LINE send guard."""
+    try:
+        g.dt79_source_type = safe_str(source_type).lower()
+        g.dt79_group_safe_text_fp = message_fingerprint(text)
+        g.dt79_group_safe_user_ref = user_ref(user_id)
+        g.dt79_group_safe_reply_allowed = not is_group_safe_source_type(source_type)
+        g.dt79_group_safe_reason = "private_source" if not is_group_safe_source_type(source_type) else "pending_gate"
+        source_ctx = get_event_source_context(event)
+        logger.info(
+            f"[{trace_id}] LINE_SOURCE_CONTEXT "
+            f"source_type={source_ctx.get('resolved_type')} "
+            f"raw_source_type={source_ctx.get('raw_type')} "
+            f"group_id_present={source_ctx.get('group_id_present')} "
+            f"room_id_present={source_ctx.get('room_id_present')} "
+            f"user_id_present={source_ctx.get('user_id_present')} "
+            f"group_hash={source_ctx.get('group_hash')} "
+            f"room_hash={source_ctx.get('room_hash')} "
+            f"user_ref={user_ref(user_id)}"
+        )
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] GROUP_SAFE_CONTEXT_SET_FAILED exception={type(exc).__name__}:{exc}")
+
+def set_group_safe_reply_allowed(trace_id: str, allowed: bool, reason: str) -> None:
+    try:
+        g.dt79_group_safe_reply_allowed = bool(allowed)
+        g.dt79_group_safe_reason = safe_str(reason) or ("allowed" if allowed else "blocked")
+        logger.info(
+            f"[{trace_id}] GROUP_SAFE_RUNTIME_DECISION "
+            f"allowed={bool(allowed)} reason={safe_str(reason)} "
+            f"source_type={safe_str(getattr(g, 'dt79_source_type', '')) or 'unknown'} "
+            f"text_fp={safe_str(getattr(g, 'dt79_group_safe_text_fp', ''))}"
+        )
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] GROUP_SAFE_RUNTIME_DECISION_FAILED exception={type(exc).__name__}:{exc}")
+
+def should_suppress_group_reply_at_send(trace_id: str) -> bool:
+    """Last-line defense: never send LINE reply from group/room unless dispatch explicitly allowed it."""
+    try:
+        if not is_group_safe_mode_enabled():
+            return False
+        source_type = safe_str(getattr(g, "dt79_source_type", "")).lower()
+        if not is_group_safe_source_type(source_type):
+            return False
+        allowed = bool(getattr(g, "dt79_group_safe_reply_allowed", False))
+        if allowed:
+            return False
+        logger.info(
+            f"[{trace_id}] GROUP_SAFE_REPLY_SUPPRESSED "
+            f"source_type={source_type} "
+            f"reason={safe_str(getattr(g, 'dt79_group_safe_reason', 'not_explicitly_allowed'))} "
+            f"text_fp={safe_str(getattr(g, 'dt79_group_safe_text_fp', ''))}"
+        )
+        return True
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] GROUP_SAFE_REPLY_SUPPRESS_CHECK_FAILED exception={type(exc).__name__}:{exc}")
+        return False
+
 def get_event_type(event: dict) -> str:
     return safe_str(event.get("type")).lower()
 def get_message_type(event: dict) -> str:
@@ -4188,6 +4278,8 @@ def reply_line_text(reply_token: str, text: str, trace_id: str, language_group: 
         return False
     if not reply_token:
         logger.error(f"[{trace_id}] LINE_REPLY_TOKEN_MISSING_REPLY_TOKEN")
+        return False
+    if should_suppress_group_reply_at_send(trace_id):
         return False
     text = safe_str(text)[:LINE_TEXT_HARD_LIMIT] or t(language_group, "busy")
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
@@ -4801,7 +4893,7 @@ def get_mt_translation_worksheet(trace_id: str, worksheet_name: str):
 
 def get_source_id_from_event(event: dict) -> Tuple[str, str]:
     source = (event or {}).get("source") or {}
-    source_type = safe_str(source.get("type")).lower()
+    source_type = get_event_source_type(event)
     if source_type == "user":
         return safe_str(source.get("userId")), "user"
     if source_type == "group":
@@ -6050,6 +6142,8 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         return build_group_safe_silent_result(user_id, "routing_result_not_routed")
 
     reply_text = safe_str(routing_result.get("reply_text")) or build_default_intent_reply(text, current_language, trace_id)
+    if is_group_safe_source_type(source_type):
+        set_group_safe_reply_allowed(trace_id, True, "service_routing_before_mt_routed")
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, current_language)
     service_row = routing_result.get("service_row") or {}
 
@@ -6118,10 +6212,19 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     text = get_message_text(event)
     normalized = normalize_command_text(text)
     source_type = get_event_source_type(event)
-    logger.info(f"[{trace_id}] LINE_SOURCE_CONTEXT source_type={safe_str(source_type) or 'unknown'} user_ref={user_ref(user_id)}")
+    set_group_safe_runtime_context(event, trace_id, text, source_type, user_id)
     group_safe_decision = evaluate_group_safe_gate(event, trace_id, text, source_type, normalized)
     if not group_safe_decision.get("allow"):
+        set_group_safe_reply_allowed(trace_id, False, safe_str(group_safe_decision.get("reason")) or "group_safe_silent")
         return build_group_safe_silent_result(user_id, safe_str(group_safe_decision.get("reason")) or "group_safe_silent")
+    if is_group_safe_source_type(source_type):
+        # GROUP_SAFE_FALLTHROUGH_FIX_V1:
+        # Gate may allow a message because it has a weak service keyword.
+        # Do not permit LINE send yet. Only confirmed routing or explicit commands
+        # may flip this flag back to True.
+        set_group_safe_reply_allowed(trace_id, False, "pending_confirmed_routing")
+    else:
+        set_group_safe_reply_allowed(trace_id, True, safe_str(group_safe_decision.get("reason")) or "gate_allowed")
     if not check_user_rate_limit(user_id, trace_id):
         reply_sent = reply_line_text(reply_token, USER_RATE_LIMIT_REPLY_TEXT, trace_id, "vi") if reply_token else False
         return {
@@ -6146,6 +6249,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     if pre_mt_routing_result:
         return pre_mt_routing_result
 
+    if is_group_safe_source_type(source_type) and parse_translation_command(text).get("is_translation"):
+        set_group_safe_reply_allowed(trace_id, True, "explicit_translation_command")
     mt_translation_result = handle_mt_translation_message(event, trace_id)
     if mt_translation_result:
         return mt_translation_result
@@ -6157,6 +6262,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     logger.info(f"[{trace_id}] LINE_TEXT_DISPATCH user_ref={user_ref(user_id)} reply_token_present={bool(reply_token)} text_fp={message_fingerprint(text)} normalized_fp={message_fingerprint(normalized)} current_flow={current_flow} current_language={current_language}")
     reply_language = current_language
     if normalized == WORKER_ENTRY_COMMAND:
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_command_worker")
         persist_ok = persist_user_flow(user_id, FLOW_WORKER, trace_id)
         if not persist_ok:
             logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/worker user_ref={user_ref(user_id)}")
@@ -6171,6 +6278,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                 f"runtime_write_enabled={WORKER_CASES_RUNTIME_WRITE_ENABLED}"
             )
     elif normalized == ADS_ENTRY_COMMAND:
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_command_ads")
         persist_ok = persist_user_flow(user_id, FLOW_ADS, trace_id)
         if not persist_ok:
             logger.error(f"[{trace_id}] USER_STATE_PERSIST_FAILED command=/ads user_ref={user_ref(user_id)}")
@@ -6180,6 +6289,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             reply_text, ads_read_ok = load_ads_reply_message(user_id, current_language, trace_id)
             flow_used = FLOW_ADS if ads_read_ok else "ads_read_failed"
     elif normalized in {RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND}:
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_command_reset_exit")
         clear_ok = clear_user_flow(user_id, trace_id)
         if not clear_ok:
             logger.error(f"[{trace_id}] USER_STATE_CLEAR_FAILED command={normalized} user_ref={user_ref(user_id)}")
@@ -6189,12 +6300,18 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             reply_text = handle_reset_message(current_language) if normalized == RESET_ENTRY_COMMAND else handle_exit_message(current_language)
             flow_used = "cleared"
     elif normalized == STATUS_ENTRY_COMMAND:
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_command_status")
         reply_text = handle_status_message(current_flow, current_language)
         flow_used = current_flow or "none"
     elif normalized == HELP_ENTRY_COMMAND:
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_command_help")
         reply_text = handle_help_message(current_language)
         flow_used = current_flow or "help"
     elif normalized.startswith(LANG_COMMAND_PREFIX):
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_command_lang")
         if requested_language:
             persist_ok = persist_user_language(user_id, requested_language, trace_id)
             if not persist_ok:
@@ -6219,6 +6336,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             reply_text = handle_lang_invalid_message(current_language)
             flow_used = current_flow or "lang_invalid"
     elif parse_translation_command(text).get("is_translation"):
+        if is_group_safe_source_type(source_type):
+            set_group_safe_reply_allowed(trace_id, True, "explicit_translation")
         reply_text, translation_status = build_translation_command_reply(text, trace_id)
         flow_used = f"translation_command_{translation_status}"
     elif current_flow == FLOW_WORKER:
@@ -6251,6 +6370,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                         f"intent_name={safe_str(routing_result.get('intent_name'))} text_fp={message_fingerprint(text)}"
                     )
                     return build_group_safe_silent_result(user_id, "ads_auto_cleared_routing_not_routed")
+                if is_group_safe_source_type(source_type):
+                    set_group_safe_reply_allowed(trace_id, True, "ads_auto_cleared_routing_result_routed")
                 reply_text = routing_result["reply_text"]
                 flow_used = "ads_auto_cleared_routed"
             else:
@@ -6276,6 +6397,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                         f"intent_name={safe_str(routing_result.get('intent_name'))} text_fp={message_fingerprint(text)}"
                     )
                     return build_group_safe_silent_result(user_id, "routing_not_routed")
+                if is_group_safe_source_type(source_type):
+                    set_group_safe_reply_allowed(trace_id, True, "routing_result_routed")
                 reply_text = routing_result["reply_text"]
                 flow_used = "routing"
             else:
@@ -6284,6 +6407,13 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
                     return build_group_safe_silent_result(user_id, "no_routing_result")
                 reply_text = build_default_intent_reply(text, current_language, trace_id)
                 flow_used = "default"
+    if is_group_safe_source_type(source_type) and should_suppress_group_reply_at_send(trace_id):
+        logger.info(
+            f"[{trace_id}] GROUP_SAFE_BLOCKED_UNCLEAR "
+            f"source_type={safe_str(source_type)} reason=final_pre_send_guard "
+            f"flow_used={safe_str(flow_used)} text_fp={message_fingerprint(text)}"
+        )
+        return build_group_safe_silent_result(user_id, "final_pre_send_guard")
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, reply_language)
     if routing_result and routing_result.get("service_row"):
         if not is_private_source_type(source_type):
@@ -7444,6 +7574,17 @@ def process_event_inbox_item(row: dict, worker_trace_id: str) -> None:
         event = json.loads(row.get("raw_payload_json") or "{}")
         if not isinstance(event, dict):
             raise ValueError("event_payload_not_dict")
+        source_ctx = get_event_source_context(event)
+        logger.info(
+            f"[{trace_id}] EVENT_INBOX_SOURCE_CONTEXT "
+            f"source_type={source_ctx.get('resolved_type')} "
+            f"raw_source_type={source_ctx.get('raw_type')} "
+            f"group_id_present={source_ctx.get('group_id_present')} "
+            f"room_id_present={source_ctx.get('room_id_present')} "
+            f"user_id_present={source_ctx.get('user_id_present')} "
+            f"group_hash={source_ctx.get('group_hash')} "
+            f"room_hash={source_ctx.get('room_hash')}"
+        )
         with app.app_context():
             tenant_id = set_current_tenant_id_from_event(event, trace_id)
             set_current_event_ref(event_id)
@@ -7524,6 +7665,17 @@ def callback():
     results = []
     try:
         for event in events:
+            source_ctx = get_event_source_context(event)
+            logger.info(
+                f"[{trace_id}] CALLBACK_EVENT_SOURCE_CONTEXT "
+                f"source_type={source_ctx.get('resolved_type')} "
+                f"raw_source_type={source_ctx.get('raw_type')} "
+                f"group_id_present={source_ctx.get('group_id_present')} "
+                f"room_id_present={source_ctx.get('room_id_present')} "
+                f"user_id_present={source_ctx.get('user_id_present')} "
+                f"group_hash={source_ctx.get('group_hash')} "
+                f"room_hash={source_ctx.get('room_hash')}"
+            )
             tenant_id = set_current_tenant_id_from_event(event, trace_id)
             event_id = insert_event_inbox(event, trace_id, tenant_id)
             set_current_event_ref(event_id)
