@@ -8853,5 +8853,8 @@ try:
 except Exception as exc:
     logger.exception(f"APP_WARM_UP_CACHE_FAILED exception={type(exc).__name__}:{exc}")
 
+from dashboard_api import dashboard_bp
+app.register_blueprint(dashboard_bp)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
