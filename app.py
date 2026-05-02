@@ -229,7 +229,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -891,26 +891,37 @@ def find_first_row_index_by_column_value(ws, column_name: str, expected_value: s
     values = get_all_values_safe(ws, trace_id, worksheet_name)
     if not values:
         return 0
-    if identity_column and identity_value and not _verify_row_identity(values, row_index, identity_column, identity_value):
-        logger.error(
-            f"[{trace_id}] ROW_DRIFT_DETECTED worksheet_name={worksheet_name} row_index={row_index} "
-            f"identity_column={identity_column}"
-        )
-        return False
+
     headers = values[0]
     header_map = build_header_index_map(headers)
     target_idx = header_map.get(normalize_header_key(column_name))
+
     if target_idx is None:
-        logger.error(f"[{trace_id}] FIND_ROW_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
+        logger.error(
+            f"[{trace_id}] FIND_ROW_COLUMN_MISSING "
+            f"worksheet_name={worksheet_name} column_name={column_name}"
+        )
         return 0
+
     expected = safe_str(expected_value)
+
     for row_idx, row in enumerate(values[1:], start=2):
         cell_value = safe_str(row[target_idx]) if target_idx < len(row) else ""
         if cell_value == expected:
-            logger.info(f"[{trace_id}] FIND_ROW_OK worksheet_name={worksheet_name} column_name={column_name} expected_value={expected_value} row_index={row_idx}")
+            logger.info(
+                f"[{trace_id}] FIND_ROW_OK "
+                f"worksheet_name={worksheet_name} column_name={column_name} "
+                f"expected_value={expected_value} row_index={row_idx}"
+            )
             return row_idx
-    logger.info(f"[{trace_id}] FIND_ROW_NOT_FOUND worksheet_name={worksheet_name} column_name={column_name} expected_value={expected_value}")
+
+    logger.info(
+        f"[{trace_id}] FIND_ROW_NOT_FOUND "
+        f"worksheet_name={worksheet_name} column_name={column_name} "
+        f"expected_value={expected_value}"
+    )
     return 0
+
 def _verify_row_identity(values: List[List[str]], row_index: int, identity_column: str, identity_value: str) -> bool:
     if not values or row_index < 2 or row_index > len(values):
         return False
@@ -4297,6 +4308,38 @@ def ensure_processed_event_worksheet(trace_id: str):
             logger.exception(f"[{trace_id}] PROCESSED_EVENT_HEADERS_INIT_FAILED exception={type(e).__name__}:{e}")
             return None
         return ws
+
+    # --- PROCESSED_EVENT_HEADERS_BACKFILL_V1 ---
+    # Backfill legacy processed_event_state headers so reclaimed rows can update
+    # reply_token_hash/user_ref/event_type without failing the execution layer.
+    current_headers = [safe_str(v) for v in (values[0] if values else [])]
+    current_header_keys = {normalize_header_key(v) for v in current_headers if safe_str(v)}
+    required_header_keys = {normalize_header_key(v) for v in PROCESSED_EVENT_HEADERS}
+    missing_headers = [h for h in PROCESSED_EVENT_HEADERS if normalize_header_key(h) not in current_header_keys]
+    if missing_headers:
+        try:
+            end_col_letter = chr(ord("A") + len(PROCESSED_EVENT_HEADERS) - 1)
+            target_range = f"A1:{end_col_letter}1"
+            gsheet_guarded_call(
+                trace_id,
+                f"worksheet.update_headers.{PROCESSED_EVENT_SHEET_NAME}",
+                ws.update,
+                target_range,
+                [PROCESSED_EVENT_HEADERS],
+                value_input_option="USER_ENTERED",
+            )
+            _invalidate_worksheet_caches(PROCESSED_EVENT_SHEET_NAME)
+            logger.warning(
+                f"[{trace_id}] PROCESSED_EVENT_HEADERS_BACKFILLED "
+                f"worksheet_name={PROCESSED_EVENT_SHEET_NAME} "
+                f"missing={json.dumps(missing_headers, ensure_ascii=False)}"
+            )
+        except Exception as e:
+            logger.exception(
+                f"[{trace_id}] PROCESSED_EVENT_HEADERS_BACKFILL_FAILED "
+                f"exception={type(e).__name__}:{e}"
+            )
+            return None
     return ws
 def get_event_unique_key(event: dict) -> str:
     tenant_id = resolve_tenant_id_from_event(event)
