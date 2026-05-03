@@ -1,7 +1,7 @@
 # dashboard_api.py
 # DT79 Internal Dashboard — read-only API
 # Spec: DT79_Dashboard_Coder_Spec V5 + I18N Final
-# Runtime patch: copy-safe redaction + lazy helper loading + internal error logging.
+# Runtime patch: copy-safe redaction + lazy helper loading + internal error logging + access audit.
 #
 # CẤM: không import LINE reply, webhook, send, reply, push.
 # CẤM: không import SIM fastpath hoặc tenant routing.
@@ -63,6 +63,60 @@ def _safe_str(value):
     except Exception:
         return str(value).strip() if value is not None else ""
 
+
+# ─────────────────────────────────────────
+# Access audit — log-only, fail-safe, no token/raw payload
+# ─────────────────────────────────────────
+
+def _get_dashboard_trace_id():
+    """
+    Reuse one trace_id per dashboard request.
+
+    Stored on Flask request environ to avoid global state and to prevent
+    different trace ids between auth audit and endpoint data fetch.
+    """
+    try:
+        trace_id = request.environ.get("DT79_DASHBOARD_TRACE_ID")
+        if not trace_id:
+            trace_id = _get_dashboard_trace_id()
+            request.environ["DT79_DASHBOARD_TRACE_ID"] = trace_id
+        return trace_id
+    except Exception:
+        return "trc_dashboard_unavailable"
+
+
+def _response_status_code(response):
+    """Best-effort status extraction; never raises."""
+    try:
+        if isinstance(response, tuple) and len(response) >= 2:
+            return int(response[1])
+        return int(getattr(response, "status_code", 200))
+    except Exception:
+        return 0
+
+
+def _log_dashboard_access(trace_id, endpoint, method, auth_result, status_code):
+    """
+    Render-log audit only.
+
+    CẤM ghi:
+    - DASHBOARD_SECRET
+    - Authorization header
+    - raw headers
+    - raw payload
+    - response rows
+    - LINE/user/group identifiers
+    """
+    try:
+        logger.info(
+            f"[{trace_id}] DASHBOARD_ACCESS_AUDIT "
+            f"endpoint={endpoint} method={method} "
+            f"auth={auth_result} status={status_code}"
+        )
+    except Exception:
+        # Audit must never block dashboard response.
+        pass
+
 # ─────────────────────────────────────────
 # Auth — fail-closed
 # ─────────────────────────────────────────
@@ -72,18 +126,42 @@ def require_dashboard_auth(f):
     Fail-closed auth decorator.
     DASHBOARD_SECRET env var bắt buộc phải set.
     Authorization header phải là: Bearer <DASHBOARD_SECRET>.
+
+    Access audit chỉ ghi metadata an toàn vào Render log.
+    Không ghi token/header/payload/rows.
     """
     @functools.wraps(f)
     def decorated(*args, **kwargs):
+        trace_id = _get_dashboard_trace_id()
+        endpoint = request.path
+        method = request.method
+
         secret = os.environ.get("DASHBOARD_SECRET", "").strip()
         if not secret:
-            return jsonify({"error": "unauthorized"}), 401
+            response = jsonify({"error": "unauthorized"}), 401
+            _log_dashboard_access(trace_id, endpoint, method, "unauthorized", 401)
+            return response
 
         auth_header = request.headers.get("Authorization", "")
         if auth_header != f"Bearer {secret}":
-            return jsonify({"error": "unauthorized"}), 401
+            response = jsonify({"error": "unauthorized"}), 401
+            _log_dashboard_access(trace_id, endpoint, method, "unauthorized", 401)
+            return response
 
-        return f(*args, **kwargs)
+        try:
+            response = f(*args, **kwargs)
+            _log_dashboard_access(
+                trace_id,
+                endpoint,
+                method,
+                "authorized",
+                _response_status_code(response),
+            )
+            return response
+        except Exception:
+            _log_dashboard_access(trace_id, endpoint, method, "authorized", 500)
+            raise
+
     return decorated
 
 # ─────────────────────────────────────────
@@ -197,7 +275,7 @@ TENANTS_SHEET = "TENANT_REGISTRY"
 @dashboard_bp.route("/api/leads", methods=["GET"])
 @require_dashboard_auth
 def api_leads():
-    trace_id = _make_trace_id()
+    trace_id = _get_dashboard_trace_id()
     try:
         rows = _fetch_phase1(LEADS_SHEET, trace_id)
         if rows is None:
@@ -213,7 +291,7 @@ def api_leads():
 @dashboard_bp.route("/api/routing-log", methods=["GET"])
 @require_dashboard_auth
 def api_routing_log():
-    trace_id = _make_trace_id()
+    trace_id = _get_dashboard_trace_id()
     try:
         rows = _fetch_routing(ROUTING_LOG_SHEET, trace_id)
         if rows is None:
@@ -229,7 +307,7 @@ def api_routing_log():
 @dashboard_bp.route("/api/routing-miss", methods=["GET"])
 @require_dashboard_auth
 def api_routing_miss():
-    trace_id = _make_trace_id()
+    trace_id = _get_dashboard_trace_id()
     try:
         rows = _fetch_routing(ROUTING_MISS_SHEET, trace_id)
         if rows is None:
@@ -245,7 +323,7 @@ def api_routing_miss():
 @dashboard_bp.route("/api/slowpath", methods=["GET"])
 @require_dashboard_auth
 def api_slowpath():
-    trace_id = _make_trace_id()
+    trace_id = _get_dashboard_trace_id()
     try:
         rows = _fetch_routing(SLOWPATH_SHEET, trace_id)
         if rows is None:
@@ -261,7 +339,7 @@ def api_slowpath():
 @dashboard_bp.route("/api/services", methods=["GET"])
 @require_dashboard_auth
 def api_services():
-    trace_id = _make_trace_id()
+    trace_id = _get_dashboard_trace_id()
     try:
         rows = _fetch_routing(SERVICES_SHEET, trace_id)
         if rows is None:
@@ -277,7 +355,7 @@ def api_services():
 @dashboard_bp.route("/api/tenants", methods=["GET"])
 @require_dashboard_auth
 def api_tenants():
-    trace_id = _make_trace_id()
+    trace_id = _get_dashboard_trace_id()
     try:
         rows = _fetch_phase1(TENANTS_SHEET, trace_id)
         if rows is None:
