@@ -187,7 +187,7 @@ SERVICES_POP = ["contact_id", "contact_link"]
 SERVICES_SHEET = "SERVICE_MASTER"
 SERVICES_LIMIT = 200
 
-TENANTS_POP = ["line_group_id"]
+TENANTS_POP = ["line_group_id", "primary_group_id", "owner_line_user_id"]
 TENANTS_SHEET = "TENANT_REGISTRY"
 
 # ─────────────────────────────────────────
