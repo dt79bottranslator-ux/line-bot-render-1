@@ -229,7 +229,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -1260,10 +1260,60 @@ def filter_active_services(service_rows: List[dict]) -> List[dict]:
         results.append(row)
     return results
 def choose_service_for_intent(intent_name: str, location_hint: str, service_rows: List[dict]) -> Optional[dict]:
+    """
+    CROSS_TENANT_SERVICE_FILTER_PATCH_V1
+
+    Select only active service rows that belong to the resolved service tenant.
+    This prevents cross-tenant service/contact leakage when multiple tenants
+    share the same intent_name in SERVICE_MASTER.
+    """
     normalized_location = safe_str(location_hint)
-    candidates = [row for row in filter_active_services(service_rows) if safe_str(row.get("intent_name")) == intent_name]
-    if not candidates:
+    current_tenant_id = safe_str(get_current_service_tenant_id())
+
+    if not current_tenant_id:
+        logger.warning(
+            "TENANT_SERVICE_FILTER_BLOCKED "
+            f"reason=missing_service_tenant intent_name={intent_name} "
+            f"location_hint={normalized_location}"
+        )
         return None
+
+    candidates = []
+    skipped_wrong_tenant = 0
+    skipped_missing_tenant = 0
+
+    for row in filter_active_services(service_rows):
+        row_intent = safe_str(row.get("intent_name"))
+        if row_intent != intent_name:
+            continue
+
+        row_tenant_id = safe_str(row.get("tenant_id"))
+        if not row_tenant_id:
+            skipped_missing_tenant += 1
+            continue
+
+        if row_tenant_id != current_tenant_id:
+            skipped_wrong_tenant += 1
+            continue
+
+        candidates.append(row)
+
+    logger.info(
+        "TENANT_SERVICE_FILTER_APPLIED "
+        f"tenant_hash={stable_hash(current_tenant_id)} "
+        f"intent_name={intent_name} kept={len(candidates)} "
+        f"skipped_wrong_tenant={skipped_wrong_tenant} "
+        f"skipped_missing_tenant={skipped_missing_tenant}"
+    )
+
+    if not candidates:
+        logger.warning(
+            "TENANT_SERVICE_FILTER_NO_MATCH "
+            f"tenant_hash={stable_hash(current_tenant_id)} "
+            f"intent_name={intent_name} location_hint={normalized_location}"
+        )
+        return None
+
     exact_matches = []
     fallback_matches = []
     for row in candidates:
@@ -1273,6 +1323,7 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
             exact_matches.append((priority, row))
         elif row_region == ROUTING_FALLBACK_LOCATION:
             fallback_matches.append((priority, row))
+
     if exact_matches:
         exact_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
         return exact_matches[0][1]
@@ -6567,6 +6618,121 @@ def should_handle_mt_translation(event: dict, trace_id: str) -> Tuple[bool, dict
     return True, {"tenant_id": tenant_id, "tenant": tenant, "source_id": source_id, "source_type": source_type, "source_ref": source_ref_value, "lookup_mode": lookup_mode}
 
 
+# --- CROSS_TENANT_SERVICE_FILTER_PATCH_V1 ---
+def resolve_service_tenant_context_from_event(event: dict, trace_id: str) -> dict:
+    """
+    Resolve the tenant used by SERVICE_MASTER routing from TENANT_SOURCE_MAP.
+
+    This deliberately does not use resolve_tenant_id_from_event(), because that
+    function may return LINE destination/group/raw source identifiers. Service
+    routing must compare against canonical SERVICE_MASTER.tenant_id values such
+    as TENANT_001, TENANT_002, TENANT_003.
+    """
+    source_id, source_type = get_source_id_from_event(event)
+    source_ref_value = stable_hash(source_id) if source_id else ""
+    if not source_id:
+        return {
+            "ok": False,
+            "reason": "missing_source_id",
+            "source_type": source_type,
+            "source_ref": source_ref_value,
+        }
+
+    cache = get_tenant_config(trace_id=trace_id)
+    tenant_id = safe_str((cache.get("source_to_tenant") or {}).get(source_id))
+    lookup_mode = "source_id" if tenant_id else ""
+    source_meta = (cache.get("source_meta") or {}).get(source_id) or {}
+
+    if not tenant_id:
+        tenant_id = safe_str((cache.get("source_ref_to_tenant") or {}).get(source_ref_value))
+        lookup_mode = "source_ref" if tenant_id else ""
+        source_meta = (cache.get("source_ref_meta") or {}).get(source_ref_value) or (cache.get("source_meta") or {}).get(f"ref:{source_ref_value}") or {}
+
+    if not tenant_id:
+        return {
+            "ok": False,
+            "reason": "tenant_not_found",
+            "source_id": source_id,
+            "source_type": source_type,
+            "source_ref": source_ref_value,
+        }
+
+    configured_source_type = safe_str(source_meta.get("source_type")).lower()
+    if MT_SOURCE_TYPE_STRICT_ENABLED and configured_source_type in {"user", "group", "room"} and configured_source_type != source_type:
+        logger.warning(
+            f"[{trace_id}] SERVICE_TENANT_SOURCE_TYPE_MISMATCH "
+            f"tenant_id={tenant_id} source_ref={source_ref_value} "
+            f"configured_source_type={configured_source_type} actual_source_type={source_type} "
+            f"lookup_mode={lookup_mode}"
+        )
+        return {
+            "ok": False,
+            "reason": "source_type_mismatch",
+            "tenant_id": tenant_id,
+            "source_id": source_id,
+            "source_ref": source_ref_value,
+            "source_type": source_type,
+            "configured_source_type": configured_source_type,
+            "lookup_mode": lookup_mode,
+        }
+
+    tenant = (cache.get("tenants") or {}).get(tenant_id) or {}
+    tenant_status = safe_str(tenant.get("status"))
+    if tenant_status and tenant_status != "ACTIVE":
+        return {
+            "ok": False,
+            "reason": "tenant_inactive",
+            "tenant_id": tenant_id,
+            "source_id": source_id,
+            "source_type": source_type,
+            "source_ref": source_ref_value,
+            "lookup_mode": lookup_mode,
+        }
+
+    return {
+        "ok": True,
+        "tenant_id": tenant_id,
+        "source_id": source_id,
+        "source_type": source_type,
+        "source_ref": source_ref_value,
+        "lookup_mode": lookup_mode,
+    }
+
+
+def set_current_service_tenant_id_from_event(event: dict, trace_id: str) -> str:
+    ctx = resolve_service_tenant_context_from_event(event, trace_id)
+    tenant_id = safe_str(ctx.get("tenant_id")) if ctx.get("ok") else ""
+    try:
+        g.dt79_service_tenant_id = tenant_id
+    except Exception:
+        pass
+
+    if tenant_id:
+        logger.info(
+            f"[{trace_id}] SERVICE_TENANT_CONTEXT_SET "
+            f"tenant_id={tenant_id} source_ref={safe_str(ctx.get('source_ref'))} "
+            f"lookup_mode={safe_str(ctx.get('lookup_mode'))}"
+        )
+    else:
+        logger.warning(
+            f"[{trace_id}] SERVICE_TENANT_CONTEXT_MISSING "
+            f"reason={safe_str(ctx.get('reason'))} source_type={safe_str(ctx.get('source_type'))} "
+            f"source_ref={safe_str(ctx.get('source_ref'))}"
+        )
+    return tenant_id
+
+
+def get_current_service_tenant_id() -> str:
+    try:
+        tenant_id = safe_str(getattr(g, "dt79_service_tenant_id", ""))
+        if tenant_id:
+            return tenant_id
+    except Exception:
+        pass
+    return ""
+# --- END CROSS_TENANT_SERVICE_FILTER_PATCH_V1 ---
+
+
 def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
     should_handle, ctx = should_handle_mt_translation(event, trace_id)
     if not should_handle:
@@ -7093,6 +7259,7 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     text = get_message_text(event)
     normalized = normalize_command_text(text)
     source_type = get_event_source_type(event)
+    set_current_service_tenant_id_from_event(event, trace_id)
     set_group_safe_runtime_context(event, trace_id, text, source_type, user_id)
     group_safe_decision = evaluate_group_safe_gate(event, trace_id, text, source_type, normalized)
     if not group_safe_decision.get("allow"):
