@@ -229,7 +229,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -5087,8 +5087,16 @@ COST_GUARD_CONTEXT_CLASSIFIER_ENABLED = os.getenv(
     "COST_GUARD_CONTEXT_CLASSIFIER_ENABLED", "1"
 ).strip().lower() not in {"0", "false", "no"}
 GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED = os.getenv(
-    "GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED", "0"
+    "GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED", "1"
 ).strip().lower() in {"1", "true", "yes"}
+GROUP_CONTEXT_ROLE_MAP_SHEET_NAME = os.getenv(
+    "GROUP_CONTEXT_ROLE_MAP_SHEET_NAME", "ROLE_MAP"
+).strip() or "ROLE_MAP"
+GROUP_CONTEXT_ROLE_CACHE_TTL_SECONDS = int(os.getenv(
+    "GROUP_CONTEXT_ROLE_CACHE_TTL_SECONDS", "300"
+).strip() or "300")
+_GROUP_CONTEXT_ROLE_CACHE: Dict[str, dict] = {}
+_GROUP_CONTEXT_ROLE_CACHE_LOCK = threading.Lock()
 GROUP_CONTEXT_WORKING_HOUR_START = int(os.getenv("GROUP_CONTEXT_WORKING_HOUR_START", "8").strip() or "8")
 GROUP_CONTEXT_WORKING_HOUR_END = int(os.getenv("GROUP_CONTEXT_WORKING_HOUR_END", "18").strip() or "18")
 GROUP_CONTEXT_AI_CALL_ENABLED = os.getenv(
@@ -5148,21 +5156,156 @@ def group_context_is_working_hours() -> bool:
     return hour >= start or hour < end
 
 
-def resolve_group_sender_role(user_id: str, trace_id: str) -> str:
-    uid = safe_str(user_id)
-    if uid and uid in ADMIN_LIST:
+def normalize_group_context_role(value: str) -> str:
+    role = safe_str(value).lower()
+    if role == "owner":
         return "admin"
-    if not GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED:
-        return "unknown"
-    try:
-        item = get_admin_access_map(trace_id).get(uid) or {}
-        status = safe_str(item.get("status")).lower()
-        role = safe_str(item.get("role")).lower()
-        if status == "active" and role in {"owner", "admin", "manager", "worker"}:
-            return "admin" if role == "owner" else role
-    except Exception as exc:
-        logger.exception(f"[{trace_id}] GROUP_CONTEXT_ROLE_LOOKUP_FAILED exception={type(exc).__name__}:{exc}")
+    if role in {"admin", "manager", "worker", "unknown"}:
+        return role
     return "unknown"
+
+
+def _group_role_cache_key(tenant_id: str, source_type: str, source_ref: str, user_ref_value: str) -> str:
+    return "::".join([
+        safe_str(tenant_id) or "unknown_tenant",
+        safe_str(source_type) or "unknown_source_type",
+        safe_str(source_ref) or "unknown_source_ref",
+        safe_str(user_ref_value) or "unknown_user_ref",
+    ])
+
+
+def _get_group_role_cache(key: str) -> Optional[dict]:
+    if not safe_str(key):
+        return None
+    with _GROUP_CONTEXT_ROLE_CACHE_LOCK:
+        item = _GROUP_CONTEXT_ROLE_CACHE.get(key)
+        if not item:
+            return None
+        loaded_at_ts = float(item.get("loaded_at_ts", 0.0) or 0.0)
+        if _cache_is_fresh(loaded_at_ts, GROUP_CONTEXT_ROLE_CACHE_TTL_SECONDS):
+            return dict(item)
+        _GROUP_CONTEXT_ROLE_CACHE.pop(key, None)
+        return None
+
+
+def _set_group_role_cache(key: str, role: str, lookup_source: str, display_name: str = "", sheet_row: int = 0) -> None:
+    if not safe_str(key):
+        return
+    with _GROUP_CONTEXT_ROLE_CACHE_LOCK:
+        _GROUP_CONTEXT_ROLE_CACHE[key] = {
+            "role": normalize_group_context_role(role),
+            "lookup_source": safe_str(lookup_source) or "fallback",
+            "display_name": safe_str(display_name),
+            "sheet_row": int(sheet_row or 0),
+            "loaded_at_ts": _now_ts(),
+        }
+        if len(_GROUP_CONTEXT_ROLE_CACHE) > RATE_LIMIT_STORE_MAX_KEYS:
+            oldest = sorted(
+                _GROUP_CONTEXT_ROLE_CACHE.items(),
+                key=lambda kv: float((kv[1] or {}).get("loaded_at_ts", 0.0) or 0.0),
+            )[: max(1, RATE_LIMIT_STORE_MAX_KEYS // 10)]
+            for old_key, _ in oldest:
+                _GROUP_CONTEXT_ROLE_CACHE.pop(old_key, None)
+
+
+def resolve_group_sender_role(event_or_user_id, trace_id: str) -> str:
+    """
+    GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1
+
+    Resolve sender_role for group context using privacy-safe user_ref, not raw LINE userId.
+    Lookup priority:
+    1. ADMIN_IDS raw allowlist (kept for backwards compatibility, no raw ID logged)
+    2. ROLE_MAP cached rows in DT79_BOT_TRANSLATOR_DATABASE
+    3. fallback unknown
+    """
+    event = event_or_user_id if isinstance(event_or_user_id, dict) else None
+    uid = get_event_user_id(event) if event else safe_str(event_or_user_id)
+    sender_ref = user_ref(uid)
+
+    if uid and uid in ADMIN_LIST:
+        logger.info(f"[{trace_id}] ROLE_LOOKUP_ADMIN_LIST_HIT user_ref={sender_ref} role=admin")
+        return "admin"
+
+    if not GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED:
+        logger.info(f"[{trace_id}] ROLE_LOOKUP_DISABLED user_ref={sender_ref} role=unknown")
+        return "unknown"
+
+    if not event:
+        logger.warning(f"[{trace_id}] ROLE_LOOKUP_EVENT_MISSING user_ref={sender_ref} role=unknown")
+        return "unknown"
+
+    try:
+        source_id, actual_source_type = get_source_id_from_event(event)
+        source_ref_value = stable_hash(source_id) if source_id else ""
+        tenant_id = get_current_service_tenant_id()
+        if not tenant_id:
+            ctx = resolve_service_tenant_context_from_event(event, trace_id)
+            if ctx.get("ok"):
+                tenant_id = safe_str(ctx.get("tenant_id"))
+                source_ref_value = safe_str(ctx.get("source_ref")) or source_ref_value
+                actual_source_type = safe_str(ctx.get("source_type")) or actual_source_type
+        tenant_id = safe_str(tenant_id)
+        actual_source_type = safe_str(actual_source_type).lower()
+
+        cache_key = _group_role_cache_key(tenant_id, actual_source_type, source_ref_value, sender_ref)
+        cached = _get_group_role_cache(cache_key)
+        if cached:
+            role = normalize_group_context_role(cached.get("role"))
+            logger.info(
+                f"[{trace_id}] ROLE_LOOKUP_CACHE_HIT "
+                f"tenant_id={tenant_id} source_type={actual_source_type} source_ref={source_ref_value} "
+                f"user_ref={sender_ref} role={role}"
+            )
+            return role
+
+        rows = load_routing_master_records(
+            trace_id, GROUP_CONTEXT_ROLE_MAP_SHEET_NAME, GROUP_CONTEXT_ROLE_CACHE_TTL_SECONDS
+        )
+        for row_index, row in enumerate(rows or [], start=2):
+            row_tenant_id = safe_str(row.get("tenant_id"))
+            row_source_type = safe_str(row.get("source_type")).lower()
+            row_source_ref = safe_str(row.get("source_ref"))
+            row_user_ref = safe_str(row.get("user_ref"))
+            row_status = safe_str(row.get("status")).lower()
+            if row_tenant_id != tenant_id:
+                continue
+            if row_source_type != actual_source_type:
+                continue
+            if row_source_ref != source_ref_value:
+                continue
+            if row_user_ref != sender_ref:
+                continue
+            if row_status and row_status != "active":
+                _set_group_role_cache(cache_key, "unknown", "sheet_inactive", safe_str(row.get("display_name")), row_index)
+                logger.warning(
+                    f"[{trace_id}] ROLE_LOOKUP_INACTIVE "
+                    f"tenant_id={tenant_id} source_type={actual_source_type} source_ref={source_ref_value} "
+                    f"user_ref={sender_ref} role=unknown sheet_row={row_index}"
+                )
+                return "unknown"
+            role = normalize_group_context_role(row.get("role"))
+            display_name = safe_str(row.get("display_name"))
+            _set_group_role_cache(cache_key, role, "sheet", display_name, row_index)
+            logger.info(
+                f"[{trace_id}] ROLE_LOOKUP_SHEET_HIT "
+                f"tenant_id={tenant_id} source_type={actual_source_type} source_ref={source_ref_value} "
+                f"user_ref={sender_ref} role={role} sheet_row={row_index}"
+            )
+            return role
+
+        _set_group_role_cache(cache_key, "unknown", "not_found")
+        logger.info(
+            f"[{trace_id}] ROLE_LOOKUP_NOT_FOUND "
+            f"tenant_id={tenant_id} source_type={actual_source_type} source_ref={source_ref_value} "
+            f"user_ref={sender_ref} role=unknown"
+        )
+        return "unknown"
+    except Exception as exc:
+        logger.exception(
+            f"[{trace_id}] ROLE_LOOKUP_SHEET_ERROR "
+            f"user_ref={sender_ref} error={type(exc).__name__} fallback=unknown"
+        )
+        return "unknown"
 
 
 def detect_group_risk_context(text: str) -> dict:
@@ -5258,7 +5401,7 @@ def group_context_allows_service_routing() -> bool:
 
 
 def build_cost_guard_context_decision(event: dict, trace_id: str, text: str, source_type: str, normalized: str = "") -> dict:
-    sender_role = resolve_group_sender_role(get_event_user_id(event), trace_id)
+    sender_role = resolve_group_sender_role(event, trace_id)
     command_type = group_context_command_type(normalized or normalize_command_text(text))
     risk = detect_group_risk_context(text)
     service_keyword = False
