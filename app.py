@@ -229,7 +229,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -5078,26 +5078,271 @@ def group_safe_has_location_hint(text: str, trace_id: str) -> bool:
         logger.exception(f"[{trace_id}] GROUP_SAFE_LOCATION_CHECK_FAILED exception={type(exc).__name__}:{exc}")
         return False
 
+
+# --- COST_GUARD_CONTEXT_CLASSIFIER_V1 ---
+# EN-VI:
+# Cost Guard = cổng tiết kiệm chi phí: rule-first, chỉ mở AI ở vùng mơ hồ sau này.
+# Context Classifier = bộ phân loại ngữ cảnh: dịch / im lặng / điều hướng dịch vụ.
+COST_GUARD_CONTEXT_CLASSIFIER_ENABLED = os.getenv(
+    "COST_GUARD_CONTEXT_CLASSIFIER_ENABLED", "1"
+).strip().lower() not in {"0", "false", "no"}
+GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED = os.getenv(
+    "GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED", "0"
+).strip().lower() in {"1", "true", "yes"}
+GROUP_CONTEXT_WORKING_HOUR_START = int(os.getenv("GROUP_CONTEXT_WORKING_HOUR_START", "8").strip() or "8")
+GROUP_CONTEXT_WORKING_HOUR_END = int(os.getenv("GROUP_CONTEXT_WORKING_HOUR_END", "18").strip() or "18")
+GROUP_CONTEXT_AI_CALL_ENABLED = os.getenv(
+    "GROUP_CONTEXT_AI_CALL_ENABLED", "0"
+).strip().lower() in {"1", "true", "yes"}
+GROUP_CONTEXT_SERVICE_COMMANDS = os.getenv(
+    "GROUP_CONTEXT_SERVICE_COMMANDS", "/sim,/phong,/room,/tangca,/dichvu,/service"
+).strip()
+GROUP_CONTEXT_SYSTEM_COMMANDS = os.getenv(
+    "GROUP_CONTEXT_SYSTEM_COMMANDS", "/setup,/lock,/unlock,/reload,/admin,/sync,/publish"
+).strip()
+GROUP_CONTEXT_OPERATIONAL_COMMANDS = os.getenv(
+    "GROUP_CONTEXT_OPERATIONAL_COMMANDS", "/tangca,/nghi,/xacnhan,/baoloi,/confirm,/report"
+).strip()
+GROUP_CONTEXT_SERVICE_KEYWORD_HINTS = os.getenv(
+    "GROUP_CONTEXT_SERVICE_KEYWORD_HINTS",
+    "sim,phòng,phong,thuê phòng,thue phong,tăng ca,tang ca,nghỉ phép,nghi phep,dịch vụ,dich vu"
+).strip()
+
+
+def parse_env_csv_set(raw: str) -> set:
+    return {safe_str(x).lower() for x in safe_str(raw).split(",") if safe_str(x)}
+
+
+def group_context_command_type(normalized: str) -> str:
+    cmd = safe_str(normalized).lower()
+    if not cmd.startswith("/"):
+        return "none"
+    first = cmd.split()[0]
+    if first in parse_env_csv_set(GROUP_CONTEXT_SYSTEM_COMMANDS):
+        return "system"
+    if first in parse_env_csv_set(GROUP_CONTEXT_SERVICE_COMMANDS):
+        return "service"
+    if first in parse_env_csv_set(GROUP_CONTEXT_OPERATIONAL_COMMANDS):
+        return "operational"
+    if first in {WORKER_ENTRY_COMMAND, ADS_ENTRY_COMMAND, RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND, STATUS_ENTRY_COMMAND, HELP_ENTRY_COMMAND}:
+        return "system" if first in {RESET_ENTRY_COMMAND, STATUS_ENTRY_COMMAND} else "operational"
+    if first.startswith(LANG_COMMAND_PREFIX):
+        return "translation"
+    return "unknown_command"
+
+
+def group_context_has_service_keyword_hint(text: str) -> bool:
+    normalized = normalize_routing_text(text)
+    hints = [normalize_routing_text(x) for x in GROUP_CONTEXT_SERVICE_KEYWORD_HINTS.split(",") if safe_str(x)]
+    return any(hint and _phrase_present(normalized, hint) for hint in hints)
+
+
+def group_context_is_working_hours() -> bool:
+    hour = now_tw_dt().hour
+    start = max(0, min(23, GROUP_CONTEXT_WORKING_HOUR_START))
+    end = max(0, min(24, GROUP_CONTEXT_WORKING_HOUR_END))
+    if start == end:
+        return True
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def resolve_group_sender_role(user_id: str, trace_id: str) -> str:
+    uid = safe_str(user_id)
+    if uid and uid in ADMIN_LIST:
+        return "admin"
+    if not GROUP_CONTEXT_ROLE_SHEET_LOOKUP_ENABLED:
+        return "unknown"
+    try:
+        item = get_admin_access_map(trace_id).get(uid) or {}
+        status = safe_str(item.get("status")).lower()
+        role = safe_str(item.get("role")).lower()
+        if status == "active" and role in {"owner", "admin", "manager", "worker"}:
+            return "admin" if role == "owner" else role
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] GROUP_CONTEXT_ROLE_LOOKUP_FAILED exception={type(exc).__name__}:{exc}")
+    return "unknown"
+
+
+def detect_group_risk_context(text: str) -> dict:
+    normalized = normalize_routing_text(text)
+    risk_keywords = [
+        "cháy", "chay", "hỏa hoạn", "hoa hoan", "tai nạn", "tai nan", "cấp cứu", "cap cuu",
+        "ngất", "ngat", "máu", "mau", "bị thương", "bi thuong", "kẹt tay", "ket tay",
+        "đánh nhau", "danh nhau", "máy hỏng", "may hong", "nguy hiểm", "nguy hiem",
+        "火災", "著火", "失火", "意外", "工傷", "急救", "昏倒", "流血", "受傷", "打架", "危險",
+    ]
+    past_markers = [
+        "hôm qua", "hom qua", "tuần trước", "tuan truoc", "tháng trước", "thang truoc", "bữa trước", "bua truoc",
+        "nghe nói", "nghe noi", "kể", "ke", "chuyện", "chuyen", "đã", "da", "vừa rồi", "vua roi",
+        "昨天", "上週", "上个月", "聽說", "以前", "之前", "剛才", "故事",
+    ]
+    current_markers = [
+        "đang", "dang", "ngay bây giờ", "ngay bay gio", "hiện tại", "hien tai", "vừa mới", "vua moi",
+        "救命", "現在", "正在", "馬上", "立刻", "剛剛",
+    ]
+    help_markers = [
+        "cứu", "cuu", "giúp", "giup", "báo", "bao", "gọi", "goi", "khẩn", "khan", "gấp", "gap",
+        "救", "幫忙", "通知", "報告", "緊急", "快點", "叫主管",
+    ]
+    risk_hits = [kw for kw in risk_keywords if kw and _phrase_present(normalized, normalize_routing_text(kw))]
+    past_hits = [kw for kw in past_markers if kw and _phrase_present(normalized, normalize_routing_text(kw))]
+    current_hits = [kw for kw in current_markers if kw and _phrase_present(normalized, normalize_routing_text(kw))]
+    help_hits = [kw for kw in help_markers if kw and _phrase_present(normalized, normalize_routing_text(kw))]
+    risk_detected = bool(risk_hits)
+    if not risk_detected:
+        time_context = "none"
+        speaker_intent = "unknown"
+        active = False
+    elif current_hits or help_hits:
+        time_context = "current_or_imminent"
+        speaker_intent = "report_or_request_help"
+        active = True
+    elif past_hits:
+        time_context = "past_or_story"
+        speaker_intent = "chatting"
+        active = False
+    else:
+        time_context = "unknown"
+        speaker_intent = "unknown"
+        active = False
+    return {
+        "risk_keyword_detected": risk_detected,
+        "event_time_context": time_context,
+        "speaker_intent": speaker_intent,
+        "is_active_incident": active,
+        "risk_hits_count": len(risk_hits),
+        "past_hits_count": len(past_hits),
+        "current_hits_count": len(current_hits),
+        "help_hits_count": len(help_hits),
+    }
+
+
+def set_group_context_decision(trace_id: str, decision: dict) -> None:
+    try:
+        g.dt79_group_context_decision = decision or {}
+        logger.info(
+            f"[{trace_id}] COST_GUARD_CONTEXT_DECISION "
+            f"action={safe_str((decision or {}).get('action'))} "
+            f"reason={safe_str((decision or {}).get('reason_code'))} "
+            f"sender_role={safe_str((decision or {}).get('sender_role'))} "
+            f"command_type={safe_str((decision or {}).get('command_type'))} "
+            f"risk_keyword_detected={bool((decision or {}).get('risk_keyword_detected'))} "
+            f"event_time_context={safe_str((decision or {}).get('event_time_context'))} "
+            f"ai_called={bool((decision or {}).get('ai_called'))} "
+            f"text_fp={safe_str(getattr(g, 'dt79_group_safe_text_fp', ''))}"
+        )
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] COST_GUARD_CONTEXT_DECISION_SET_FAILED exception={type(exc).__name__}:{exc}")
+
+
+def get_group_context_decision() -> dict:
+    try:
+        return getattr(g, "dt79_group_context_decision", {}) or {}
+    except Exception:
+        return {}
+
+
+def group_context_action_is(*actions: str) -> bool:
+    action = safe_str(get_group_context_decision().get("action"))
+    return action in {safe_str(x) for x in actions if safe_str(x)}
+
+
+def group_context_allows_translation() -> bool:
+    return group_context_action_is("translate", "alert_manager_translate")
+
+
+def group_context_allows_service_routing() -> bool:
+    return group_context_action_is("service_routing")
+
+
+def build_cost_guard_context_decision(event: dict, trace_id: str, text: str, source_type: str, normalized: str = "") -> dict:
+    sender_role = resolve_group_sender_role(get_event_user_id(event), trace_id)
+    command_type = group_context_command_type(normalized or normalize_command_text(text))
+    risk = detect_group_risk_context(text)
+    service_keyword = False
+    if command_type not in {"service", "system", "operational", "translation"}:
+        # Cheap hint only: không đọc Google Sheets ở Cost Gate để tránh tốn latency/quota.
+        service_keyword = group_context_has_service_keyword_hint(text)
+
+    base = {
+        "source_type": safe_str(source_type),
+        "sender_role": sender_role,
+        "command_type": command_type,
+        "is_working_hours": group_context_is_working_hours(),
+        "service_keyword": service_keyword,
+        "ai_called": False,
+        **risk,
+    }
+
+    if command_type == "translation":
+        return {**base, "allow": True, "action": "translate", "confidence": 1.0, "reason_code": "explicit_translation_command"}
+    if command_type == "system":
+        if sender_role in {"admin", "manager"}:
+            return {**base, "allow": True, "action": "system_command", "confidence": 1.0, "reason_code": "authorized_system_command"}
+        return {**base, "allow": False, "action": "silent", "confidence": 1.0, "reason_code": "blocked_unauthorized_system_command"}
+    if command_type in {"service", "operational"}:
+        return {**base, "allow": True, "action": "service_routing", "confidence": 1.0, "reason_code": f"explicit_{command_type}_command"}
+    if risk.get("is_active_incident"):
+        return {**base, "allow": True, "action": "alert_manager_translate", "confidence": 0.95, "reason_code": "active_safety_incident"}
+    if risk.get("risk_keyword_detected") and risk.get("event_time_context") == "past_or_story":
+        return {**base, "allow": False, "action": "silent", "confidence": 0.9, "reason_code": "risk_keyword_but_story_context"}
+    if sender_role in {"admin", "manager"}:
+        return {**base, "allow": True, "action": "translate", "confidence": 0.9, "reason_code": "manager_admin_group_translation_priority"}
+    if service_keyword:
+        # Keyword thường như "tăng ca" không được tự kéo sang service routing trong group.
+        return {**base, "allow": False, "action": "silent", "confidence": 0.8, "reason_code": "service_keyword_without_explicit_command"}
+    # V1 fail-closed để giảm chi phí: chưa gọi AI API cho worker/unknown chatter.
+    return {**base, "allow": False, "action": "silent", "confidence": 0.75, "reason_code": "group_chatter_or_unknown_role_fail_closed"}
+
 def evaluate_group_safe_gate(event: dict, trace_id: str, text: str, source_type: str, normalized: str = "") -> dict:
     if not is_group_safe_mode_enabled():
+        decision = {"allow": True, "action": "legacy_allow", "reason_code": "disabled"}
+        set_group_context_decision(trace_id, decision)
         return {"allow": True, "reason": "disabled"}
     if not is_group_safe_source_type(source_type):
+        decision = {"allow": True, "action": "private_source", "reason_code": "private_source"}
+        set_group_context_decision(trace_id, decision)
         return {"allow": True, "reason": "private_source"}
-    if is_group_safe_explicit_command(text, normalized):
-        logger.info(f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} reason=explicit_command text_fp={message_fingerprint(text)}")
-        return {"allow": True, "reason": "explicit_command"}
-    service_keyword = False
-    try:
-        service_keyword = has_service_keyword_for_routing(text, trace_id)
-    except Exception as exc:
-        logger.exception(f"[{trace_id}] GROUP_SAFE_SERVICE_CHECK_FAILED exception={type(exc).__name__}:{exc}")
-    if not service_keyword:
-        logger.info(f"[{trace_id}] GROUP_SAFE_SILENT source_type={safe_str(source_type)} reason=no_service_keyword text_fp={message_fingerprint(text)}")
-        return {"allow": False, "reason": "no_service_keyword"}
-    location_hint = group_safe_has_location_hint(text, trace_id)
-    reason = "service_location_clear" if location_hint else "service_keyword_only"
-    logger.info(f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} reason={reason} text_fp={message_fingerprint(text)}")
-    return {"allow": True, "reason": reason, "service_keyword": service_keyword, "location_hint": location_hint}
+    if not COST_GUARD_CONTEXT_CLASSIFIER_ENABLED:
+        if is_group_safe_explicit_command(text, normalized):
+            logger.info(f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} reason=explicit_command text_fp={message_fingerprint(text)}")
+            return {"allow": True, "reason": "explicit_command"}
+        service_keyword = False
+        try:
+            service_keyword = has_service_keyword_for_routing(text, trace_id)
+        except Exception as exc:
+            logger.exception(f"[{trace_id}] GROUP_SAFE_SERVICE_CHECK_FAILED exception={type(exc).__name__}:{exc}")
+        if not service_keyword:
+            logger.info(f"[{trace_id}] GROUP_SAFE_SILENT source_type={safe_str(source_type)} reason=no_service_keyword text_fp={message_fingerprint(text)}")
+            return {"allow": False, "reason": "no_service_keyword"}
+        location_hint = group_safe_has_location_hint(text, trace_id)
+        reason = "service_location_clear" if location_hint else "service_keyword_only"
+        logger.info(f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} reason={reason} text_fp={message_fingerprint(text)}")
+        return {"allow": True, "reason": reason, "service_keyword": service_keyword, "location_hint": location_hint}
+
+    decision = build_cost_guard_context_decision(event, trace_id, text, source_type, normalized)
+    set_group_context_decision(trace_id, decision)
+    if not decision.get("allow"):
+        logger.info(
+            f"[{trace_id}] GROUP_SAFE_SILENT source_type={safe_str(source_type)} "
+            f"reason={safe_str(decision.get('reason_code'))} text_fp={message_fingerprint(text)}"
+        )
+        return {"allow": False, "reason": safe_str(decision.get("reason_code")) or "cost_guard_silent"}
+    logger.info(
+        f"[{trace_id}] GROUP_SAFE_ALLOWED source_type={safe_str(source_type)} "
+        f"reason={safe_str(decision.get('reason_code'))} action={safe_str(decision.get('action'))} "
+        f"text_fp={message_fingerprint(text)}"
+    )
+    return {
+        "allow": True,
+        "reason": safe_str(decision.get("reason_code")) or "cost_guard_allowed",
+        "action": safe_str(decision.get("action")),
+        "command_type": safe_str(decision.get("command_type")),
+        "sender_role": safe_str(decision.get("sender_role")),
+    }
+
 
 def group_safe_routing_result_allows_reply(routing_result: Optional[dict]) -> bool:
     if not routing_result:
@@ -7171,6 +7416,15 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
     if is_control_or_translation_command_text(normalized, text):
         return None
 
+    if is_group_safe_source_type(source_type) and COST_GUARD_CONTEXT_CLASSIFIER_ENABLED:
+        if not group_context_allows_service_routing():
+            logger.info(
+                f"[{trace_id}] COST_GUARD_SERVICE_ROUTING_SKIPPED "
+                f"source_type={safe_str(source_type)} action={safe_str(get_group_context_decision().get('action'))} "
+                f"reason={safe_str(get_group_context_decision().get('reason_code'))} text_fp={message_fingerprint(text)}"
+            )
+            return None
+
     if not has_service_keyword_for_routing(text, trace_id):
         return None
 
@@ -7299,6 +7553,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
 
     if is_group_safe_source_type(source_type) and parse_translation_command(text).get("is_translation"):
         set_group_safe_reply_allowed(trace_id, True, "explicit_translation_command")
+    if is_group_safe_source_type(source_type) and group_context_allows_translation():
+        set_group_safe_reply_allowed(trace_id, True, safe_str(get_group_context_decision().get("reason_code")) or "cost_guard_context_translate")
     mt_translation_result = handle_mt_translation_message(event, trace_id)
     if mt_translation_result:
         return mt_translation_result
@@ -7409,6 +7665,13 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         else:
             if is_cjk_text(text):
                 logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=ads_auto_cleared_routing text_fp={message_fingerprint(text)}")
+            if is_group_safe_source_type(source_type) and COST_GUARD_CONTEXT_CLASSIFIER_ENABLED and not group_context_allows_service_routing():
+                logger.info(
+                    f"[{trace_id}] COST_GUARD_ADS_ROUTING_SKIPPED "
+                    f"source_type={safe_str(source_type)} action={safe_str(get_group_context_decision().get('action'))} "
+                    f"reason={safe_str(get_group_context_decision().get('reason_code'))} text_fp={message_fingerprint(text)}"
+                )
+                return build_group_safe_silent_result(user_id, safe_str(get_group_context_decision().get("reason_code")) or "cost_guard_ads_routing_skipped")
             routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
             if routing_result:
                 if is_group_safe_source_type(source_type) and not group_safe_routing_result_allows_reply(routing_result):
@@ -7436,6 +7699,13 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         else:
             if is_cjk_text(text):
                 logger.info(f"[{trace_id}] ZH_MIXED_SERVICE_ROUTING flow_used=routing text_fp={message_fingerprint(text)}")
+            if is_group_safe_source_type(source_type) and COST_GUARD_CONTEXT_CLASSIFIER_ENABLED and not group_context_allows_service_routing():
+                logger.info(
+                    f"[{trace_id}] COST_GUARD_LATE_ROUTING_SKIPPED "
+                    f"source_type={safe_str(source_type)} action={safe_str(get_group_context_decision().get('action'))} "
+                    f"reason={safe_str(get_group_context_decision().get('reason_code'))} text_fp={message_fingerprint(text)}"
+                )
+                return build_group_safe_silent_result(user_id, safe_str(get_group_context_decision().get("reason_code")) or "cost_guard_late_routing_skipped")
             routing_result = try_build_routing_reply(text, current_language, trace_id, user_id, source_type=source_type)
             if routing_result:
                 if is_group_safe_source_type(source_type) and not group_safe_routing_result_allows_reply(routing_result):
