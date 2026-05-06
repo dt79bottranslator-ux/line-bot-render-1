@@ -225,11 +225,20 @@ INTERNAL_SYNC_TOKEN = os.getenv("INTERNAL_SYNC_TOKEN", "").strip()
 USER_STATE_SHEET_NAME = "user_state"
 ADMIN_IDS = os.getenv("ADMIN_IDS", "").strip()
 ADMIN_LIST = [x.strip() for x in ADMIN_IDS.split(",") if x.strip()]
+if not ADMIN_LIST:
+    logger.warning(
+        "ALERT_MANAGER_CONFIG_WARNING "
+        "reason=ADMIN_IDS_empty "
+        "effect=all_alert_manager_pushes_will_be_skipped "
+        "action=set_ADMIN_IDS_env_with_comma_separated_LINE_userIds"
+    )
+else:
+    logger.info(f"ALERT_MANAGER_CONFIG_OK admin_count={len(ADMIN_LIST)}")
 RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").strip() or "1800")
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -272,11 +281,17 @@ LINE_REPLY_API_URL = "https://api.line.me/v2/bot/message/reply"
 # --- ALERT_MANAGER_PUSH_V1 ---
 LINE_PUSH_API_URL = "https://api.line.me/v2/bot/message/push"
 ALERT_MANAGER_PUSH_ENABLED = os.getenv(
-    "ALERT_MANAGER_PUSH_ENABLED", "1"
+    "ALERT_MANAGER_PUSH_ENABLED", "0"
 ).strip().lower() not in {"0", "false", "no"}
 ALERT_MANAGER_PUSH_RATE_LIMIT_SECONDS = int(os.getenv(
     "ALERT_MANAGER_PUSH_RATE_LIMIT_SECONDS", "300"
 ).strip() or "300")
+ALERT_MANAGER_PUSH_MAX_RETRIES = int(os.getenv(
+    "ALERT_MANAGER_PUSH_MAX_RETRIES", "1"
+).strip() or "1")
+ALERT_MANAGER_PUSH_RETRY_DELAY_SECONDS = float(os.getenv(
+    "ALERT_MANAGER_PUSH_RETRY_DELAY_SECONDS", "2.0"
+).strip() or "2.0")
 ALERT_MANAGER_TARGET_ROLES = {
     safe_str(x).strip().lower()
     for x in os.getenv("ALERT_MANAGER_TARGET_ROLES", "admin,manager").split(",")
@@ -5633,19 +5648,37 @@ def push_line_text(to_user_id: str, text: str, trace_id: str) -> bool:
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}", "Content-Type": "application/json"}
     payload = {"to": target_user_id, "messages": [{"type": "text", "text": body_text}]}
     logger.info(f"[{trace_id}] ALERT_MANAGER_PUSH_ATTEMPT target_user_ref={user_ref(target_user_id)} text_len={len(body_text)}")
-    try:
-        resp = requests.post(LINE_PUSH_API_URL, headers=headers, json=payload, timeout=OUTBOUND_TIMEOUT)
-        logger.info(
-            f"[{trace_id}] ALERT_MANAGER_PUSH_HTTP "
-            f"target_user_ref={user_ref(target_user_id)} status_code={resp.status_code} body_len={len(safe_str(resp.text))}"
-        )
-        return 200 <= resp.status_code < 300
-    except Exception as exc:
-        logger.exception(
-            f"[{trace_id}] ALERT_MANAGER_PUSH_FAILED "
-            f"target_user_ref={user_ref(target_user_id)} exception={type(exc).__name__}:{exc}"
-        )
-        return False
+    retryable_statuses = {429, 500, 502, 503}
+    max_retries = max(0, int(ALERT_MANAGER_PUSH_MAX_RETRIES or 0))
+    for attempt in range(max_retries + 1):
+        try:
+            resp = requests.post(LINE_PUSH_API_URL, headers=headers, json=payload, timeout=OUTBOUND_TIMEOUT)
+            logger.info(
+                f"[{trace_id}] ALERT_MANAGER_PUSH_HTTP "
+                f"target_user_ref={user_ref(target_user_id)} status_code={resp.status_code} "
+                f"attempt={attempt + 1} body_len={len(safe_str(resp.text))}"
+            )
+            if 200 <= resp.status_code < 300:
+                return True
+            if attempt < max_retries and resp.status_code in retryable_statuses:
+                logger.warning(
+                    f"[{trace_id}] ALERT_MANAGER_PUSH_RETRY "
+                    f"status_code={resp.status_code} attempt={attempt + 1}"
+                )
+                time.sleep(max(0.0, float(ALERT_MANAGER_PUSH_RETRY_DELAY_SECONDS or 0.0)))
+                continue
+            break
+        except Exception as exc:
+            logger.exception(
+                f"[{trace_id}] ALERT_MANAGER_PUSH_FAILED "
+                f"target_user_ref={user_ref(target_user_id)} "
+                f"attempt={attempt + 1} exception={type(exc).__name__}:{exc}"
+            )
+            if attempt < max_retries:
+                time.sleep(max(0.0, float(ALERT_MANAGER_PUSH_RETRY_DELAY_SECONDS or 0.0)))
+                continue
+            break
+    return False
 
 
 def _alert_manager_incident_rate_key(tenant_id: str, source_ref_value: str, incident_fp: str) -> str:
@@ -5656,7 +5689,7 @@ def _alert_manager_incident_rate_key(tenant_id: str, source_ref_value: str, inci
     ])
 
 
-def alert_manager_rate_limited(trace_id: str, tenant_id: str, source_ref_value: str, incident_fp: str) -> bool:
+def alert_manager_is_rate_limited(trace_id: str, tenant_id: str, source_ref_value: str, incident_fp: str) -> bool:
     key = _alert_manager_incident_rate_key(tenant_id, source_ref_value, incident_fp)
     now_ts = _now_ts()
     with _ALERT_MANAGER_PUSH_RATE_LIMIT_LOCK:
@@ -5670,6 +5703,13 @@ def alert_manager_rate_limited(trace_id: str, tenant_id: str, source_ref_value: 
                 f"ttl_seconds={ALERT_MANAGER_PUSH_RATE_LIMIT_SECONDS}"
             )
             return True
+    return False
+
+
+def alert_manager_mark_rate_limit(trace_id: str, tenant_id: str, source_ref_value: str, incident_fp: str) -> None:
+    key = _alert_manager_incident_rate_key(tenant_id, source_ref_value, incident_fp)
+    now_ts = _now_ts()
+    with _ALERT_MANAGER_PUSH_RATE_LIMIT_LOCK:
         _ALERT_MANAGER_PUSH_RATE_LIMIT_CACHE[key] = now_ts
         if len(_ALERT_MANAGER_PUSH_RATE_LIMIT_CACHE) > RATE_LIMIT_STORE_MAX_KEYS:
             oldest = sorted(
@@ -5678,7 +5718,22 @@ def alert_manager_rate_limited(trace_id: str, tenant_id: str, source_ref_value: 
             )[: max(1, RATE_LIMIT_STORE_MAX_KEYS // 10)]
             for old_key, _ in oldest:
                 _ALERT_MANAGER_PUSH_RATE_LIMIT_CACHE.pop(old_key, None)
-        return False
+    logger.info(
+        f"[{trace_id}] ALERT_MANAGER_RATE_LIMIT_MARKED "
+        f"tenant_id={safe_str(tenant_id)} source_ref={safe_str(source_ref_value)} "
+        f"incident_fp={safe_str(incident_fp)}"
+    )
+
+
+def build_alert_manager_incident_fp(raw_text: str, event: dict) -> str:
+    user_id = safe_str(((event or {}).get("source") or {}).get("userId"))
+    timestamp_bucket = int(_now_ts() // 60)
+    raw_key = "::".join([
+        message_fingerprint(raw_text),
+        user_ref(user_id),
+        str(timestamp_bucket),
+    ])
+    return stable_hash(raw_key, length=16)
 
 
 def resolve_alert_manager_targets(event: dict, trace_id: str) -> List[str]:
@@ -5775,9 +5830,9 @@ def maybe_push_alert_manager(event: dict, trace_id: str, raw_text: str) -> bool:
     source_id, _source_type = get_source_id_from_event(event)
     source_ref_value = stable_hash(source_id) if source_id else safe_str(decision.get("source_ref"))
     tenant_id = get_current_service_tenant_id() or safe_str(decision.get("tenant_id"))
-    incident_fp = message_fingerprint(raw_text)
+    incident_fp = build_alert_manager_incident_fp(raw_text, event)
 
-    if alert_manager_rate_limited(trace_id, tenant_id, source_ref_value, incident_fp):
+    if alert_manager_is_rate_limited(trace_id, tenant_id, source_ref_value, incident_fp):
         return False
 
     targets = resolve_alert_manager_targets(event, trace_id)
@@ -5790,14 +5845,22 @@ def maybe_push_alert_manager(event: dict, trace_id: str, raw_text: str) -> bool:
 
     push_text = (
         f"{ALERT_MANAGER_PUSH_TEXT}\n"
-        f"source_ref={safe_str(source_ref_value)}\n"
-        f"message_fp={incident_fp}\n"
-        f"time={now_tw_iso()}"
+        f"📍 Group: {safe_str(_source_type) or 'group'} #{stable_hash(source_ref_value, 6)}\n"
+        f"🕐 Thời gian: {now_tw_iso()}\n"
+        f"🔖 Ref: {safe_str(incident_fp)[:16]}"
     )
     ok_count = 0
     for target_user_id in targets:
         if push_line_text(target_user_id, push_text, trace_id):
             ok_count += 1
+    if ok_count > 0:
+        alert_manager_mark_rate_limit(trace_id, tenant_id, source_ref_value, incident_fp)
+    else:
+        logger.warning(
+            f"[{trace_id}] ALERT_MANAGER_PUSH_ALL_FAILED "
+            f"target_count={len(targets)} source_ref={safe_str(source_ref_value)} incident_fp={incident_fp} "
+            f"rate_limit_marked=False"
+        )
     logger.info(
         f"[{trace_id}] ALERT_MANAGER_PUSH_DONE "
         f"target_count={len(targets)} ok_count={ok_count} source_ref={safe_str(source_ref_value)} incident_fp={incident_fp}"
@@ -7543,7 +7606,7 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
         quota_before, quota_after = decrement_mt_quota_in_cache(tenant_id, 1)
         enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_quota_writeback", writeback_mt_tenant_quota, tenant_id, quota_after, trace_id)
         reply_ok = reply_line_text(reply_token, translated, trace_id, "vi")
-        if reply_ok and is_group_safe_source_type(source_type):
+        if is_group_safe_source_type(source_type):
             maybe_push_alert_manager(event, trace_id, raw_text)
         status_text = "translated" if reply_ok else "reply_failed"
         logger.info(
