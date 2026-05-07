@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_TENANT_ID = os.getenv("DEFAULT_TENANT_ID", "tenant_default").strip() or "tenant_default"
 TENANT_HEADER_NAME = os.getenv("TENANT_HEADER_NAME", "X-DT79-Tenant-ID").strip() or "X-DT79-Tenant-ID"
 ADMIN_ACCESS_SHEET_NAME = os.getenv("ADMIN_ACCESS_SHEET_NAME", "ADMIN_ACCESS_MASTER").strip() or "ADMIN_ACCESS_MASTER"
-ADMIN_ACCESS_CACHE_TTL_SECONDS = int(os.getenv("ADMIN_ACCESS_CACHE_TTL_SECONDS", "60").strip() or "60")
+ADMIN_ACCESS_CACHE_TTL_SECONDS = int(os.getenv("ADMIN_ACCESS_CACHE_TTL_SECONDS", "600").strip() or "600")
 ADMIN_ACCESS_HEADERS = ["tenant_id", "line_user_id", "role", "status", "revoked_at", "note"]
 _ADMIN_ACCESS_CACHE: Dict[str, dict] = {}
 _ADMIN_ACCESS_CACHE_TS: Dict[str, float] = {}
@@ -131,7 +131,7 @@ def health():
     cache_age = round(now_ts - last_reload, 1) if last_reload else None
     return jsonify({
         "ok": True,
-        "app_version": APP_VERSION,
+        "app_version": APP_VERSION_SHORT,
         "cache_age_seconds": cache_age,
     }), 200
 def safe_str(v) -> str:
@@ -239,6 +239,7 @@ RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip()
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
 APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1"
+APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -409,10 +410,10 @@ LOCATION_DISPLAY_MAP = {
     "雲林": "Vân Lâm",
 }
 ADS_LIST_LIMIT = int(os.getenv("ADS_LIST_LIMIT", "6").strip() or "6")
-ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "30").strip() or "30")
+ADS_CACHE_TTL_SECONDS = int(os.getenv("ADS_CACHE_TTL_SECONDS", "300").strip() or "300")
 ADS_VIEW_TTL_SECONDS = int(os.getenv("ADS_VIEW_TTL_SECONDS", "300").strip() or "300")
 ADS_DETAIL_TTL_SECONDS = int(os.getenv("ADS_DETAIL_TTL_SECONDS", "300").strip() or "300")
-WORKSPACE_VALIDATION_CACHE_TTL_SECONDS = int(os.getenv("WORKSPACE_VALIDATION_CACHE_TTL_SECONDS", "30").strip() or "30")
+WORKSPACE_VALIDATION_CACHE_TTL_SECONDS = int(os.getenv("WORKSPACE_VALIDATION_CACHE_TTL_SECONDS", "300").strip() or "300")
 ADS_TYPE_JOB_OPENING = "job_opening"
 ADS_TYPE_SERVICE_OFFER = "service_offer"
 VISIBILITY_SAME_LANGUAGE_ONLY = "same_language_only"
@@ -472,7 +473,7 @@ def is_ad_active_in_time_window(start_at: str, end_at: str) -> bool:
     return True
 _GSPREAD_CLIENT = None
 GSHEET_SPREADSHEET_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_SPREADSHEET_CACHE_TTL_SECONDS", "300").strip() or "300")
-GSHEET_VALUES_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_VALUES_CACHE_TTL_SECONDS", "45").strip() or "45")
+GSHEET_VALUES_CACHE_TTL_SECONDS = int(os.getenv("GSHEET_VALUES_CACHE_TTL_SECONDS", "180").strip() or "180")
 _SPREADSHEET_SHARED_CACHE = {"spreadsheet": None, "loaded_at_ts": 0.0}
 _WORKSHEET_OBJECT_SHARED_CACHE: Dict[str, object] = {}
 _WORKSHEET_VALUES_SHARED_CACHE: Dict[str, dict] = {}
@@ -5162,16 +5163,21 @@ def parse_env_csv_set(raw: str) -> set:
     return {safe_str(x).lower() for x in safe_str(raw).split(",") if safe_str(x)}
 
 
+_GROUP_CONTEXT_SYSTEM_COMMAND_SET = parse_env_csv_set(GROUP_CONTEXT_SYSTEM_COMMANDS)
+_GROUP_CONTEXT_SERVICE_COMMAND_SET = parse_env_csv_set(GROUP_CONTEXT_SERVICE_COMMANDS)
+_GROUP_CONTEXT_OPERATIONAL_COMMAND_SET = parse_env_csv_set(GROUP_CONTEXT_OPERATIONAL_COMMANDS)
+
+
 def group_context_command_type(normalized: str) -> str:
     cmd = safe_str(normalized).lower()
     if not cmd.startswith("/"):
         return "none"
     first = cmd.split()[0]
-    if first in parse_env_csv_set(GROUP_CONTEXT_SYSTEM_COMMANDS):
+    if first in _GROUP_CONTEXT_SYSTEM_COMMAND_SET:
         return "system"
-    if first in parse_env_csv_set(GROUP_CONTEXT_SERVICE_COMMANDS):
+    if first in _GROUP_CONTEXT_SERVICE_COMMAND_SET:
         return "service"
-    if first in parse_env_csv_set(GROUP_CONTEXT_OPERATIONAL_COMMANDS):
+    if first in _GROUP_CONTEXT_OPERATIONAL_COMMAND_SET:
         return "operational"
     if first in {WORKER_ENTRY_COMMAND, ADS_ENTRY_COMMAND, RESET_ENTRY_COMMAND, EXIT_ENTRY_COMMAND, STATUS_ENTRY_COMMAND, HELP_ENTRY_COMMAND}:
         return "system" if first in {RESET_ENTRY_COMMAND, STATUS_ENTRY_COMMAND} else "operational"
@@ -5195,20 +5201,14 @@ def group_context_has_service_keyword_hint(text: str) -> bool:
     if not raw or len(raw) > max(1, GROUP_CONTEXT_SERVICE_HINT_MAX_LEN):
         return False
 
-    negation_hints = [safe_str(x) for x in GROUP_CONTEXT_SERVICE_NEGATION_HINTS.split(",") if safe_str(x)]
-    if any(_phrase_present(raw, hint) for hint in negation_hints):
+    normalized_raw = normalize_routing_text(raw)
+    if not normalized_raw:
         return False
 
-    default_hints = [
-        "sim", "sỉm", "xim", "s1m", "sim card", "sim卡", "SIM卡", "辦sim", "辦 sim", "門號", "網卡",
-        "phòng", "phong", "thuê phòng", "thue phong", "thuêphòng", "找房", "租房", "租屋", "房間",
-        "xe máy", "xe may", "mua xe", "mua xe máy", "摩托車", "機車", "買車",
-        "bằng lái", "bang lai", "đổi bằng", "doi bang", "駕照", "換駕照", "辦證",
-        "dịch vụ", "dich vu", "服務", "仲介", "打工",
-    ]
-    hints = [normalize_routing_text(x) for x in GROUP_CONTEXT_SERVICE_KEYWORD_HINTS.split(",") if safe_str(x)]
-    hints.extend(normalize_routing_text(x) for x in default_hints)
-    return any(hint and _phrase_present(raw, hint) for hint in hints)
+    if any(_normalized_phrase_present(normalized_raw, hint, is_contiguous) for hint, is_contiguous in _GROUP_CONTEXT_SERVICE_NEGATION_HINT_CACHE):
+        return False
+
+    return any(_normalized_phrase_present(normalized_raw, hint, is_contiguous) for hint, is_contiguous in _GROUP_CONTEXT_SERVICE_KEYWORD_HINT_CACHE)
 
 
 def group_context_is_working_hours() -> bool:
@@ -5471,8 +5471,9 @@ def build_cost_guard_context_decision(event: dict, trace_id: str, text: str, sou
     command_type = group_context_command_type(normalized or normalize_command_text(text))
     risk = detect_group_risk_context(text)
     service_keyword = False
-    if command_type not in {"service", "system", "operational", "translation"}:
+    if command_type not in {"service", "system", "operational"}:
         # Cheap hint only: không đọc Google Sheets ở Cost Gate để tránh tốn latency/quota.
+        # Translation command không được vượt qua service intent guard.
         service_keyword = group_context_has_service_keyword_hint(text)
 
     base = {
@@ -5486,6 +5487,8 @@ def build_cost_guard_context_decision(event: dict, trace_id: str, text: str, sou
     }
 
     if command_type == "translation":
+        if service_keyword:
+            return {**base, "allow": True, "action": "service_routing", "confidence": 0.9, "reason_code": "translation_command_service_keyword_priority"}
         return {**base, "allow": True, "action": "translate", "confidence": 1.0, "reason_code": "explicit_translation_command"}
     if command_type == "system":
         if sender_role in {"admin", "manager"}:
@@ -6031,6 +6034,45 @@ def _phrase_present(text: str, phrase: str) -> bool:
     if not normalized_text or not normalized_phrase:
         return False
     if _phrase_uses_contiguous_script(normalized_phrase):
+        return normalized_phrase in normalized_text
+    padded_text = f" {normalized_text} "
+    padded_phrase = f" {normalized_phrase} "
+    return padded_phrase in padded_text
+
+_GROUP_CONTEXT_DEFAULT_SERVICE_HINTS = [
+    "sim", "sỉm", "xim", "s1m", "sim card", "sim卡", "SIM卡", "辦sim", "辦 sim", "門號", "網卡",
+    "phòng", "phong", "thuê phòng", "thue phong", "thuêphòng", "找房", "租房", "租屋", "房間",
+    "xe máy", "xe may", "mua xe", "mua xe máy", "摩托車", "機車", "買車",
+    "bằng lái", "bang lai", "đổi bằng", "doi bang", "駕照", "換駕照", "辦證",
+    "dịch vụ", "dich vu", "服務", "仲介", "打工",
+]
+
+
+def _build_normalized_phrase_cache(raw_items: List[str]) -> Tuple[Tuple[str, bool], ...]:
+    seen = set()
+    cached = []
+    for item in raw_items:
+        normalized = normalize_routing_text(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        cached.append((normalized, _phrase_uses_contiguous_script(normalized)))
+    return tuple(cached)
+
+
+_GROUP_CONTEXT_SERVICE_NEGATION_HINT_CACHE = _build_normalized_phrase_cache([
+    safe_str(x) for x in GROUP_CONTEXT_SERVICE_NEGATION_HINTS.split(",") if safe_str(x)
+])
+_GROUP_CONTEXT_SERVICE_KEYWORD_HINT_CACHE = _build_normalized_phrase_cache(
+    [safe_str(x) for x in GROUP_CONTEXT_SERVICE_KEYWORD_HINTS.split(",") if safe_str(x)]
+    + _GROUP_CONTEXT_DEFAULT_SERVICE_HINTS
+)
+
+
+def _normalized_phrase_present(normalized_text: str, normalized_phrase: str, is_contiguous: bool = False) -> bool:
+    if not normalized_text or not normalized_phrase:
+        return False
+    if is_contiguous:
         return normalized_phrase in normalized_text
     padded_text = f" {normalized_text} "
     padded_phrase = f" {normalized_phrase} "
@@ -9470,15 +9512,30 @@ def internal_validate_routing_sheets():
 _EVENT_INBOX_WORKER_STARTED = False
 _EVENT_INBOX_WORKER_LOCK = threading.Lock()
 
+_SQLITE_PRAGMA_INITIALIZED = False
+_SQLITE_PRAGMA_LOCK = threading.Lock()
+
+
+def _ensure_sqlite_pragmas_once(conn) -> None:
+    global _SQLITE_PRAGMA_INITIALIZED
+    if _SQLITE_PRAGMA_INITIALIZED:
+        return
+    with _SQLITE_PRAGMA_LOCK:
+        if _SQLITE_PRAGMA_INITIALIZED:
+            return
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            _SQLITE_PRAGMA_INITIALIZED = True
+        except sqlite3.Error:
+            pass
+
+
 def get_event_inbox_connection():
     conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-    except sqlite3.Error:
-        pass
+    _ensure_sqlite_pragmas_once(conn)
     return conn
 
 def init_event_inbox_db() -> None:
