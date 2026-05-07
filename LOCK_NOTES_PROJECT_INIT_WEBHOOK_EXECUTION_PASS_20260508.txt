@@ -1,0 +1,34 @@
+DT79 TARGET STATE LOCK — SIM_LEAD_HANDOFF_RUNTIME_V1
+
+Build phase tiếp theo được định nghĩa như sau:
+
+(a) Tính năng cụ thể:
+Khi user trong LINE private chat nhắn nhu cầu mua SIM, bot phải nhận diện nhu cầu SIM, trả lời thông tin dịch vụ SIM, ghi lead/log vào Google Sheets, không lộ sai tenant, và không tạo duplicate lead nếu user gửi lặp.
+
+(b) Input mẫu cụ thể:
+source_type=user
+tenant_id=TENANT_001
+message="tôi cần mua sim ở cao hùng"
+language=vi
+channel=LINE private chat
+
+(c) Output kỳ vọng đo được:
+LINE reply:
+- Có nội dung xác nhận dịch vụ SIM hoặc hướng dẫn để lại số điện thoại/chờ nhân viên liên hệ.
+
+Google Sheets:
+- Có row/log liên quan SIM.
+- Có tenant_id=TENANT_001.
+- Có source_type=user.
+- Có service_type hoặc service_id liên quan SIM.
+- Có trạng thái lead/log hợp lệ.
+
+Render log:
+- SIM_FASTPATH_ROUTE_OK service_id=SIM_TW_001
+- PRIVATE_SERVICE_DETAIL_ALLOWED source_type=user service_id=SIM_TW_001
+- LINE_REPLY_HTTP status_code=200
+- EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True
+
+Rule:
+Không build thêm ngoài phạm vi SIM_LEAD_HANDOFF_RUNTIME_V1.
+Không sửa translation layer nếu SIM routing/private lead flow chưa có log lỗi.
