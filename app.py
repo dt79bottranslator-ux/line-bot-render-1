@@ -238,7 +238,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -7486,6 +7486,37 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
     explicit_target_lang = safe_str(translation_request.get("target_override"))
     translation_command = safe_str(translation_request.get("command"))
 
+    # --- MT_SERVICE_INTENT_GUARD_V1 ---
+    # Service-looking messages in group/room must not be consumed by MT auto translation.
+    # Explicit translation commands keep priority so "dịch câu: tôi cần sim" still translates.
+    if is_group_safe_source_type(source_type) and not parse_translation_command(raw_text).get("is_translation"):
+        service_hint = group_context_has_service_keyword_hint(raw_text)
+        if service_hint:
+            logger.info(
+                f"[{trace_id}] MT_SERVICE_INTENT_GUARD_CHECK "
+                f"source_type={safe_str(source_type)} service_hint=True text_fp={message_fingerprint(raw_text)}"
+            )
+            service_result = handle_service_routing_before_mt(
+                event=event,
+                trace_id=trace_id,
+                user_id=user_id,
+                reply_token=reply_token,
+                text=raw_text,
+                source_type=source_type,
+                force_service_check=True,
+            )
+            if service_result:
+                logger.info(
+                    f"[{trace_id}] MT_SERVICE_INTENT_GUARD_HANDLED "
+                    f"flow_used={safe_str(service_result.get('flow_used'))} reply_sent={bool(service_result.get('reply_sent'))}"
+                )
+                return service_result
+            logger.info(
+                f"[{trace_id}] MT_SERVICE_INTENT_GUARD_SILENT "
+                f"reason=service_hint_no_routing_result text_fp={message_fingerprint(raw_text)}"
+            )
+            return build_group_safe_silent_result(user_id, "mt_service_intent_guard_no_routing_result")
+
     status = mt_status(tenant.get("status"))
     if status == "SUSPENDED":
         reply_ok = reply_line_text(reply_token, MT_TENANT_SUSPENDED_REPLY_TEXT, trace_id, "vi")
@@ -7837,7 +7868,7 @@ def is_control_or_translation_command_text(normalized: str, text: str) -> bool:
     return False
 
 
-def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, reply_token: str, text: str, source_type: str) -> Optional[dict]:
+def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, reply_token: str, text: str, source_type: str, force_service_check: bool = False) -> Optional[dict]:
     """Route service-intent messages before MT translation core.
 
     DT79 SERVICE_ROUTING_BEFORE_MT_V1:
@@ -7851,7 +7882,7 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         return None
 
     service_hint = group_context_has_service_keyword_hint(text)
-    if is_group_safe_source_type(source_type) and COST_GUARD_CONTEXT_CLASSIFIER_ENABLED:
+    if is_group_safe_source_type(source_type) and COST_GUARD_CONTEXT_CLASSIFIER_ENABLED and not force_service_check:
         if not group_context_allows_service_routing():
             logger.info(
                 f"[{trace_id}] COST_GUARD_SERVICE_ROUTING_SKIPPED "
@@ -7861,7 +7892,7 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
             )
             return None
 
-    service_keyword = has_service_keyword_for_routing(text, trace_id) if (service_hint or not is_group_safe_source_type(source_type)) else False
+    service_keyword = has_service_keyword_for_routing(text, trace_id) if (service_hint or force_service_check or not is_group_safe_source_type(source_type)) else False
     if not service_keyword:
         return None
 
