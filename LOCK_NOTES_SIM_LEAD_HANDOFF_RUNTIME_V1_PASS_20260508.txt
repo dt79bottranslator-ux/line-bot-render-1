@@ -1,0 +1,25 @@
+DT79 LOCK NOTE — SIM_LEAD_HANDOFF_RUNTIME_V1_PASS
+
+Date: 2026-05-08
+Project: DT79_LINE_CHATBOT_CONTROL_ROOM
+Repo: dt79bottranslator-ux / line-bot-render-1
+
+Target State:
+DT79::TARGET::SIM_LEAD_HANDOFF_RUNTIME_V1
+
+Evidence:
+- Private LINE chat replied with SIM service message.
+- ROUTING_LOG_APPEND_OK intent_name=sim_mang_di_dong service_id=SIM_TW_001 location="TW_ALL"
+- ADS_LEADS_V1_SCHEMA_OK column_count=19
+- PRIVATE_LEAD_CAPTURE_APPEND_OK lead_id=LEAD_20260508_2dd1d16f87bd service_id=SIM_TW_001 service_type=SIM location="TW_ALL"
+- SERVICE_ROUTING_BEFORE_MT_HANDLED source_type=user intent_name=sim_mang_di_dong service_id=SIM_TW_001 reply_ok=True
+- EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True persist_ok=True
+
+Conclusion:
+SIM_LEAD_HANDOFF_RUNTIME_V1 passed.
+Private LINE user SIM demand routes correctly.
+Private lead capture writes to Google Sheets.
+Event finalize persists successfully.
+
+No code change.
+No deploy required.
