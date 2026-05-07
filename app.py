@@ -238,7 +238,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1"
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
 READ_TIMEOUT_SECONDS = int(os.getenv("READ_TIMEOUT_SECONDS", "8").strip() or "8")
@@ -5149,6 +5149,13 @@ GROUP_CONTEXT_SERVICE_KEYWORD_HINTS = os.getenv(
     "GROUP_CONTEXT_SERVICE_KEYWORD_HINTS",
     "sim,phòng,phong,thuê phòng,thue phong,tăng ca,tang ca,nghỉ phép,nghi phep,dịch vụ,dich vu"
 ).strip()
+GROUP_CONTEXT_SERVICE_HINT_MAX_LEN = int(os.getenv(
+    "GROUP_CONTEXT_SERVICE_HINT_MAX_LEN", "400"
+).strip() or "400")
+GROUP_CONTEXT_SERVICE_NEGATION_HINTS = os.getenv(
+    "GROUP_CONTEXT_SERVICE_NEGATION_HINTS",
+    "không cần,khong can,không muốn,khong muon,chưa cần,chua can,不用,不要,不需要,無需,不想"
+).strip()
 
 
 def parse_env_csv_set(raw: str) -> set:
@@ -5178,18 +5185,30 @@ def group_context_has_service_keyword_hint(text: str) -> bool:
     Cheap service-intent hint used before any Google Sheets routing lookup.
     Keep this local and conservative enough to avoid running routing checks for every group chatter,
     but broad enough to catch common worker service needs before MT auto-translation.
+
+    GROUP_SERVICE_HINT_HARDENING_V1:
+    - Cap long text before hint scanning to avoid expensive routing checks on forwarded blocks.
+    - Block explicit negation phrases before service hint detection.
+    - Cover common VI typo/phonetic SIM variants and ZH service requests.
     """
-    normalized = normalize_routing_text(text)
+    raw = sanitize_incoming_text(text)
+    if not raw or len(raw) > max(1, GROUP_CONTEXT_SERVICE_HINT_MAX_LEN):
+        return False
+
+    negation_hints = [safe_str(x) for x in GROUP_CONTEXT_SERVICE_NEGATION_HINTS.split(",") if safe_str(x)]
+    if any(_phrase_present(raw, hint) for hint in negation_hints):
+        return False
+
     default_hints = [
-        "sim", "sim card", "sim卡", "門號", "網卡",
-        "phòng", "phong", "thuê phòng", "thue phong", "找房", "租房", "房間",
-        "xe máy", "xe may", "mua xe", "mua xe máy", "摩托車", "機車",
-        "bằng lái", "bang lai", "đổi bằng", "doi bang", "駕照", "換駕照",
-        "dịch vụ", "dich vu", "服務",
+        "sim", "sỉm", "xim", "s1m", "sim card", "sim卡", "SIM卡", "辦sim", "辦 sim", "門號", "網卡",
+        "phòng", "phong", "thuê phòng", "thue phong", "thuêphòng", "找房", "租房", "租屋", "房間",
+        "xe máy", "xe may", "mua xe", "mua xe máy", "摩托車", "機車", "買車",
+        "bằng lái", "bang lai", "đổi bằng", "doi bang", "駕照", "換駕照", "辦證",
+        "dịch vụ", "dich vu", "服務", "仲介", "打工",
     ]
     hints = [normalize_routing_text(x) for x in GROUP_CONTEXT_SERVICE_KEYWORD_HINTS.split(",") if safe_str(x)]
     hints.extend(normalize_routing_text(x) for x in default_hints)
-    return any(hint and _phrase_present(normalized, hint) for hint in hints)
+    return any(hint and _phrase_present(raw, hint) for hint in hints)
 
 
 def group_context_is_working_hours() -> bool:
