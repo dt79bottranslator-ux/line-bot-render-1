@@ -442,7 +442,8 @@ CASE_MESSAGE_LOG_HEADERS = [
     "log_id", "case_id", "created_at", "sender_role", "user_id", "intent",
     "message_text", "trace_id", "event_key",
 ]
-CASE_OPEN_STATUSES = {"open", "assigned", "waiting_user", "waiting_admin"}
+CASE_OPEN_STATUSES = {"open", "assigned", "waiting_user", "waiting_admin"} 
+CASE_ALLOWED_STATUSES = {"open", "assigned", "waiting_user", "waiting_admin", "resolved", "closed"}
 CASE_MATCH_WINDOW_SECONDS = int(os.getenv("CASE_MATCH_WINDOW_SECONDS", "259200").strip() or "259200")
 def now_tw_iso() -> str:
     return datetime.now(TW_TZ).isoformat()
