@@ -1,0 +1,43 @@
+DT79 LOCK NOTE — CASE_STATUS_UPDATE_V1_FULL_CHAIN_PASS
+
+Date: 2026-05-10
+Repo: line-bot-render-1
+Runtime file: app.py
+
+Target:
+CASE_STATUS_UPDATE_V1_FULL_CHAIN_PASS
+
+Evidence:
+1. /case_status CASE_20260510_101017_47E941 assigned
+   PASS: open -> assigned
+
+2. /case_status CASE_20260510_101017_47E941 resolved
+   PASS: assigned -> resolved
+
+3. /case_status CASE_20260510_101017_47E941 closed
+   PASS: resolved -> closed
+
+Runtime logs confirmed:
+- CASE_STATUS_COMMAND_RECEIVED
+- CASE_STATUS_PARSED
+- CASE_STATUS_ADMIN_CHECK_OK
+- CASE_STATUS_SHEET_LOOKUP_OK
+- CASE_STATUS_TRANSITION_OK
+- UPDATE_ROW_FIELDS_OK
+- CASE_STATUS_UPDATE_OK
+- LINE_REPLY_HTTP status_code=200
+- CASE_STATUS_REPLY_SENT ok=True
+
+Scope locked:
+- CASE_STATUS_COMMAND_ROUTE_V1
+- admin guard via ADMIN_IDS
+- transition guard
+- idempotency guard
+- audit fields: assigned_at, resolved_at, closed_at, last_admin_action_at, status_updated_by
+
+Do not reopen:
+- CASE_TRACKING_ROOT_TRACE_V1
+- existing case match
+- new case creation
+- MT path
+- cache/quota branch
