@@ -238,7 +238,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1"
 APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -322,6 +322,7 @@ EXIT_ENTRY_COMMAND = "/exit"
 STATUS_ENTRY_COMMAND = "/status"
 HELP_ENTRY_COMMAND = "/help"
 LANG_COMMAND_PREFIX = "/lang"
+CASE_STATUS_COMMAND_PREFIX = "/case_status"
 SUPPORTED_LANGUAGE_GROUPS = {"vi", "id", "th", "zh"}
 RICH_MENU_ID_BY_LANGUAGE = {
     "vi": LINE_RICH_MENU_ID_VI,
@@ -986,11 +987,35 @@ def _verify_row_identity(values: List[List[str]], row_index: int, identity_colum
     return current_value == safe_str(identity_value)
 
 def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str], trace_id: str, worksheet_name: str, identity_column: str = "", identity_value: str = "") -> bool:
+    """Update selected columns by header without blanking columns between them.
+
+    CASE_STATUS_COMMAND_ROUTE_V1 hardening:
+    - force fresh row read before write
+    - verify identity column immediately before write when provided
+    - preserve existing values in non-target cells inside the update range
+    """
     values = get_all_values_safe(ws, trace_id, worksheet_name, allow_stale_fallback=False, force_fresh=True)
     if not values:
+        logger.error(f"[{trace_id}] UPDATE_ROW_FIELDS_FAILED worksheet_name={worksheet_name} reason=empty_values")
         return False
+    if row_index < 2 or row_index > len(values):
+        logger.error(
+            f"[{trace_id}] UPDATE_ROW_FIELDS_FAILED worksheet_name={worksheet_name} "
+            f"reason=row_index_out_of_bounds row_index={row_index} row_count={len(values)}"
+        )
+        return False
+
     headers = values[0]
     header_map = build_header_index_map(headers)
+
+    if identity_column and identity_value:
+        if not _verify_row_identity(values, row_index, identity_column, identity_value):
+            logger.error(
+                f"[{trace_id}] UPDATE_ROW_IDENTITY_MISMATCH worksheet_name={worksheet_name} "
+                f"row_index={row_index} identity_column={identity_column}"
+            )
+            return False
+
     normalized_items = []
     for column_name, value in field_values.items():
         col_idx = header_map.get(normalize_header_key(column_name))
@@ -998,11 +1023,21 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
             logger.error(f"[{trace_id}] UPDATE_ROW_COLUMN_MISSING worksheet_name={worksheet_name} column_name={column_name}")
             return False
         normalized_items.append((col_idx, column_name, safe_str(value)))
+
+    if not normalized_items:
+        logger.info(f"[{trace_id}] UPDATE_ROW_FIELDS_NOOP worksheet_name={worksheet_name} row_index={row_index} reason=no_fields")
+        return True
+
     min_col_idx = min(col_idx for col_idx, _, _ in normalized_items)
     max_col_idx = max(col_idx for col_idx, _, _ in normalized_items)
-    row_values = [""] * (max_col_idx - min_col_idx + 1)
+    current_row = values[row_index - 1] if row_index - 1 < len(values) else []
+    row_values = []
+    for col_idx in range(min_col_idx, max_col_idx + 1):
+        row_values.append(safe_str(current_row[col_idx]) if col_idx < len(current_row) else "")
+
     for col_idx, _, value in normalized_items:
         row_values[col_idx - min_col_idx] = value
+
     start_col_letter = chr(ord("A") + min_col_idx)
     end_col_letter = chr(ord("A") + max_col_idx)
     target_range = f"{start_col_letter}{row_index}:{end_col_letter}{row_index}"
@@ -1011,8 +1046,7 @@ def update_row_fields_by_header(ws, row_index: int, field_values: Dict[str, str]
         _invalidate_worksheet_caches(worksheet_name)
         logger.info(
             f"[{trace_id}] UPDATE_ROW_FIELDS_OK worksheet_name={worksheet_name} row_index={row_index} "
-            f"columns={json.dumps([name for _, name, _ in normalized_items], ensure_ascii=False)} "
-            f"values={json.dumps({name: value for _, name, value in normalized_items}, ensure_ascii=False)}"
+            f"columns={json.dumps([name for _, name, _ in normalized_items], ensure_ascii=False)}"
         )
         return True
     except Exception as e:
@@ -6522,36 +6556,133 @@ def touch_case_tracking(case_id: str, trace_id: str, status: str = "", last_user
 
 
 def set_case_status(case_id: str, new_status: str, trace_id: str, updated_by: str = "", resolution_note: str = "") -> bool:
+    """Backward-compatible wrapper for guarded case status updates."""
+    result = update_case_status_with_guard(
+        case_id=case_id,
+        new_status=new_status,
+        trace_id=trace_id,
+        updated_by=updated_by,
+        resolution_note=resolution_note,
+    )
+    return bool(result.get("ok"))
+
+
+CASE_STATUS_TRANSITIONS = {
+    "open": {"assigned"},
+    "assigned": {"waiting_user", "waiting_admin", "resolved"},
+    "waiting_user": {"assigned", "waiting_admin", "resolved"},
+    "waiting_admin": {"assigned", "waiting_user", "resolved"},
+    "resolved": {"closed"},
+    "closed": set(),
+}
+CASE_STATUS_COMMAND_USAGE = "Sai cú pháp. Dùng: /case_status CASE_ID assigned|waiting_user|waiting_admin|resolved|closed [ghi_chú]"
+
+
+def is_case_status_command(text: str) -> bool:
+    normalized = normalize_command_text(text)
+    return normalized == CASE_STATUS_COMMAND_PREFIX or normalized.startswith(f"{CASE_STATUS_COMMAND_PREFIX} ")
+
+
+def parse_case_status_command(text: str, trace_id: str) -> dict:
+    raw = sanitize_incoming_text(text)
+    parts = raw.split(maxsplit=3)
+    if not parts or safe_str(parts[0]).lower() != CASE_STATUS_COMMAND_PREFIX:
+        return {"ok": False, "error": "not_case_status_command"}
+    if len(parts) < 3:
+        logger.warning(f"[{trace_id}] CASE_STATUS_PARSE_FAILED reason=missing_args part_count={len(parts)}")
+        return {"ok": False, "error": "invalid_syntax", "reply": CASE_STATUS_COMMAND_USAGE}
+    case_id = safe_str(parts[1])
+    new_status = safe_str(parts[2]).lower()
+    resolution_note = safe_str(parts[3])[:500] if len(parts) >= 4 else ""
+    if not re.fullmatch(r"CASE_[0-9]{8}_[0-9]{6}_[A-Fa-f0-9]{6}", case_id):
+        logger.warning(f"[{trace_id}] CASE_STATUS_PARSE_FAILED reason=invalid_case_id_format case_id={case_id[:64]}")
+        return {"ok": False, "error": "invalid_case_id", "reply": "case_id không hợp lệ. Dùng case_id thật trong CASE_TRACKING."}
+    if new_status not in CASE_ALLOWED_STATUSES:
+        logger.warning(f"[{trace_id}] CASE_STATUS_PARSE_FAILED case_id={case_id} reason=invalid_status new_status={new_status}")
+        return {"ok": False, "error": "invalid_status", "reply": "Status không hợp lệ. Cho phép: open, assigned, waiting_user, waiting_admin, resolved, closed."}
+    logger.info(f"[{trace_id}] CASE_STATUS_PARSED case_id={case_id} new_status={new_status} note_present={bool(resolution_note)}")
+    return {"ok": True, "case_id": case_id, "new_status": new_status, "resolution_note": resolution_note}
+
+
+def is_case_status_admin_allowed(user_id: str, trace_id: str) -> bool:
+    uid = safe_str(user_id)
+    if uid and uid in ADMIN_LIST:
+        logger.info(f"[{trace_id}] CASE_STATUS_ADMIN_CHECK_OK user_ref={user_ref(uid)} source=ADMIN_IDS")
+        return True
+    allowed = is_admin_allowed(uid, trace_id, required_role="admin")
+    if allowed:
+        logger.info(f"[{trace_id}] CASE_STATUS_ADMIN_CHECK_OK user_ref={user_ref(uid)} source=ADMIN_ACCESS_MASTER")
+        return True
+    logger.warning(f"[{trace_id}] CASE_STATUS_ADMIN_CHECK_FAIL user_ref={user_ref(uid)}")
+    return False
+
+
+def get_case_tracking_row_by_id(case_id: str, trace_id: str) -> dict:
+    case_id_value = safe_str(case_id)
+    ws = ensure_case_tracking_worksheet(trace_id)
+    if not ws:
+        logger.error(f"[{trace_id}] CASE_STATUS_SHEET_LOOKUP_FAIL case_id={case_id_value} reason=worksheet_unavailable")
+        return {"ok": False, "error": "worksheet_unavailable"}
+    values = get_all_values_safe(ws, trace_id, CASE_TRACKING_SHEET_NAME, allow_stale_fallback=False, force_fresh=True)
+    if not values:
+        logger.error(f"[{trace_id}] CASE_STATUS_SHEET_LOOKUP_FAIL case_id={case_id_value} reason=empty_values")
+        return {"ok": False, "error": "empty_values"}
+    headers = [safe_str(x) for x in values[0]]
+    header_map = build_header_index_map(headers)
+    case_id_idx = header_map.get("case_id")
+    if case_id_idx is None:
+        logger.error(f"[{trace_id}] CASE_STATUS_SHEET_LOOKUP_FAIL reason=case_id_column_missing")
+        return {"ok": False, "error": "case_id_column_missing"}
+    for row_index, row in enumerate(values[1:], start=2):
+        current_case_id = safe_str(row[case_id_idx]) if case_id_idx < len(row) else ""
+        if current_case_id != case_id_value:
+            continue
+        record = {}
+        for idx, header in enumerate(headers):
+            if header:
+                record[header] = safe_str(row[idx]) if idx < len(row) else ""
+        logger.info(
+            f"[{trace_id}] CASE_STATUS_SHEET_LOOKUP_OK case_id={case_id_value} "
+            f"row_index={row_index} current_status={safe_str(record.get('status')).lower() or 'blank'}"
+        )
+        return {"ok": True, "ws": ws, "row_index": row_index, "record": record}
+    logger.warning(f"[{trace_id}] CASE_STATUS_SHEET_LOOKUP_NOT_FOUND case_id={case_id_value}")
+    return {"ok": False, "error": "case_not_found"}
+
+
+def update_case_status_with_guard(case_id: str, new_status: str, trace_id: str, updated_by: str = "", resolution_note: str = "") -> dict:
     case_id_value = safe_str(case_id)
     status_value = safe_str(new_status).lower()
     actor = safe_str(updated_by) or "system"
-
-    if not case_id_value:
-        logger.error(f"[{trace_id}] CASE_STATUS_SET_REJECTED reason=missing_case_id")
-        return False
-
     if status_value not in CASE_ALLOWED_STATUSES:
-        logger.error(
-            f"[{trace_id}] CASE_STATUS_SET_REJECTED case_id={case_id_value} "
-            f"reason=invalid_status new_status={safe_str(new_status)}"
+        logger.warning(f"[{trace_id}] CASE_STATUS_TRANSITION_BLOCKED case_id={case_id_value} reason=invalid_status new_status={status_value}")
+        return {"ok": False, "code": "invalid_status", "reply": "Status không hợp lệ."}
+
+    lookup = get_case_tracking_row_by_id(case_id_value, trace_id)
+    if not lookup.get("ok"):
+        code = safe_str(lookup.get("error")) or "lookup_failed"
+        reply = "Không tìm thấy case_id trong CASE_TRACKING." if code == "case_not_found" else "Không đọc được CASE_TRACKING. Kiểm tra Google Sheet/log."
+        return {"ok": False, "code": code, "reply": reply}
+
+    record = lookup.get("record") or {}
+    current_status = safe_str(record.get("status")).lower() or "open"
+    if current_status == status_value:
+        logger.info(f"[{trace_id}] CASE_STATUS_NOOP_ALREADY_SET case_id={case_id_value} status={status_value}")
+        return {"ok": True, "code": "noop", "current_status": current_status, "new_status": status_value, "reply": f"Case đã ở trạng thái {status_value}: {case_id_value}"}
+
+    allowed_next = CASE_STATUS_TRANSITIONS.get(current_status, set())
+    if status_value not in allowed_next:
+        logger.warning(
+            f"[{trace_id}] CASE_STATUS_TRANSITION_BLOCKED case_id={case_id_value} "
+            f"from_status={current_status} to_status={status_value} allowed={json.dumps(sorted(allowed_next), ensure_ascii=False)}"
         )
-        return False
-
-    ws = ensure_case_tracking_worksheet(trace_id)
-    if ws is None:
-        logger.error(f"[{trace_id}] CASE_STATUS_SET_SKIPPED case_id={case_id_value} reason=worksheet_unavailable")
-        return False
-
-    row_index = find_first_row_index_by_column_value(
-        ws,
-        "case_id",
-        case_id_value,
-        trace_id,
-        CASE_TRACKING_SHEET_NAME,
-    )
-    if row_index <= 0:
-        logger.error(f"[{trace_id}] CASE_STATUS_SET_SKIPPED case_id={case_id_value} reason=row_not_found")
-        return False
+        return {
+            "ok": False,
+            "code": "transition_blocked",
+            "current_status": current_status,
+            "new_status": status_value,
+            "reply": f"Không cho đổi trạng thái {current_status} -> {status_value}.",
+        }
 
     now_iso = now_tw_iso()
     field_values = {
@@ -6559,39 +6690,89 @@ def set_case_status(case_id: str, new_status: str, trace_id: str, updated_by: st
         "updated_at": now_iso,
         "trace_id": safe_str(trace_id),
         "status_updated_by": actor,
+        "last_admin_action_at": now_iso,
     }
-
     if status_value == "assigned":
         field_values["assigned_at"] = now_iso
-        field_values["last_admin_action_at"] = now_iso
-
-    if status_value == "resolved":
+        if safe_str(record.get("owner")).lower() in {"", "unassigned"}:
+            field_values["owner"] = actor
+    elif status_value == "resolved":
         field_values["resolved_at"] = now_iso
-        field_values["last_admin_action_at"] = now_iso
         if safe_str(resolution_note):
             field_values["resolution_note"] = safe_str(resolution_note)
-
-    if status_value == "closed":
+    elif status_value == "closed":
         field_values["closed_at"] = now_iso
-        field_values["last_admin_action_at"] = now_iso
+        if safe_str(resolution_note):
+            field_values["resolution_note"] = safe_str(resolution_note)
+    elif status_value in {"waiting_user", "waiting_admin"}:
         if safe_str(resolution_note):
             field_values["resolution_note"] = safe_str(resolution_note)
 
+    logger.info(f"[{trace_id}] CASE_STATUS_TRANSITION_OK case_id={case_id_value} from_status={current_status} to_status={status_value}")
     ok = update_row_fields_by_header(
-        ws,
-        row_index,
+        lookup.get("ws"),
+        int(lookup.get("row_index") or 0),
         field_values,
         trace_id,
         CASE_TRACKING_SHEET_NAME,
         identity_column="case_id",
         identity_value=case_id_value,
     )
-    if ok:
-        logger.info(
-            f"[{trace_id}] CASE_STATUS_SET_OK case_id={case_id_value} "
-            f"new_status={status_value} updated_by={actor}"
-        )
-    return ok
+    if not ok:
+        logger.error(f"[{trace_id}] CASE_STATUS_UPDATE_FAIL case_id={case_id_value} from_status={current_status} to_status={status_value}")
+        return {"ok": False, "code": "update_failed", "reply": "Cập nhật case thất bại. Kiểm tra Render log."}
+    logger.info(
+        f"[{trace_id}] CASE_STATUS_UPDATE_OK case_id={case_id_value} "
+        f"from_status={current_status} to_status={status_value} updated_by={actor}"
+    )
+    return {
+        "ok": True,
+        "code": "updated",
+        "current_status": current_status,
+        "new_status": status_value,
+        "reply": f"Đã cập nhật case {case_id_value}: {current_status} -> {status_value}",
+    }
+
+
+def handle_case_status_command(event: dict, trace_id: str, user_id: str, reply_token: str, text: str, source_type: str) -> dict:
+    logger.info(f"[{trace_id}] CASE_STATUS_COMMAND_RECEIVED user_ref={user_ref(user_id)} source_type={safe_str(source_type)} text_fp={message_fingerprint(text)}")
+    if not is_private_source_type(source_type):
+        logger.warning(f"[{trace_id}] CASE_STATUS_COMMAND_BLOCKED user_ref={user_ref(user_id)} reason=non_private source_type={safe_str(source_type)}")
+        return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": "case_status_blocked_non_private", "user_ref": user_ref(user_id), "reply_sent": False}
+
+    parsed = parse_case_status_command(text, trace_id)
+    if not parsed.get("ok"):
+        reply_text = safe_str(parsed.get("reply")) or CASE_STATUS_COMMAND_USAGE
+        reply_ok = reply_line_text(reply_token, reply_text, trace_id, "vi") if reply_token else False
+        logger.info(f"[{trace_id}] CASE_STATUS_REPLY_SENT ok={reply_ok} code={safe_str(parsed.get('error'))}")
+        return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": "case_status_invalid", "user_ref": user_ref(user_id), "reply_sent": reply_ok}
+
+    if not is_case_status_admin_allowed(user_id, trace_id):
+        reply_ok = reply_line_text(reply_token, "Không có quyền đổi trạng thái case.", trace_id, "vi") if reply_token else False
+        logger.warning(f"[{trace_id}] CASE_STATUS_FORBIDDEN user_ref={user_ref(user_id)} case_id={safe_str(parsed.get('case_id'))} reply_ok={reply_ok}")
+        return {"handled": True, "event_type": "message", "message_type": "text", "flow_used": "case_status_forbidden", "user_ref": user_ref(user_id), "reply_sent": reply_ok}
+
+    result = update_case_status_with_guard(
+        case_id=safe_str(parsed.get("case_id")),
+        new_status=safe_str(parsed.get("new_status")),
+        trace_id=trace_id,
+        updated_by=user_ref(user_id),
+        resolution_note=safe_str(parsed.get("resolution_note")),
+    )
+    reply_text = safe_str(result.get("reply")) or ("Cập nhật case thành công." if result.get("ok") else "Cập nhật case thất bại.")
+    reply_ok = reply_line_text(reply_token, reply_text, trace_id, "vi") if reply_token else False
+    logger.info(
+        f"[{trace_id}] CASE_STATUS_REPLY_SENT ok={reply_ok} "
+        f"case_id={safe_str(parsed.get('case_id'))} result_code={safe_str(result.get('code'))}"
+    )
+    return {
+        "handled": True,
+        "event_type": "message",
+        "message_type": "text",
+        "flow_used": f"case_status_{safe_str(result.get('code')) or 'unknown'}",
+        "user_ref": user_ref(user_id),
+        "reply_sent": reply_ok,
+    }
 
 
 def attach_or_create_case(user_id: str, language_group: str, intent: str, raw_text: str, normalized_text: str, source_channel: str, trace_id: str, event_key: str = "") -> Optional[str]:
@@ -8413,6 +8594,13 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             "reply_sent": reply_sent,
             "reason": "gsheet_circuit_open",
         }
+
+    # --- CASE_STATUS_COMMAND_ROUTE_V1 ---
+    # Admin control commands must be handled before service routing, case tracking hook,
+    # and MT auto-translation. Otherwise /case_status is translated as normal text.
+    if is_case_status_command(text):
+        return handle_case_status_command(event, trace_id, user_id, reply_token, text, source_type)
+
     pre_mt_routing_result = handle_service_routing_before_mt(event, trace_id, user_id, reply_token, text, source_type)
     if pre_mt_routing_result:
         return pre_mt_routing_result
