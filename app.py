@@ -437,12 +437,13 @@ CASE_TRACKING_HEADERS = [
     "case_id", "created_at", "updated_at", "user_id", "language_group", "intent",
     "raw_text", "normalized_text", "status", "owner", "source_channel", "priority",
     "last_user_message_at", "last_admin_action_at", "resolution_note", "closed_at", "trace_id",
+    "assigned_at", "resolved_at", "status_updated_by",
 ]
 CASE_MESSAGE_LOG_HEADERS = [
     "log_id", "case_id", "created_at", "sender_role", "user_id", "intent",
     "message_text", "trace_id", "event_key",
 ]
-CASE_OPEN_STATUSES = {"open", "assigned", "waiting_user", "waiting_admin"} 
+CASE_OPEN_STATUSES = {"open", "assigned", "waiting_user", "waiting_admin"}
 CASE_ALLOWED_STATUSES = {"open", "assigned", "waiting_user", "waiting_admin", "resolved", "closed"}
 CASE_MATCH_WINDOW_SECONDS = int(os.getenv("CASE_MATCH_WINDOW_SECONDS", "259200").strip() or "259200")
 def now_tw_iso() -> str:
@@ -6371,10 +6372,8 @@ def ensure_sheet_headers(ws, worksheet_name: str, headers: List[str], trace_id: 
 def ensure_case_tracking_worksheet(trace_id: str):
     ws = get_worksheet_by_name(trace_id, CASE_TRACKING_SHEET_NAME)
     if not ws:
-        logger.error(f"[{trace_id}] CASE_TRACKING_SHEET_UNAVAILABLE worksheet_name={CASE_TRACKING_SHEET_NAME}")
         return None
     if not ensure_sheet_headers(ws, CASE_TRACKING_SHEET_NAME, CASE_TRACKING_HEADERS, trace_id):
-        logger.error(f"[{trace_id}] CASE_TRACKING_HEADERS_INVALID worksheet_name={CASE_TRACKING_SHEET_NAME}")
         return None
     return ws
 
@@ -6382,10 +6381,8 @@ def ensure_case_tracking_worksheet(trace_id: str):
 def ensure_case_message_log_worksheet(trace_id: str):
     ws = get_worksheet_by_name(trace_id, CASE_MESSAGE_LOG_SHEET_NAME)
     if not ws:
-        logger.error(f"[{trace_id}] CASE_MESSAGE_LOG_SHEET_UNAVAILABLE worksheet_name={CASE_MESSAGE_LOG_SHEET_NAME}")
         return None
     if not ensure_sheet_headers(ws, CASE_MESSAGE_LOG_SHEET_NAME, CASE_MESSAGE_LOG_HEADERS, trace_id):
-        logger.error(f"[{trace_id}] CASE_MESSAGE_LOG_HEADERS_INVALID worksheet_name={CASE_MESSAGE_LOG_SHEET_NAME}")
         return None
     return ws
 
@@ -6393,11 +6390,9 @@ def ensure_case_message_log_worksheet(trace_id: str):
 def find_open_case_for_user(user_id: str, intent: str, normalized_text: str, trace_id: str) -> Optional[dict]:
     ws = ensure_case_tracking_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] CASE_MATCH_LOOKUP_SKIPPED reason=worksheet_unavailable")
         return None
     records = get_records_safe(ws, trace_id, CASE_TRACKING_SHEET_NAME)
     if not records:
-        logger.info(f"[{trace_id}] CASE_MATCH_LOOKUP_EMPTY worksheet_name={CASE_TRACKING_SHEET_NAME}")
         return None
 
     user_key = safe_str(user_id)
@@ -6436,7 +6431,6 @@ def find_open_case_for_user(user_id: str, intent: str, normalized_text: str, tra
 def create_case_record(user_id: str, language_group: str, intent: str, raw_text: str, normalized_text: str, source_channel: str, trace_id: str) -> Optional[str]:
     ws = ensure_case_tracking_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] CASE_CREATE_SKIPPED reason=worksheet_unavailable")
         return None
     now_iso = now_tw_iso()
     case_id = f"CASE_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6].upper()}"
@@ -6458,6 +6452,9 @@ def create_case_record(user_id: str, language_group: str, intent: str, raw_text:
         "",
         "",
         safe_str(trace_id),
+        "",
+        "",
+        "",
     ]
     try:
         append_row_guarded(ws, trace_id, CASE_TRACKING_SHEET_NAME, row)
@@ -6501,11 +6498,9 @@ def append_case_message_log(case_id: str, sender_role: str, user_id: str, intent
 def touch_case_tracking(case_id: str, trace_id: str, status: str = "", last_user_message_at: str = "", raw_text: str = "", normalized_text: str = "") -> bool:
     ws = ensure_case_tracking_worksheet(trace_id)
     if not ws:
-        logger.error(f"[{trace_id}] CASE_UPDATE_SKIPPED reason=worksheet_unavailable case_id={safe_str(case_id)}")
         return False
     row_index = find_first_row_index_by_column_value(ws, "case_id", case_id, trace_id, CASE_TRACKING_SHEET_NAME)
     if not row_index:
-        logger.error(f"[{trace_id}] CASE_UPDATE_ROW_NOT_FOUND case_id={safe_str(case_id)}")
         return False
     now_iso = now_tw_iso()
     field_values = {"updated_at": now_iso, "trace_id": safe_str(trace_id)}
@@ -6523,6 +6518,79 @@ def touch_case_tracking(case_id: str, trace_id: str, status: str = "", last_user
     )
     if ok:
         logger.info(f"[{trace_id}] CASE_STATUS_UPDATED case_id={case_id} to={field_values.get('status', 'unchanged')}")
+    return ok
+
+
+def set_case_status(case_id: str, new_status: str, trace_id: str, updated_by: str = "", resolution_note: str = "") -> bool:
+    case_id_value = safe_str(case_id)
+    status_value = safe_str(new_status).lower()
+    actor = safe_str(updated_by) or "system"
+
+    if not case_id_value:
+        logger.error(f"[{trace_id}] CASE_STATUS_SET_REJECTED reason=missing_case_id")
+        return False
+
+    if status_value not in CASE_ALLOWED_STATUSES:
+        logger.error(
+            f"[{trace_id}] CASE_STATUS_SET_REJECTED case_id={case_id_value} "
+            f"reason=invalid_status new_status={safe_str(new_status)}"
+        )
+        return False
+
+    ws = ensure_case_tracking_worksheet(trace_id)
+    if ws is None:
+        logger.error(f"[{trace_id}] CASE_STATUS_SET_SKIPPED case_id={case_id_value} reason=worksheet_unavailable")
+        return False
+
+    row_index = find_first_row_index_by_column_value(
+        ws,
+        "case_id",
+        case_id_value,
+        trace_id,
+        CASE_TRACKING_SHEET_NAME,
+    )
+    if row_index <= 0:
+        logger.error(f"[{trace_id}] CASE_STATUS_SET_SKIPPED case_id={case_id_value} reason=row_not_found")
+        return False
+
+    now_iso = now_tw_iso()
+    field_values = {
+        "status": status_value,
+        "updated_at": now_iso,
+        "trace_id": safe_str(trace_id),
+        "status_updated_by": actor,
+    }
+
+    if status_value == "assigned":
+        field_values["assigned_at"] = now_iso
+        field_values["last_admin_action_at"] = now_iso
+
+    if status_value == "resolved":
+        field_values["resolved_at"] = now_iso
+        field_values["last_admin_action_at"] = now_iso
+        if safe_str(resolution_note):
+            field_values["resolution_note"] = safe_str(resolution_note)
+
+    if status_value == "closed":
+        field_values["closed_at"] = now_iso
+        field_values["last_admin_action_at"] = now_iso
+        if safe_str(resolution_note):
+            field_values["resolution_note"] = safe_str(resolution_note)
+
+    ok = update_row_fields_by_header(
+        ws,
+        row_index,
+        field_values,
+        trace_id,
+        CASE_TRACKING_SHEET_NAME,
+        identity_column="case_id",
+        identity_value=case_id_value,
+    )
+    if ok:
+        logger.info(
+            f"[{trace_id}] CASE_STATUS_SET_OK case_id={case_id_value} "
+            f"new_status={status_value} updated_by={actor}"
+        )
     return ok
 
 
@@ -8354,22 +8422,15 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
     if is_group_safe_source_type(source_type) and group_context_allows_translation():
         set_group_safe_reply_allowed(trace_id, True, safe_str(get_group_context_decision().get("reason_code")) or "cost_guard_context_translate")
 
-    # --- CASE_TRACKING_ROOT_TRACE_V1 ---
-    # Runtime root-trace for case hook before private auto-translation short-circuit.
-    # No logic change. No extra Sheet reads beyond existing attach_or_create_case path.
+    # --- CASE_TRACKING_V1_PRE_MT_HOOK ---
+    # Blind spot fixed:
+    # private auto-translation may short-circuit before default intent routing.
+    # Create or match case first for trackable intents without changing visible reply path.
     try:
-        logger.info(f"[{trace_id}] CASE_HOOK_ENTERED source_type={safe_str(source_type)}")
         default_details = resolve_default_intent_details(normalized)
         case_intent = safe_str(default_details.get("intent")) or "general"
-        logger.info(
-            f"[{trace_id}] CASE_INTENT_RESOLVED intent={case_intent} "
-            f"reason={safe_str(default_details.get('reason'))} "
-            f"scores={json.dumps(default_details.get('scores', {}), ensure_ascii=False)}"
-        )
-        case_open_verdict = should_open_case(case_intent, normalized)
-        logger.info(f"[{trace_id}] CASE_SHOULD_OPEN verdict={case_open_verdict} intent={case_intent}")
         case_event_key = get_current_event_ref()
-        case_result = attach_or_create_case(
+        attach_or_create_case(
             user_id=user_id,
             language_group=DEFAULT_LANGUAGE_GROUP,
             intent=case_intent,
@@ -8379,9 +8440,8 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             trace_id=trace_id,
             event_key=case_event_key,
         )
-        logger.info(f"[{trace_id}] CASE_ATTACH_RESULT result={'assigned' if case_result else 'none'}")
     except Exception as e:
-        logger.exception(f"[{trace_id}] CASE_ATTACH_EXCEPTION exception={type(e).__name__}:{e}")
+        logger.exception(f"[{trace_id}] CASE_TRACKING_PRE_MT_FAILED exception={type(e).__name__}:{e}")
 
     mt_translation_result = handle_mt_translation_message(event, trace_id)
     if mt_translation_result:
