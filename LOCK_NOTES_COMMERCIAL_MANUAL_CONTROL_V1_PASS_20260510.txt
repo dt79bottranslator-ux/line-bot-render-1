@@ -1,0 +1,45 @@
+DT79 LOCK NOTE — COMMERCIAL_MANUAL_CONTROL_V1_PASS
+
+Date: 2026-05-10
+Repo: line-bot-render-1
+Google Sheet: DT79_PHASE1_WORKER_CASES_TENANT_002
+
+Decision:
+Chose PA3 — COMMERCIAL_MANUAL_CONTROL_V1.
+No code change.
+No deploy.
+
+Reason:
+PA1 /lead_status command remains blocked until private admin tenant resolution is verified by runtime log.
+ADS_LEADS_V1 contains possible PII, so Gemini/executor access remains blocked.
+
+Sheets created:
+- LEAD_REVIEW_QUEUE
+- CONVERSION_LOG
+- PAYOUT_LOG
+- COMMERCIAL_AUDIT_LOG
+
+Manual chain tested:
+- LEAD_REVIEW_QUEUE row REVIEW_TEST_001: PASS
+- CONVERSION_LOG row CONV_TEST_001: PASS
+- PAYOUT_LOG row PAYOUT_TEST_001: PASS
+- COMMERCIAL_AUDIT_LOG row AUDIT_TEST_001: PASS
+
+Commercial data path:
+ADS_LEADS_V1 -> LEAD_REVIEW_QUEUE -> CONVERSION_LOG -> PAYOUT_LOG -> COMMERCIAL_AUDIT_LOG
+
+Scope locked:
+- manual commercial review queue
+- manual conversion tracking
+- manual payout tracking
+- commercial audit trail
+
+Do not build yet:
+- /lead_status command
+- auto payout
+- Gemini reading ADS_LEADS_V1
+- tenant dashboard
+- cross-tenant commercial automation
+
+Commit message:
+docs(lock): add commercial manual control v1 pass note
