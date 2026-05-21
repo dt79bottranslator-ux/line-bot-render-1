@@ -339,6 +339,11 @@ ADS_LEADS_V1_HEADERS = [
     "telco_preference", "duration", "phone_or_line_contact", "lead_status", "last_message",
     "created_by", "updated_at",
 ]
+PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES = int(os.getenv("PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES", "5").strip() or "5")
+PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI = os.getenv(
+    "PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI",
+    "Yêu cầu mua SIM của bạn đã được ghi nhận trước đó. Vui lòng chờ nhân viên liên hệ hoặc bổ sung số điện thoại nếu cần."
+).strip()
 ADS_CLICK_LOG_SHEET_NAME = "ads_click_log"
 TENANT_REGISTRY_SHEET_NAME = "TENANT_REGISTRY"
 SYSTEM_META_SHEET_NAME = "SYSTEM_META"
@@ -3129,6 +3134,197 @@ def ads_lead_id_exists(ws, lead_id: str, trace_id: str) -> bool:
     return False
 
 
+def normalize_private_sim_dedup_location_bucket(value: str) -> str:
+    raw = safe_str(value)
+    if not raw:
+        return ROUTING_FALLBACK_LOCATION
+    normalized = normalize_routing_text(raw)
+    if normalized in {"tw_all", "toan dai loan", "toan dai", "all taiwan"}:
+        return ROUTING_FALLBACK_LOCATION
+    for canonical, aliases in LOCATION_ALIAS_MAP.items():
+        if normalized == normalize_routing_text(canonical):
+            return canonical
+        for alias in aliases:
+            if normalized == normalize_routing_text(alias):
+                return canonical
+    return raw
+
+
+def is_private_sim_lead_dedup_candidate(intent_name: str, service_row: dict, fields: dict) -> bool:
+    service_id = safe_str((service_row or {}).get("service_id"))
+    service_type = safe_str((fields or {}).get("service_type"))
+    return (
+        safe_str(intent_name) == "sim_mang_di_dong"
+        or service_id == "SIM_TW_001"
+        or service_type == "SIM"
+    )
+
+
+def build_private_sim_dedup_reply(language_group: str) -> str:
+    lang = normalize_language_group(language_group)
+    if lang == "zh":
+        return "你的 SIM 需求先前已記錄。請等待人員聯絡，或補充電話/LINE 聯絡方式。"
+    if lang == "id":
+        return "Permintaan SIM Anda sudah tercatat sebelumnya. Silakan tunggu staf menghubungi, atau tambahkan nomor telepon/LINE jika perlu."
+    if lang == "th":
+        return "ระบบบันทึกคำขอ SIM ของคุณไว้ก่อนแล้ว กรุณารอเจ้าหน้าที่ติดต่อกลับ หรือส่งเบอร์โทร/LINE เพิ่มเติมหากจำเป็น"
+    return PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI
+
+
+def find_existing_private_sim_lead(
+    ws,
+    user_id: str,
+    source_type: str,
+    service_row: dict,
+    fields: dict,
+    trace_id: str,
+    window_minutes: int = 0,
+) -> dict:
+    window = int(window_minutes or PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES)
+    target_user_ref = user_ref(user_id)
+    target_service_id = safe_str((service_row or {}).get("service_id"))
+    target_service_type = safe_str((fields or {}).get("service_type"))
+    target_location_bucket = normalize_private_sim_dedup_location_bucket((fields or {}).get("location"))
+    values = get_all_values_safe(
+        ws,
+        trace_id,
+        ADS_LEADS_V1_SHEET_NAME,
+        allow_stale_fallback=False,
+        force_fresh=True,
+    )
+    if not values:
+        return {}
+
+    headers = values[0]
+    header_map = build_header_index_map(headers)
+    required_columns = ["lead_id", "timestamp", "user_id", "source_type", "intent", "service_id", "service_type", "location"]
+    missing = [name for name in required_columns if header_map.get(name) is None]
+    if missing:
+        logger.error(
+            f"[{trace_id}] PRIVATE_LEAD_DEDUP_LOOKUP_SKIPPED "
+            f"reason=missing_columns missing={json.dumps(missing, ensure_ascii=False)}"
+        )
+        return {}
+
+    now_dt = now_tw_dt()
+    matched = {}
+    for row in values[1:]:
+        lead_id = safe_str(row[header_map["lead_id"]]) if header_map["lead_id"] < len(row) else ""
+        row_ts_raw = safe_str(row[header_map["timestamp"]]) if header_map["timestamp"] < len(row) else ""
+        row_user_ref = safe_str(row[header_map["user_id"]]) if header_map["user_id"] < len(row) else ""
+        row_source_type = safe_str(row[header_map["source_type"]]) if header_map["source_type"] < len(row) else ""
+        row_intent = safe_str(row[header_map["intent"]]) if header_map["intent"] < len(row) else ""
+        row_service_id = safe_str(row[header_map["service_id"]]) if header_map["service_id"] < len(row) else ""
+        row_service_type = safe_str(row[header_map["service_type"]]) if header_map["service_type"] < len(row) else ""
+        row_location = safe_str(row[header_map["location"]]) if header_map["location"] < len(row) else ""
+        row_location_bucket = normalize_private_sim_dedup_location_bucket(row_location)
+
+        if not lead_id or row_user_ref != target_user_ref:
+            continue
+        if safe_str(row_source_type) != safe_str(source_type):
+            continue
+        if target_service_id and row_service_id != target_service_id:
+            continue
+        if target_service_type and row_service_type != target_service_type:
+            continue
+        if row_intent and row_intent != "sim_mang_di_dong":
+            continue
+        if row_location_bucket != target_location_bucket:
+            continue
+
+        row_dt = parse_iso_datetime(row_ts_raw)
+        if not row_dt:
+            continue
+        age_seconds = int((now_dt - row_dt).total_seconds())
+        if age_seconds < 0:
+            age_seconds = 0
+        if age_seconds <= window * 60:
+            matched = {
+                "lead_id": lead_id,
+                "timestamp": row_ts_raw,
+                "age_seconds": age_seconds,
+                "location_bucket": target_location_bucket,
+                "service_id": row_service_id,
+                "service_type": row_service_type,
+            }
+
+    if matched:
+        logger.info(
+            f"[{trace_id}] PRIVATE_LEAD_DEDUP_LOOKUP_HIT "
+            f"existing_lead_id={safe_str(matched.get('lead_id'))} "
+            f"user_ref={target_user_ref} service_id={target_service_id} "
+            f"service_type={target_service_type} location_bucket={json.dumps(target_location_bucket, ensure_ascii=False)} "
+            f"dedup_window_minutes={window} age_seconds={safe_str(matched.get('age_seconds'))}"
+        )
+        return matched
+
+    logger.info(
+        f"[{trace_id}] PRIVATE_LEAD_DEDUP_LOOKUP_MISS "
+        f"user_ref={target_user_ref} service_id={target_service_id} "
+        f"service_type={target_service_type} location_bucket={json.dumps(target_location_bucket, ensure_ascii=False)} "
+        f"dedup_window_minutes={window}"
+    )
+    return {}
+
+
+def check_private_sim_lead_dedup_before_reply(
+    event: dict,
+    user_id: str,
+    intent_name: str,
+    service_row: dict,
+    location_hint: str,
+    message: str,
+    trace_id: str,
+    language_group: str,
+) -> dict:
+    source_type = get_event_source_type(event)
+    if not is_private_source_type(source_type):
+        return {"dedup": False}
+
+    fields = extract_private_lead_fields(message, intent_name, service_row, location_hint)
+    if not is_private_sim_lead_dedup_candidate(intent_name, service_row, fields):
+        return {"dedup": False}
+
+    ws = get_worksheet_by_name(trace_id, ADS_LEADS_V1_SHEET_NAME)
+    if not ws:
+        logger.error(f"[{trace_id}] PRIVATE_LEAD_DEDUP_LOOKUP_SKIPPED reason=worksheet_unavailable worksheet_name={ADS_LEADS_V1_SHEET_NAME}")
+        return {"dedup": False}
+
+    if not ensure_ads_leads_v1_schema(ws, trace_id):
+        logger.error(f"[{trace_id}] PRIVATE_LEAD_DEDUP_LOOKUP_SKIPPED reason=schema_invalid worksheet_name={ADS_LEADS_V1_SHEET_NAME}")
+        return {"dedup": False}
+
+    existing = find_existing_private_sim_lead(
+        ws=ws,
+        user_id=user_id,
+        source_type=source_type,
+        service_row=service_row,
+        fields=fields,
+        trace_id=trace_id,
+        window_minutes=PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES,
+    )
+    if not existing:
+        return {"dedup": False, "fields": fields}
+
+    tenant_id = get_current_service_tenant_id()
+    logger.info(
+        f"[{trace_id}] PRIVATE_LEAD_DEDUP_HIT "
+        f"dedup=true existing_lead_id={safe_str(existing.get('lead_id'))} "
+        f"new_lead_created=false tenant_id={safe_str(tenant_id)} "
+        f"source_type={safe_str(source_type)} service_type=SIM "
+        f"service_id={safe_str((service_row or {}).get('service_id'))} "
+        f"location_bucket={json.dumps(safe_str(existing.get('location_bucket')), ensure_ascii=False)} "
+        f"dedup_window_minutes={PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES}"
+    )
+    return {
+        "dedup": True,
+        "existing_lead_id": safe_str(existing.get("lead_id")),
+        "reply_text": build_private_sim_dedup_reply(language_group),
+        "fields": fields,
+        "location_bucket": safe_str(existing.get("location_bucket")),
+    }
+
+
 def extract_private_lead_fields(text: str, intent_name: str, service_row: dict, location_hint: str) -> dict:
     service_type = normalize_lead_service_type(intent_name, service_row)
     location = safe_str(location_hint) or safe_str((service_row or {}).get("service_region_key")) or safe_str((service_row or {}).get("location"))
@@ -3189,6 +3385,29 @@ def append_private_lead_capture_event(
         return False
 
     fields = extract_private_lead_fields(message, intent_name, service_row, location_hint)
+    if is_private_sim_lead_dedup_candidate(intent_name, service_row, fields):
+        existing = find_existing_private_sim_lead(
+            ws=ws,
+            user_id=user_id,
+            source_type=source_type,
+            service_row=service_row,
+            fields=fields,
+            trace_id=trace_id,
+            window_minutes=PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES,
+        )
+        if existing:
+            tenant_id = get_current_service_tenant_id()
+            logger.info(
+                f"[{trace_id}] PRIVATE_LEAD_DEDUP_HIT "
+                f"dedup=true existing_lead_id={safe_str(existing.get('lead_id'))} "
+                f"new_lead_created=false tenant_id={safe_str(tenant_id)} "
+                f"source_type={safe_str(source_type)} service_type=SIM "
+                f"service_id={safe_str(service_row.get('service_id'))} "
+                f"location_bucket={json.dumps(safe_str(existing.get('location_bucket')), ensure_ascii=False)} "
+                f"dedup_window_minutes={PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES}"
+            )
+            return True
+
     now_iso = now_tw_iso()
     lead_id = private_lead_id_for_event(user_id, trace_id)
     if ads_lead_id_exists(ws, lead_id, trace_id):
@@ -8489,11 +8708,26 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         )
         return build_group_safe_silent_result(user_id, "routing_result_not_routed")
 
+    service_row = routing_result.get("service_row") or {}
     reply_text = safe_str(routing_result.get("reply_text")) or build_default_intent_reply(text, current_language, trace_id)
+    private_sim_dedup = {"dedup": False}
+    if service_row and is_private_source_type(source_type):
+        private_sim_dedup = check_private_sim_lead_dedup_before_reply(
+            event=event,
+            user_id=user_id,
+            intent_name=safe_str(routing_result.get("intent_name")),
+            service_row=service_row,
+            location_hint=safe_str(routing_result.get("location_hint")),
+            message=text,
+            trace_id=trace_id,
+            language_group=current_language,
+        )
+        if private_sim_dedup.get("dedup"):
+            reply_text = safe_str(private_sim_dedup.get("reply_text")) or reply_text
+
     if is_group_safe_source_type(source_type):
         set_group_safe_reply_allowed(trace_id, True, "service_routing_before_mt_routed")
     reply_ok = reply_line_text(reply_token, reply_text, trace_id, current_language)
-    service_row = routing_result.get("service_row") or {}
 
     if service_row:
         if not is_private_source_type(source_type):
@@ -8527,15 +8761,22 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
                 trace_id=trace_id,
             )
             if is_private_source_type(source_type):
-                append_private_lead_capture_event(
-                    event=event,
-                    user_id=user_id,
-                    intent_name=safe_str(routing_result.get("intent_name")),
-                    service_row=service_row,
-                    location_hint=safe_str(routing_result.get("location_hint")),
-                    message=text,
-                    trace_id=trace_id,
-                )
+                if private_sim_dedup.get("dedup"):
+                    logger.info(
+                        f"[{trace_id}] PRIVATE_LEAD_CAPTURE_APPEND_SKIPPED "
+                        f"reason=dedup_hit existing_lead_id={safe_str(private_sim_dedup.get('existing_lead_id'))} "
+                        f"new_lead_created=false service_id={safe_str(service_row.get('service_id'))}"
+                    )
+                else:
+                    append_private_lead_capture_event(
+                        event=event,
+                        user_id=user_id,
+                        intent_name=safe_str(routing_result.get("intent_name")),
+                        service_row=service_row,
+                        location_hint=safe_str(routing_result.get("location_hint")),
+                        message=text,
+                        trace_id=trace_id,
+                    )
         else:
             logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=reply_failed")
 
