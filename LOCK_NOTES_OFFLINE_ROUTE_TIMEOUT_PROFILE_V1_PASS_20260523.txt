@@ -1,0 +1,36 @@
+DT79 LOCK NOTE — OFFLINE_ROUTE_TIMEOUT_PROFILE_V1_PASS
+Date: 2026-05-23
+Repo: dt79bottranslator-ux / line-bot-render-1
+Branch: main
+Runtime target: offline only, no Render deploy
+
+Result:
+OFFLINE_ROUTE_TIMEOUT_PROFILE_V1 = PASS
+
+Evidence:
+- Run A BASELINE_MOCKED_NO_LEDGER : PASS
+- Run B SIMULATED_BLOCKING_IO_ONLY : PASS
+- OFFLINE_ROUTE_TIMEOUT_PROFILE_V1 : PASS
+- MT_TENANT_RESOLVED tenant_id=TENANT_001
+- MT_TRANSLATION_OK tenant_id=TENANT_001
+- simulated_blocking_ms=2000 dispatch_ms=28 total_ms=2031 status=OK
+
+Scope:
+- No /callback HTTP test
+- No LINE API real call
+- No Google Sheets real call
+- No app.py change
+- No TENANT_QUOTA_LEDGER rebuild
+- No Render deploy
+
+Conclusion:
+Offline route-level baseline after revert is healthy.
+No timeout reproduced in offline dispatch path.
+Phase A ledger remains FAILED / REVERTED_HEALTHY.
+This PASS does not authorize direct ledger rebuild.
+
+Next allowed work:
+Design a separate no-hot-path quota strategy or counter-audit before any Phase A rebuild.
+
+Commit message:
+test(route-profile): add dynamic tenant mock for offline route profiling
