@@ -238,7 +238,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__TENANT_QUOTA_LEDGER_PHASE_A_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1"
 APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -7220,153 +7220,6 @@ MT_TENANT_QUOTA_EMPTY_REPLY_TEXT = os.getenv(
 MT_TRANSLATION_QUOTA_WRITEBACK_ENABLED = os.getenv("MT_TRANSLATION_QUOTA_WRITEBACK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 MT_SOURCE_TYPE_STRICT_ENABLED = os.getenv("MT_SOURCE_TYPE_STRICT_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 MT_MAX_INPUT_CHARS = int(os.getenv("MT_MAX_INPUT_CHARS", "1000").strip() or "1000")
-# --- TENANT_QUOTA_LEDGER_PHASE_A_V1 ---
-TENANT_QUOTA_LEDGER_SHEET_NAME = os.getenv(
-    "TENANT_QUOTA_LEDGER_SHEET_NAME", "TENANT_QUOTA_LEDGER"
-).strip() or "TENANT_QUOTA_LEDGER"
-
-TENANT_QUOTA_LEDGER_HEADERS = [
-    "date", "tenant_id", "source_type", "user_id_hash", "group_id_hash",
-    "provider_name", "task_type", "input_chars", "output_chars",
-    "estimated_tokens", "estimated_cost", "quota_status", "cache_hit",
-    "provider_call", "request_id", "trace_id", "created_at",
-]
-
-def get_tenant_quota_ledger_worksheet(trace_id: str):
-    """Open TENANT_QUOTA_LEDGER. Do not auto-create in runtime request path."""
-    ws = get_worksheet_by_name(trace_id, TENANT_QUOTA_LEDGER_SHEET_NAME)
-    if ws is None:
-        logger.warning(
-            f"[{trace_id}] TENANT_QUOTA_LEDGER_WORKSHEET_MISSING "
-            f"sheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} action=ledger_skipped"
-        )
-    return ws
-
-def resolve_translation_ledger_context(event: dict, trace_id: str) -> dict:
-    """Resolve MT billing tenant context for translation-command and direct-CJK paths."""
-    try:
-        _should_handle, ctx = should_handle_mt_translation(event, trace_id)
-        tenant_id = safe_str(ctx.get("tenant_id")) or "UNKNOWN"
-        source_type = safe_str(ctx.get("source_type"))
-        source_id = safe_str(ctx.get("source_id"))
-        user_id = get_event_user_id(event)
-        return {
-            "tenant_id": tenant_id,
-            "source_type": source_type,
-            "user_id_hash": user_ref(user_id),
-            "group_id_hash": stable_hash(source_id) if source_type in {"group", "room"} else "",
-            "tenant_resolved": "TRUE" if tenant_id != "UNKNOWN" else "FALSE",
-            "tenant_reason": safe_str(ctx.get("reason")),
-        }
-    except Exception as exc:
-        logger.warning(
-            f"[{trace_id}] TRANSLATION_LEDGER_CONTEXT_FAILED "
-            f"exception={type(exc).__name__}:{safe_str(exc)[:200]}"
-        )
-        return {
-            "tenant_id": "UNKNOWN",
-            "source_type": "",
-            "user_id_hash": "",
-            "group_id_hash": "",
-            "tenant_resolved": "FALSE",
-            "tenant_reason": "context_exception",
-        }
-
-def build_tenant_quota_ledger_row(
-    tenant_id: str,
-    source_type: str,
-    user_id_hash: str,
-    group_id_hash: str,
-    provider_name: str,
-    task_type: str,
-    input_chars,
-    output_chars,
-    quota_status: str,
-    provider_call: str,
-) -> dict:
-    return {
-        "date": now_tw_iso(),
-        "tenant_id": safe_str(tenant_id) or "UNKNOWN",
-        "source_type": safe_str(source_type),
-        "user_id_hash": safe_str(user_id_hash),
-        "group_id_hash": safe_str(group_id_hash),
-        "provider_name": safe_str(provider_name) or "NONE",
-        "task_type": safe_str(task_type),
-        "input_chars": safe_str(input_chars),
-        "output_chars": safe_str(output_chars),
-        "quota_status": safe_str(quota_status),
-        "provider_call": "TRUE" if safe_str(provider_call).upper() == "TRUE" else "FALSE",
-    }
-
-def append_tenant_quota_ledger_row(row: dict, trace_id: str) -> bool:
-    """Append one audit row to TENANT_QUOTA_LEDGER. Never blocks main LINE flow."""
-    try:
-        ws = get_tenant_quota_ledger_worksheet(trace_id)
-        if not ws:
-            return False
-        ts = now_tw_iso()
-        request_id = f"ql_{uuid.uuid4().hex[:10]}"
-        values = [
-            safe_str(row.get("date")) or ts,
-            safe_str(row.get("tenant_id")) or "UNKNOWN",
-            safe_str(row.get("source_type")),
-            safe_str(row.get("user_id_hash")),
-            safe_str(row.get("group_id_hash")),
-            safe_str(row.get("provider_name")) or "NONE",
-            safe_str(row.get("task_type")),
-            safe_str(row.get("input_chars")),
-            safe_str(row.get("output_chars")),
-            "",  # estimated_tokens — reserved
-            "",  # estimated_cost — reserved
-            safe_str(row.get("quota_status")),
-            "FALSE",  # cache_hit — Phase A has no cache
-            safe_str(row.get("provider_call")),
-            request_id,
-            safe_str(trace_id),
-            ts,
-        ]
-        append_row_guarded(
-            ws,
-            trace_id,
-            TENANT_QUOTA_LEDGER_SHEET_NAME,
-            values,
-            value_input_option="USER_ENTERED",
-        )
-        _invalidate_worksheet_caches(TENANT_QUOTA_LEDGER_SHEET_NAME)
-        logger.info(
-            f"[{trace_id}] TENANT_QUOTA_LEDGER_APPEND_OK "
-            f"tenant_id={safe_str(row.get('tenant_id')) or 'UNKNOWN'} "
-            f"task_type={safe_str(row.get('task_type'))} "
-            f"quota_status={safe_str(row.get('quota_status'))} "
-            f"provider_call={safe_str(row.get('provider_call'))} "
-            f"request_id={request_id}"
-        )
-        return True
-    except Exception as exc:
-        logger.exception(
-            f"[{trace_id}] TENANT_QUOTA_LEDGER_APPEND_FAILED "
-            f"exception={type(exc).__name__}:{safe_str(exc)[:200]}"
-        )
-        return False
-
-def enqueue_tenant_quota_ledger(row: dict, trace_id: str) -> bool:
-    """Enqueue tenant quota ledger append using existing async-log pattern."""
-    ok = enqueue_async_log(
-        ASYNC_LOG_LEVEL_AUDIT,
-        trace_id,
-        "tenant_quota_ledger",
-        append_tenant_quota_ledger_row,
-        row,
-        trace_id,
-    )
-    if not ok:
-        logger.error(
-            f"[{trace_id}] TENANT_QUOTA_LEDGER_ENQUEUE_FAILED "
-            f"tenant_id={safe_str(row.get('tenant_id')) or 'UNKNOWN'} "
-            f"quota_status={safe_str(row.get('quota_status'))}"
-        )
-    return ok
-
 MT_INPUT_TOO_LONG_REPLY_TEXT = os.getenv(
     "MT_INPUT_TOO_LONG_REPLY_TEXT",
     "Nội dung cần dịch quá dài. Vui lòng gửi ngắn hơn."
@@ -8379,18 +8232,6 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
                 "status": "blocked_source_type_mismatch",
                 "error": "",
             }, trace_id)
-            enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-                tenant_id=safe_str(ctx.get("tenant_id")) or "UNKNOWN",
-                source_type=safe_str(ctx.get("source_type")),
-                user_id_hash=user_ref(get_event_user_id(event)),
-                group_id_hash=stable_hash(ctx.get("source_id")) if safe_str(ctx.get("source_type")) in {"group", "room"} else "",
-                provider_name="NONE",
-                task_type="mt_translation",
-                input_chars=len(raw_text),
-                output_chars=0,
-                quota_status="blocked_source_mismatch",
-                provider_call="FALSE",
-            ), trace_id)
             return {"handled": True, "flow_used": "mt_source_type_mismatch", "reply_sent": reply_ok}
         if reason == "tenant_not_found":
             raw_text = get_message_text(event)
@@ -8423,18 +8264,6 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
                     "status": "blocked_unknown_source",
                     "error": "",
                 }, trace_id)
-                enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-                    tenant_id="UNKNOWN",
-                    source_type=safe_str(ctx.get("source_type")),
-                    user_id_hash=user_ref(get_event_user_id(event)),
-                    group_id_hash=stable_hash(ctx.get("source_id")) if safe_str(ctx.get("source_type")) in {"group", "room"} else "",
-                    provider_name="NONE",
-                    task_type="mt_translation",
-                    input_chars=len(raw_text),
-                    output_chars=0,
-                    quota_status="blocked_unknown_source",
-                    provider_call="FALSE",
-                ), trace_id)
                 return {"handled": True, "flow_used": "mt_unknown_source_fuse", "reply_sent": reply_ok}
             if MT_TENANT_NOT_FOUND_MODE == "reply":
                 reply_line_text(get_reply_token(event), "Nguồn này chưa được kích hoạt tenant phiên dịch.", trace_id, "vi")
@@ -8488,33 +8317,9 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
     if status == "SUSPENDED":
         reply_ok = reply_line_text(reply_token, MT_TENANT_SUSPENDED_REPLY_TEXT, trace_id, "vi")
         logger.info(f"[{trace_id}] MT_TENANT_SUSPENDED tenant_id={tenant_id} reply_ok={reply_ok}")
-        enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-            tenant_id=tenant_id,
-            source_type=source_type,
-            user_id_hash=user_ref(user_id),
-            group_id_hash=stable_hash(source_id) if source_type in {"group", "room"} else "",
-            provider_name="NONE",
-            task_type="mt_translation",
-            input_chars=len(raw_text),
-            output_chars=0,
-            quota_status="blocked_suspended",
-            provider_call="FALSE",
-        ), trace_id)
         return {"handled": True, "flow_used": "mt_tenant_suspended", "reply_sent": reply_ok}
     if status != "ACTIVE":
         logger.info(f"[{trace_id}] MT_TENANT_NOT_ACTIVE tenant_id={tenant_id} status={status}")
-        enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-            tenant_id=tenant_id,
-            source_type=source_type,
-            user_id_hash=user_ref(user_id),
-            group_id_hash=stable_hash(source_id) if source_type in {"group", "room"} else "",
-            provider_name="NONE",
-            task_type="mt_translation",
-            input_chars=len(raw_text),
-            output_chars=0,
-            quota_status="blocked_not_active",
-            provider_call="FALSE",
-        ), trace_id)
         return {"handled": True, "flow_used": "mt_tenant_not_active", "reply_sent": False}
 
     if not translation_text:
@@ -8538,18 +8343,6 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             "status": "empty_payload",
             "error": "",
         }, trace_id)
-        enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-            tenant_id=tenant_id,
-            source_type=source_type,
-            user_id_hash=user_ref(user_id),
-            group_id_hash=stable_hash(source_id) if source_type in {"group", "room"} else "",
-            provider_name="NONE",
-            task_type="mt_translation",
-            input_chars=0,
-            output_chars=0,
-            quota_status="blocked_empty_payload",
-            provider_call="FALSE",
-        ), trace_id)
         return {"handled": True, "flow_used": "mt_empty_payload", "reply_sent": reply_ok}
 
     if MT_MAX_INPUT_CHARS > 0 and len(translation_text) > MT_MAX_INPUT_CHARS:
@@ -8573,18 +8366,6 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             "status": "input_too_long",
             "error": "",
         }, trace_id)
-        enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-            tenant_id=tenant_id,
-            source_type=source_type,
-            user_id_hash=user_ref(user_id),
-            group_id_hash=stable_hash(source_id) if source_type in {"group", "room"} else "",
-            provider_name="NONE",
-            task_type="mt_translation",
-            input_chars=len(translation_text),
-            output_chars=0,
-            quota_status="blocked_input_too_long",
-            provider_call="FALSE",
-        ), trace_id)
         return {"handled": True, "flow_used": "mt_input_too_long", "reply_sent": reply_ok}
 
     remaining_quota = mt_safe_int(tenant.get("remaining_quota"), 0)
@@ -8610,18 +8391,6 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             "error": "",
         }, trace_id)
         logger.info(f"[{trace_id}] MT_QUOTA_EMPTY tenant_id={tenant_id} reply_ok={reply_ok}")
-        enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-            tenant_id=tenant_id,
-            source_type=source_type,
-            user_id_hash=user_ref(user_id),
-            group_id_hash=stable_hash(source_id) if source_type in {"group", "room"} else "",
-            provider_name="NONE",
-            task_type="mt_translation",
-            input_chars=len(translation_text),
-            output_chars=0,
-            quota_status="blocked_quota",
-            provider_call="FALSE",
-        ), trace_id)
         return {"handled": True, "flow_used": "mt_quota_empty", "reply_sent": reply_ok}
 
     glossary_text = raw_text
@@ -8731,24 +8500,6 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             latency_ms=ms_since(translation_start_perf),
             reply_ok=reply_ok,
         )
-
-    _tenant_ledger_quota_status = {
-        "translated": "allowed",
-        "reply_failed": "reply_failed",
-        "direction_ambiguous": "direction_ambiguous",
-    }.get(status_text, "provider_failed")
-    enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-        tenant_id=tenant_id,
-        source_type=source_type,
-        user_id_hash=user_ref(user_id),
-        group_id_hash=stable_hash(source_id) if source_type in {"group", "room"} else "",
-        provider_name="GOOGLE_TRANSLATE" if target_lang else "NONE",
-        task_type="mt_translation",
-        input_chars=len(translation_text),
-        output_chars=len(translated),
-        quota_status=_tenant_ledger_quota_status,
-        provider_call="TRUE" if target_lang else "FALSE",
-    ), trace_id)
 
     return {
         "handled": True,
@@ -9210,25 +8961,6 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
             set_group_safe_reply_allowed(trace_id, True, "explicit_translation")
         reply_text, translation_status = build_translation_command_reply(text, trace_id)
         flow_used = f"translation_command_{translation_status}"
-        _lctx = resolve_translation_ledger_context(event, trace_id)
-        _translation_command_provider_call = "FALSE" if translation_status in {"usage", "not_translation"} else "TRUE"
-        _translation_command_quota_status = (
-            "allowed" if translation_status == "ok"
-            else "blocked_empty_payload" if translation_status == "usage"
-            else "provider_failed"
-        )
-        enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-            tenant_id=_lctx.get("tenant_id"),
-            source_type=_lctx.get("source_type"),
-            user_id_hash=_lctx.get("user_id_hash"),
-            group_id_hash=_lctx.get("group_id_hash"),
-            provider_name="GOOGLE_TRANSLATE" if _translation_command_provider_call == "TRUE" else "NONE",
-            task_type="translation_command",
-            input_chars=len(text),
-            output_chars=len(reply_text),
-            quota_status=_translation_command_quota_status,
-            provider_call=_translation_command_provider_call,
-        ), trace_id)
     elif current_flow == FLOW_WORKER:
         reply_text = handle_worker_message(text, current_language)
         flow_used = FLOW_WORKER
@@ -9246,19 +8978,6 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         if is_cjk_text(text) and not has_service_keyword_for_routing(text, trace_id):
             reply_text, translation_status = build_direct_translation_reply(text, current_language, trace_id)
             flow_used = f"ads_auto_cleared_zh_text_translation_guard_{translation_status}"
-            _lctx = resolve_translation_ledger_context(event, trace_id)
-            enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-                tenant_id=_lctx.get("tenant_id"),
-                source_type=_lctx.get("source_type"),
-                user_id_hash=_lctx.get("user_id_hash"),
-                group_id_hash=_lctx.get("group_id_hash"),
-                provider_name="GOOGLE_TRANSLATE",
-                task_type="direct_cjk_translation",
-                input_chars=len(text),
-                output_chars=len(reply_text),
-                quota_status="bypass_no_quota" if translation_status == "ok" else "provider_failed",
-                provider_call="TRUE",
-            ), trace_id)
             logger.info(f"[{trace_id}] ZH_TEXT_TRANSLATION_GUARD flow_used={flow_used} text_fp={message_fingerprint(text)}")
         else:
             if is_cjk_text(text):
@@ -9293,19 +9012,6 @@ def dispatch_text_event(event: dict, trace_id: str) -> dict:
         if is_cjk_text(text) and not has_service_keyword_for_routing(text, trace_id):
             reply_text, translation_status = build_direct_translation_reply(text, current_language, trace_id)
             flow_used = f"zh_text_translation_guard_{translation_status}"
-            _lctx = resolve_translation_ledger_context(event, trace_id)
-            enqueue_tenant_quota_ledger(build_tenant_quota_ledger_row(
-                tenant_id=_lctx.get("tenant_id"),
-                source_type=_lctx.get("source_type"),
-                user_id_hash=_lctx.get("user_id_hash"),
-                group_id_hash=_lctx.get("group_id_hash"),
-                provider_name="GOOGLE_TRANSLATE",
-                task_type="direct_cjk_translation",
-                input_chars=len(text),
-                output_chars=len(reply_text),
-                quota_status="bypass_no_quota" if translation_status == "ok" else "provider_failed",
-                provider_call="TRUE",
-            ), trace_id)
             logger.info(f"[{trace_id}] ZH_TEXT_TRANSLATION_GUARD flow_used={flow_used} text_fp={message_fingerprint(text)}")
         else:
             if is_cjk_text(text):
