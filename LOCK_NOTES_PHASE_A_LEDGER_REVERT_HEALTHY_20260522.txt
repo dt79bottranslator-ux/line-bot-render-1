@@ -1,0 +1,6 @@
+DT79::REVERT::TENANT_QUOTA_LEDGER_PHASE_A_V1
+Status: REVERTED_HEALTHY
+Reason: Phase A v2 caused runtime worker timeout/SIGKILL after TENANT_CONTEXT_SET.
+Evidence: Render reverted deploy healthy with WARM_UP_CACHE_OK, gunicorn sync worker boot, HEAD / HTTP/1.1 200.
+Do not redeploy Phase A ledger patch without offline route-level test and timeout profiling.
+Commit reverted: feat(mt): add tenant quota ledger phase a for translation audit.
