@@ -1,0 +1,26 @@
+DT79 LINE CHATBOT — HANDOFF CHECKPOINT 2026-05-22
+
+GitHub Desktop setup PASS.
+Repo cloned locally:
+C:\Users\User\Documents\GitHub\line-bot-render-1
+
+Repo:
+dt79bottranslator-ux/line-bot-render-1
+
+Fetch origin PASS:
+Last fetched confirmed.
+0 changed files.
+No local changes.
+Branch main.
+
+Current state:
+OBSERVE ONLY.
+
+Locked:
+- PROJECT_INIT_WEBHOOK_EXECUTION_PASS
+- SIM_LEAD_HANDOFF_RUNTIME_V1_PASS
+- PRIVATE_SIM_LEAD_DEDUP_V1_RUNTIME_PASS
+
+Do not code/deploy/build unless:
+1. New target state is defined, or
+2. Real runtime fail log/screenshot/output appears.
