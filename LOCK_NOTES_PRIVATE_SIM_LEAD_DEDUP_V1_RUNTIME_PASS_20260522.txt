@@ -1,0 +1,39 @@
+LOCK_NOTES_PRIVATE_SIM_LEAD_DEDUP_V1_RUNTIME_PASS_20260522
+
+Target:
+DT79::TARGET::PRIVATE_SIM_LEAD_DEDUP_V1
+
+Status:
+RUNTIME PASS
+
+Evidence:
+- First SIM private message created one lead:
+  PRIVATE_LEAD_DEDUP_LOOKUP_MISS
+  PRIVATE_LEAD_CAPTURE_APPEND_OK lead_id=LEAD_20260522_f0b76bd796c9 service_id=SIM_TW_001 service_type=SIM location="TW_ALL"
+
+- Repeated SIM private message did not create duplicate lead:
+  PRIVATE_LEAD_DEDUP_LOOKUP_HIT existing_lead_id=LEAD_20260522_f0b76bd796c9
+  PRIVATE_LEAD_DEDUP_HIT dedup=true existing_lead_id=LEAD_20260522_f0b76bd796c9 new_lead_created=false tenant_id=TENANT_001 source_type=user service_type=SIM service_id=SIM_TW_001 location_bucket="TW_ALL" dedup_window_minutes=5
+  PRIVATE_LEAD_CAPTURE_APPEND_SKIPPED reason=dedup_hit existing_lead_id=LEAD_20260522_f0b76bd796c9 new_lead_created=false service_id=SIM_TW_001
+
+- LINE reply succeeded:
+  LINE_REPLY_HTTP status_code=200 sent_count=1
+
+- Event finalized:
+  EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True persist_ok=True
+
+Scope:
+- Private SIM lead dedup decision
+- Existing lead lookup
+- Dedup log output
+- Safe repeated LINE reply
+
+Do not reopen unless new runtime evidence shows:
+- duplicate ADS_LEADS_V1 rows for same user_ref + SIM_TW_001 + location_bucket within 5 minutes
+- missing LINE reply on repeated private SIM message
+- PRIVATE_LEAD_DEDUP_HIT missing when duplicate exists
+- wrong tenant/service selected
+- exception/traceback/timeout
+
+Commit message:
+fix(lead): add private SIM lead dedup before LINE reply
