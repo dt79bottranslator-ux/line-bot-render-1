@@ -1,0 +1,83 @@
+DT79 SPEC — POST_REPLY_QUOTA_AUDIT_V1
+
+Status:
+SPEC_ONLY
+NO_CODE_CHANGE
+NO_DEPLOY
+
+Evidence:
+- OFFLINE_ROUTE_TIMEOUT_PROFILE_V1 = PASS / PUSHED
+- Run A BASELINE_MOCKED_NO_LEDGER : PASS
+- Run B SIMULATED_BLOCKING_IO_ONLY : PASS
+- Current decrement_mt_quota_in_cache() has one call site:
+  line 8446 quota_before, quota_after = decrement_mt_quota_in_cache(...)
+- Current mt_quota_writeback has one enqueue site:
+  line 8447 enqueue_async_log(... "mt_quota_writeback", writeback_mt_tenant_quota, tenant_id, quota_after, trace_id)
+- writeback_mt_tenant_quota writes to TENANT_CONFIG, not TENANT_QUOTA_LEDGER
+- build_translation_command_reply() and build_direct_translation_reply() are separate branches and not covered by handle_service_routing_before_mt()
+
+Goal:
+Create a post-reply quota audit event for the main MT path only.
+
+Scope:
+- MAIN_MT_PATH_ONLY
+- Audit-only
+- Best-effort
+- Post-reply only
+- No realtime quota gate
+- No second quota decrement
+- No Sheets READ in callback hot path
+- No Sheets READ after reply
+- No Sheets WRITE before LINE_REPLY_HTTP status_code=200
+- No rebuild of TENANT_QUOTA_LEDGER_PHASE_A_V1
+
+Allowed future design:
+- Assemble audit payload from in-memory values already available in request:
+  tenant_id
+  source_type
+  source_ref/user_ref
+  target_lang
+  quota_before
+  quota_after
+  command_type
+  trace_id
+  message fingerprint
+  translation status
+- Enqueue audit only after reply_line_text() returns success.
+- Append audit row to TENANT_QUOTA_LEDGER asynchronously.
+- Audit write failure must not affect LINE reply.
+
+Coverage declaration:
+- Covered: main MT path using should_handle_mt_translation() and decrement_mt_quota_in_cache()
+- Not covered in V1:
+  build_translation_command_reply()
+  build_direct_translation_reply() ADS flow
+  build_direct_translation_reply() ZH text guard
+- Ledger must be labelled MAIN_MT_PATH_ONLY to avoid misleading reporting.
+
+PASS evidence required for future implementation:
+- LINE_REPLY_HTTP status_code=200 appears before QUOTA_AUDIT_ENQUEUED
+- QUOTA_AUDIT_ENQUEUED appears before TENANT_QUOTA_LEDGER_APPEND_OK
+- No TENANT_QUOTA_LEDGER read log
+- No TENANT_QUOTA_LEDGER append before LINE_REPLY_HTTP
+- No second call to decrement_mt_quota_in_cache()
+- Translation still returns normally if TENANT_QUOTA_LEDGER append fails
+
+FAIL evidence:
+- TENANT_QUOTA_LEDGER read occurs anywhere
+- TENANT_QUOTA_LEDGER append occurs before LINE_REPLY_HTTP
+- quota audit failure blocks reply
+- second decrement occurs
+- audit claims full coverage
+- any direct rebuild of failed TENANT_QUOTA_LEDGER_PHASE_A_V1
+
+What must NOT change:
+- /callback route
+- LINE signature check
+- tenant resolver core
+- service routing classifier
+- group-private lead lock
+- SIM lead handoff
+- translation output text
+- existing TENANT_CONFIG quota writeback behavior
+- Render worker config
