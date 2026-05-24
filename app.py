@@ -339,6 +339,37 @@ ADS_LEADS_V1_HEADERS = [
     "telco_preference", "duration", "phone_or_line_contact", "lead_status", "last_message",
     "created_by", "updated_at",
 ]
+
+# --- PHASE_A_RUNTIME_GATE_LEDGER_AND_SIM_TOKEN_STORE_V1 ---
+TENANT_QUOTA_LEDGER_SHEET_NAME = os.getenv(
+    "TENANT_QUOTA_LEDGER_SHEET_NAME", "TENANT_QUOTA_LEDGER"
+).strip() or "TENANT_QUOTA_LEDGER"
+SIM_TRANSACTION_LOG_SHEET_NAME = os.getenv(
+    "SIM_TRANSACTION_LOG_SHEET_NAME", "SIM_TRANSACTION_LOG"
+).strip() or "SIM_TRANSACTION_LOG"
+SIM_TOKEN_STORE_SHEET_NAME = os.getenv(
+    "SIM_TOKEN_STORE_SHEET_NAME", "SIM_TOKEN_STORE"
+).strip() or "SIM_TOKEN_STORE"
+
+TENANT_QUOTA_LEDGER_HEADERS = [
+    "event_id", "created_at", "tenant_id", "source_type", "user_id_hash",
+    "group_id_hash", "module_name", "provider_name", "input_chars",
+    "output_chars", "estimated_tokens", "estimated_cost", "quota_status",
+    "acl_status", "gate_result", "reason", "cache_hit", "provider_call",
+    "privacy_notice_version", "consent_context", "retention_class",
+    "request_id", "trace_id", "hash_key_version",
+]
+SIM_TRANSACTION_LOG_HEADERS = [
+    "txn_id", "event_ts", "tenant_id", "lead_id", "hashed_line_user_id",
+    "sim_type", "status", "verified_ts", "verified_by", "one_time_token_hash",
+    "revenue_type", "amount_ntd", "reversal_status", "reversal_reason",
+    "trace_id", "created_at", "updated_at",
+]
+SIM_TOKEN_STORE_HEADERS = [
+    "token_hash", "lead_id", "tenant_id", "hashed_line_user_id",
+    "token_purpose", "status", "created_at", "expires_at", "used_at",
+    "used_by", "ip_hash", "user_agent_hash", "trace_id",
+]
 PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES = int(os.getenv("PRIVATE_SIM_LEAD_DEDUP_WINDOW_MINUTES", "5").strip() or "5")
 PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI = os.getenv(
     "PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI",
