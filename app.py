@@ -953,6 +953,62 @@ def get_all_values_safe(ws, trace_id: str, worksheet_name: str, allow_stale_fall
             logger.info(f"[{trace_id}] WORKSHEET_VALUES_STALE_CACHE_FALLBACK worksheet_name={worksheet_name} row_count={len(values)}")
             return values
         return []
+
+def ensure_phase_a_worksheet(trace_id: str, sheet_name: str, expected_headers: List[str]):
+    """
+    PHASE_A_RUNTIME_GATE_LEDGER_AND_SIM_TOKEN_STORE_V1 helper.
+
+    Scope:
+    - Verify that an existing Phase A worksheet can be opened.
+    - Verify the first row matches the expected header list exactly.
+    - Do not auto-create worksheets.
+    - Do not auto-fix schema.
+    - Do not hook runtime flow.
+    """
+    worksheet_name = safe_str(sheet_name)
+    expected = [safe_str(x) for x in (expected_headers or []) if safe_str(x)]
+
+    if not worksheet_name or not expected:
+        logger.error(
+            f"[{trace_id}] PHASE_A_WORKSHEET_UNAVAILABLE "
+            f"worksheet_name={worksheet_name or 'missing'} reason=invalid_arguments"
+        )
+        return None
+
+    ws = get_worksheet_by_name(trace_id, worksheet_name)
+    if not ws:
+        logger.error(
+            f"[{trace_id}] PHASE_A_WORKSHEET_UNAVAILABLE "
+            f"worksheet_name={worksheet_name} reason=open_failed_or_missing"
+        )
+        return None
+
+    values = get_all_values_safe(
+        ws,
+        trace_id,
+        worksheet_name,
+        allow_stale_fallback=False,
+        force_fresh=True,
+    )
+    current_headers = [safe_str(x) for x in (values[0] if values else [])]
+
+    if current_headers == expected:
+        logger.info(
+            f"[{trace_id}] PHASE_A_SCHEMA_OK "
+            f"worksheet_name={worksheet_name} column_count={len(expected)}"
+        )
+        return ws
+
+    missing_headers = [header for header in expected if header not in current_headers]
+    extra_headers = [header for header in current_headers if header and header not in expected]
+    logger.error(
+        f"[{trace_id}] PHASE_A_SCHEMA_MISMATCH "
+        f"worksheet_name={worksheet_name} "
+        f"expected_count={len(expected)} actual_count={len(current_headers)} "
+        f"missing={json.dumps(missing_headers, ensure_ascii=False)} "
+        f"extra={json.dumps(extra_headers, ensure_ascii=False)}"
+    )
+    return None
 def get_records_safe(ws, trace_id: str, worksheet_name: str, allow_stale_fallback: bool = True, force_fresh: bool = False) -> List[dict]:
     _bounded_cache_cleanup(trace_id)
     records_cache = getattr(g, "_dt79_records_cache", None)
