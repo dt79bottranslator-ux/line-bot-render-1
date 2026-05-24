@@ -1,0 +1,40 @@
+DT79::LOCK_NOTE::PHASE_A_BOUNDARY_REVIEW_READY
+
+Date: 2026-05-24
+Scope: Boundary review only
+Code status: NOT PATCHED
+Runtime status: NOT TESTED
+
+Verified local repo:
+C:\Users\User\Documents\GitHub\line-bot-render-1
+
+Checks:
+1. app.py restored to clean Git version
+   Status: PASS
+   File size: 507,291 bytes
+
+2. Python compile check
+   Command: python -m py_compile app.py
+   Status: PASS
+
+3. Git status
+   app.py modified: NO
+   staged changes: NO
+   untracked local only: __pycache__/ and dt79.db
+
+4. Boundary location check
+   /callback route: line 10531
+   resolve_tenant_id_from_event(): line 51
+   message_fingerprint(): line 116
+
+Conclusion:
+PHASE_A_BOUNDARY_REVIEW_READY_PASS
+
+Limit:
+No code patch has been applied.
+No runtime PASS is claimed.
+No Render deploy has been done.
+No LINE webhook test has been done.
+
+Next allowed action:
+Prepare Phase A runtime patch plan without touching locked boundary functions.
