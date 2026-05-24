@@ -1055,6 +1055,217 @@ def run_phase_a_worksheet_self_test(trace_id: str) -> dict:
     }
 
 
+
+def build_phase_a_ledger_row(
+    trace_id: str,
+    *,
+    event_id: str = "",
+    tenant_id: str = "",
+    source_type: str = "internal",
+    user_id_hash: str = "",
+    group_id_hash: str = "",
+    module_name: str = "phase_a_manual_ledger_test",
+    provider_name: str = "none",
+    input_chars: int = 0,
+    output_chars: int = 0,
+    estimated_tokens: int = 0,
+    estimated_cost: str = "0",
+    quota_status: str = "not_enforced",
+    acl_status: str = "internal_token_ok",
+    gate_result: str = "audit_only",
+    reason: str = "manual_phase_a_ledger_test",
+    cache_hit: bool = False,
+    provider_call: bool = False,
+    privacy_notice_version: str = "n/a",
+    consent_context: str = "internal_self_test",
+    retention_class: str = "audit",
+    request_id: str = "",
+    hash_key_version: str = "v1",
+) -> List[str]:
+    """
+    PHASE_A_RUNTIME_GATE_LEDGER_AND_SIM_TOKEN_STORE_V1 ledger row builder.
+
+    Scope:
+    - Build exactly one row matching TENANT_QUOTA_LEDGER_HEADERS.
+    - Do not call provider AI.
+    - Do not enforce quota.
+    - Do not touch LINE callback flow.
+    """
+    safe_trace_id = safe_str(trace_id) or make_trace_id()
+    now_iso = now_tw_iso()
+    safe_event_id = safe_str(event_id) or f"PHASE_A_LEDGER_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    safe_request_id = safe_str(request_id) or safe_event_id
+
+    row_map = {
+        "event_id": safe_event_id,
+        "created_at": now_iso,
+        "tenant_id": safe_str(tenant_id) or safe_str(get_current_tenant_id()),
+        "source_type": safe_str(source_type) or "internal",
+        "user_id_hash": safe_str(user_id_hash),
+        "group_id_hash": safe_str(group_id_hash),
+        "module_name": safe_str(module_name) or "phase_a_manual_ledger_test",
+        "provider_name": safe_str(provider_name) or "none",
+        "input_chars": str(int(input_chars or 0)),
+        "output_chars": str(int(output_chars or 0)),
+        "estimated_tokens": str(int(estimated_tokens or 0)),
+        "estimated_cost": safe_str(estimated_cost) or "0",
+        "quota_status": safe_str(quota_status) or "not_enforced",
+        "acl_status": safe_str(acl_status) or "internal_token_ok",
+        "gate_result": safe_str(gate_result) or "audit_only",
+        "reason": safe_str(reason) or "manual_phase_a_ledger_test",
+        "cache_hit": "true" if bool(cache_hit) else "false",
+        "provider_call": "true" if bool(provider_call) else "false",
+        "privacy_notice_version": safe_str(privacy_notice_version) or "n/a",
+        "consent_context": safe_str(consent_context) or "internal_self_test",
+        "retention_class": safe_str(retention_class) or "audit",
+        "request_id": safe_request_id,
+        "trace_id": safe_trace_id,
+        "hash_key_version": safe_str(hash_key_version) or "v1",
+    }
+
+    row = [safe_str(row_map.get(header)) for header in TENANT_QUOTA_LEDGER_HEADERS]
+    if len(row) != len(TENANT_QUOTA_LEDGER_HEADERS):
+        logger.error(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_ROW_BUILD_FAILED "
+            f"reason=column_count_mismatch expected={len(TENANT_QUOTA_LEDGER_HEADERS)} actual={len(row)}"
+        )
+        return []
+
+    logger.info(
+        f"[{safe_trace_id}] PHASE_A_LEDGER_ROW_BUILT "
+        f"event_id={safe_event_id} module_name={safe_str(row_map.get('module_name'))} "
+        f"provider_call={safe_str(row_map.get('provider_call'))} gate_result={safe_str(row_map.get('gate_result'))}"
+    )
+    return row
+
+
+def append_phase_a_ledger_event(
+    trace_id: str,
+    *,
+    event_id: str = "",
+    tenant_id: str = "",
+    source_type: str = "internal",
+    user_id_hash: str = "",
+    group_id_hash: str = "",
+    module_name: str = "phase_a_manual_ledger_test",
+    provider_name: str = "none",
+    input_chars: int = 0,
+    output_chars: int = 0,
+    estimated_tokens: int = 0,
+    estimated_cost: str = "0",
+    quota_status: str = "not_enforced",
+    acl_status: str = "internal_token_ok",
+    gate_result: str = "audit_only",
+    reason: str = "manual_phase_a_ledger_test",
+    cache_hit: bool = False,
+    provider_call: bool = False,
+    privacy_notice_version: str = "n/a",
+    consent_context: str = "internal_self_test",
+    retention_class: str = "audit",
+    request_id: str = "",
+    hash_key_version: str = "v1",
+) -> dict:
+    """
+    PHASE_A_RUNTIME_GATE_LEDGER_AND_SIM_TOKEN_STORE_V1 ledger append helper.
+
+    Scope:
+    - Verify TENANT_QUOTA_LEDGER schema before write.
+    - Append exactly one audit row.
+    - Do not call provider AI.
+    - Do not enforce quota.
+    - Do not write SIM_TRANSACTION_LOG.
+    - Do not write SIM_TOKEN_STORE.
+    - Do not hook LINE callback flow.
+    """
+    safe_trace_id = safe_str(trace_id) or make_trace_id()
+    start = time.perf_counter()
+
+    ws = ensure_phase_a_worksheet(
+        safe_trace_id,
+        TENANT_QUOTA_LEDGER_SHEET_NAME,
+        TENANT_QUOTA_LEDGER_HEADERS,
+    )
+    if not ws:
+        logger.error(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_APPEND_SKIPPED "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} reason=worksheet_unavailable_or_schema_invalid"
+        )
+        return {
+            "ok": False,
+            "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
+            "reason": "worksheet_unavailable_or_schema_invalid",
+            "trace_id": safe_trace_id,
+        }
+
+    row = build_phase_a_ledger_row(
+        safe_trace_id,
+        event_id=event_id,
+        tenant_id=tenant_id,
+        source_type=source_type,
+        user_id_hash=user_id_hash,
+        group_id_hash=group_id_hash,
+        module_name=module_name,
+        provider_name=provider_name,
+        input_chars=input_chars,
+        output_chars=output_chars,
+        estimated_tokens=estimated_tokens,
+        estimated_cost=estimated_cost,
+        quota_status=quota_status,
+        acl_status=acl_status,
+        gate_result=gate_result,
+        reason=reason,
+        cache_hit=cache_hit,
+        provider_call=provider_call,
+        privacy_notice_version=privacy_notice_version,
+        consent_context=consent_context,
+        retention_class=retention_class,
+        request_id=request_id,
+        hash_key_version=hash_key_version,
+    )
+    if not row:
+        logger.error(f"[{safe_trace_id}] PHASE_A_LEDGER_APPEND_SKIPPED reason=row_build_failed")
+        return {
+            "ok": False,
+            "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
+            "reason": "row_build_failed",
+            "trace_id": safe_trace_id,
+        }
+
+    try:
+        append_row_guarded(
+            ws,
+            safe_trace_id,
+            TENANT_QUOTA_LEDGER_SHEET_NAME,
+            row,
+            value_input_option="USER_ENTERED",
+        )
+        _invalidate_worksheet_caches(TENANT_QUOTA_LEDGER_SHEET_NAME)
+        logger.info(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_APPEND_OK "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} "
+            f"event_id={safe_str(row[0])} module_name={safe_str(row[6])} "
+            f"provider_call={safe_str(row[17])} latency_ms={ms_since(start)}"
+        )
+        return {
+            "ok": True,
+            "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
+            "event_id": safe_str(row[0]),
+            "trace_id": safe_trace_id,
+        }
+    except Exception as exc:
+        logger.exception(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_APPEND_FAILED "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} exception={type(exc).__name__}:{exc}"
+        )
+        return {
+            "ok": False,
+            "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
+            "reason": f"{type(exc).__name__}:{safe_str(exc)[:200]}",
+            "trace_id": safe_trace_id,
+        }
+
+
+
 def get_records_safe(ws, trace_id: str, worksheet_name: str, allow_stale_fallback: bool = True, force_fresh: bool = False) -> List[dict]:
     _bounded_cache_cleanup(trace_id)
     records_cache = getattr(g, "_dt79_records_cache", None)
