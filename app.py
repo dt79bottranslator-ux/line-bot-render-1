@@ -1139,6 +1139,83 @@ def build_phase_a_ledger_row(
     return row
 
 
+def phase_a_ledger_duplicate_exists(
+    ws,
+    trace_id: str,
+    *,
+    event_id: str = "",
+    request_id: str = "",
+) -> bool:
+    """
+    PHASE_A_PATCH_7 ledger idempotency guard.
+
+    Scope:
+    - Check TENANT_QUOTA_LEDGER for existing event_id or request_id.
+    - Do not write rows.
+    - Do not call provider AI.
+    - Do not touch LINE callback flow.
+    """
+    safe_trace_id = safe_str(trace_id) or make_trace_id()
+    target_event_id = safe_str(event_id)
+    target_request_id = safe_str(request_id)
+    logger.info(
+        f"[{safe_trace_id}] PHASE_A_LEDGER_DUPLICATE_CHECK_START "
+        f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} "
+        f"event_id={target_event_id or 'empty'} request_id={target_request_id or 'empty'}"
+    )
+
+    if not target_event_id and not target_request_id:
+        logger.info(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_DUPLICATE_CHECK_CLEAR "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} reason=no_id_provided"
+        )
+        return False
+
+    values = get_all_values_safe(
+        ws,
+        safe_trace_id,
+        TENANT_QUOTA_LEDGER_SHEET_NAME,
+        allow_stale_fallback=False,
+        force_fresh=True,
+    )
+    if not values:
+        logger.info(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_DUPLICATE_CHECK_CLEAR "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} reason=no_values"
+        )
+        return False
+
+    header_map = build_header_index_map(values[0])
+    event_idx = header_map.get("event_id")
+    request_idx = header_map.get("request_id")
+    if event_idx is None and request_idx is None:
+        logger.error(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_DUPLICATE_CHECK_SKIPPED "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} reason=missing_id_columns"
+        )
+        return False
+
+    for row_idx, row in enumerate(values[1:], start=2):
+        row_event_id = safe_str(row[event_idx]) if event_idx is not None and event_idx < len(row) else ""
+        row_request_id = safe_str(row[request_idx]) if request_idx is not None and request_idx < len(row) else ""
+        event_match = bool(target_event_id and row_event_id == target_event_id)
+        request_match = bool(target_request_id and row_request_id == target_request_id)
+        if event_match or request_match:
+            logger.warning(
+                f"[{safe_trace_id}] PHASE_A_LEDGER_DUPLICATE_SKIP "
+                f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} row_index={row_idx} "
+                f"event_id={target_event_id or row_event_id} request_id={target_request_id or row_request_id}"
+            )
+            return True
+
+    logger.info(
+        f"[{safe_trace_id}] PHASE_A_LEDGER_DUPLICATE_CHECK_CLEAR "
+        f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} "
+        f"event_id={target_event_id or 'empty'} request_id={target_request_id or 'empty'}"
+    )
+    return False
+
+
 def append_phase_a_ledger_event(
     trace_id: str,
     *,
@@ -1197,9 +1274,34 @@ def append_phase_a_ledger_event(
             "trace_id": safe_trace_id,
         }
 
+    safe_event_id = safe_str(event_id)
+    safe_request_id = safe_str(request_id)
+    if phase_a_ledger_duplicate_exists(
+        ws,
+        safe_trace_id,
+        event_id=safe_event_id,
+        request_id=safe_request_id,
+    ):
+        logger.warning(
+            f"[{safe_trace_id}] PHASE_A_LEDGER_APPEND_SKIPPED "
+            f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} "
+            f"reason=duplicate_event_or_request event_id={safe_event_id or 'empty'} "
+            f"request_id={safe_request_id or 'empty'}"
+        )
+        return {
+            "ok": True,
+            "appended": False,
+            "duplicate": True,
+            "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
+            "event_id": safe_event_id,
+            "request_id": safe_request_id,
+            "reason": "duplicate_event_or_request",
+            "trace_id": safe_trace_id,
+        }
+
     row = build_phase_a_ledger_row(
         safe_trace_id,
-        event_id=event_id,
+        event_id=safe_event_id,
         tenant_id=tenant_id,
         source_type=source_type,
         user_id_hash=user_id_hash,
@@ -1248,8 +1350,11 @@ def append_phase_a_ledger_event(
         )
         return {
             "ok": True,
+            "appended": True,
+            "duplicate": False,
             "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
             "event_id": safe_str(row[0]),
+            "request_id": safe_str(row[21]) if len(row) > 21 else safe_request_id,
             "trace_id": safe_trace_id,
         }
     except Exception as exc:
@@ -10684,16 +10789,21 @@ def internal_phase_a_ledger_test():
             "error": "unauthorized",
         }), 401
 
-    request_id = f"PHASE_A_LEDGER_TEST_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    payload = request.get_json(silent=True) or {}
+    supplied_event_id = safe_str(payload.get("event_id"))
+    supplied_request_id = safe_str(payload.get("request_id"))
+    generated_id = f"PHASE_A_LEDGER_TEST_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    request_id = supplied_request_id or supplied_event_id or generated_id
+    event_id = supplied_event_id or request_id
     logger.info(
         f"[{trace_id}] PHASE_A_LEDGER_APPEND_START "
         f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} "
-        f"request_id={request_id} module_name=phase_a_manual_ledger_test"
+        f"request_id={request_id} event_id={event_id} module_name=phase_a_manual_ledger_test"
     )
 
     result = append_phase_a_ledger_event(
         trace_id=trace_id,
-        event_id=request_id,
+        event_id=event_id,
         tenant_id=get_current_tenant_id(),
         source_type="internal",
         module_name="phase_a_manual_ledger_test",
@@ -10715,14 +10825,17 @@ def internal_phase_a_ledger_test():
         hash_key_version="v1",
     )
     ok = bool(result.get("ok"))
+    appended = bool(result.get("appended")) if "appended" in result else ok
+    duplicate = bool(result.get("duplicate"))
     status_code = 200 if ok else 409
 
     return jsonify({
         "ok": ok,
-        "appended": ok,
+        "appended": appended,
+        "duplicate": duplicate,
         "trace_id": trace_id,
-        "request_id": request_id,
-        "event_id": safe_str(result.get("event_id")) or request_id,
+        "request_id": safe_str(result.get("request_id")) or request_id,
+        "event_id": safe_str(result.get("event_id")) or event_id,
         "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
         "gate_result": "audit_only",
         "provider_call": False,
