@@ -238,7 +238,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1"
 APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -375,6 +375,20 @@ PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI = os.getenv(
     "PRIVATE_SIM_LEAD_DEDUP_REPLY_TEXT_VI",
     "Yêu cầu mua SIM của bạn đã được ghi nhận trước đó. Vui lòng chờ nhân viên liên hệ hoặc bổ sung số điện thoại nếu cần."
 ).strip()
+
+# --- PHASE_A_PATCH_8_REAL_RUNTIME_LEDGER_HOOK_V2 ---
+REAL_RUNTIME_LEDGER_SHEET_NAME = os.getenv(
+    "REAL_RUNTIME_LEDGER_SHEET_NAME", "REAL_RUNTIME_LEDGER"
+).strip() or "REAL_RUNTIME_LEDGER"
+REAL_RUNTIME_LEDGER_HEADERS = [
+    "ledger_id", "created_at", "trace_id", "event_key", "tenant_id",
+    "source_type", "line_user_hash", "group_id_hash", "message_hash",
+    "intent_name", "service_id", "service_type", "selected_route",
+    "reply_status_code", "lead_id", "dedup_status", "final_status",
+    "error_code", "app_version",
+]
+_REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE = {"verified": False, "loaded_at_ts": 0.0}
+
 ADS_CLICK_LOG_SHEET_NAME = "ads_click_log"
 TENANT_REGISTRY_SHEET_NAME = "TENANT_REGISTRY"
 SYSTEM_META_SHEET_NAME = "SYSTEM_META"
@@ -5281,14 +5295,244 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_ref={event_ref(event_key)} source={'reclaim' if row_index > 0 else 'new'}")
         return True, "processing_started", event_key
 
+
+# --- PHASE_A_PATCH_8_REAL_RUNTIME_LEDGER_FINALIZE_HOOK_FIX_V2 ---
+def ensure_real_runtime_ledger_worksheet(trace_id: str):
+    """
+    REAL_RUNTIME_LEDGER fail-open worksheet guard.
+    Creates the worksheet/header only if missing or empty.
+    Rejects schema mismatch without modifying existing columns.
+    """
+    spreadsheet = open_spreadsheet(trace_id)
+    if not spreadsheet:
+        logger.error(
+            f"[{trace_id}] REAL_RUNTIME_LEDGER_UNAVAILABLE "
+            f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} reason=spreadsheet_unavailable"
+        )
+        return None
+
+    try:
+        ws = gsheet_guarded_call(
+            trace_id,
+            f"worksheet.open.{REAL_RUNTIME_LEDGER_SHEET_NAME}",
+            spreadsheet.worksheet,
+            REAL_RUNTIME_LEDGER_SHEET_NAME,
+        )
+    except gspread.WorksheetNotFound:
+        try:
+            ws = spreadsheet.add_worksheet(
+                title=REAL_RUNTIME_LEDGER_SHEET_NAME,
+                rows=5000,
+                cols=len(REAL_RUNTIME_LEDGER_HEADERS),
+            )
+            append_row_guarded(
+                ws,
+                trace_id,
+                REAL_RUNTIME_LEDGER_SHEET_NAME,
+                REAL_RUNTIME_LEDGER_HEADERS,
+                value_input_option="USER_ENTERED",
+            )
+            _invalidate_worksheet_caches(REAL_RUNTIME_LEDGER_SHEET_NAME)
+            _REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE["verified"] = True
+            _REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE["loaded_at_ts"] = _now_ts()
+            logger.info(
+                f"[{trace_id}] REAL_RUNTIME_LEDGER_SCHEMA_OK "
+                f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} "
+                f"column_count={len(REAL_RUNTIME_LEDGER_HEADERS)} created=true"
+            )
+            return ws
+        except Exception as exc:
+            logger.exception(
+                f"[{trace_id}] REAL_RUNTIME_LEDGER_CREATE_FAILED "
+                f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} exception={type(exc).__name__}:{exc}"
+            )
+            return None
+    except Exception as exc:
+        logger.exception(
+            f"[{trace_id}] REAL_RUNTIME_LEDGER_OPEN_FAILED "
+            f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} exception={type(exc).__name__}:{exc}"
+        )
+        return None
+
+    verified = bool(_REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE.get("verified"))
+    verified_loaded_at_ts = float(_REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE.get("loaded_at_ts", 0.0) or 0.0)
+    if verified and _cache_is_fresh(verified_loaded_at_ts, GSHEET_VALUES_CACHE_TTL_SECONDS):
+        return ws
+
+    values = get_all_values_safe(
+        ws,
+        trace_id,
+        REAL_RUNTIME_LEDGER_SHEET_NAME,
+        allow_stale_fallback=False,
+        force_fresh=True,
+    )
+    current_headers = [safe_str(x) for x in (values[0] if values else [])]
+
+    if not values:
+        try:
+            append_row_guarded(
+                ws,
+                trace_id,
+                REAL_RUNTIME_LEDGER_SHEET_NAME,
+                REAL_RUNTIME_LEDGER_HEADERS,
+                value_input_option="USER_ENTERED",
+            )
+            _invalidate_worksheet_caches(REAL_RUNTIME_LEDGER_SHEET_NAME)
+            logger.info(
+                f"[{trace_id}] REAL_RUNTIME_LEDGER_SCHEMA_OK "
+                f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} "
+                f"column_count={len(REAL_RUNTIME_LEDGER_HEADERS)} headers_initialized=true"
+            )
+        except Exception as exc:
+            logger.exception(
+                f"[{trace_id}] REAL_RUNTIME_LEDGER_HEADERS_INIT_FAILED "
+                f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} exception={type(exc).__name__}:{exc}"
+            )
+            return None
+    elif current_headers != REAL_RUNTIME_LEDGER_HEADERS:
+        missing_headers = [header for header in REAL_RUNTIME_LEDGER_HEADERS if header not in current_headers]
+        extra_headers = [header for header in current_headers if header and header not in REAL_RUNTIME_LEDGER_HEADERS]
+        logger.error(
+            f"[{trace_id}] REAL_RUNTIME_LEDGER_SCHEMA_MISMATCH "
+            f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} "
+            f"expected_count={len(REAL_RUNTIME_LEDGER_HEADERS)} actual_count={len(current_headers)} "
+            f"missing={json.dumps(missing_headers, ensure_ascii=False)} "
+            f"extra={json.dumps(extra_headers, ensure_ascii=False)}"
+        )
+        return None
+    else:
+        logger.info(
+            f"[{trace_id}] REAL_RUNTIME_LEDGER_SCHEMA_OK "
+            f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} column_count={len(REAL_RUNTIME_LEDGER_HEADERS)}"
+        )
+
+    _REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE["verified"] = True
+    _REAL_RUNTIME_LEDGER_WORKSHEET_READY_CACHE["loaded_at_ts"] = _now_ts()
+    return ws
+
+
+def build_real_runtime_ledger_row(
+    event: dict,
+    trace_id: str,
+    *,
+    event_id: str = "",
+    dispatch_result: Optional[dict] = None,
+    success: bool = False,
+    dedup_status: str = "new",
+    final_status: str = "",
+    error_code: str = "",
+) -> List[str]:
+    dispatch_result = dispatch_result or {}
+    source_type = get_event_source_type(event)
+    user_id = get_event_user_id(event)
+    group_id = get_event_group_id(event)
+    message_text = get_message_text(event)
+    event_key_ref = event_ref(event_id or get_event_unique_key(event))
+    route = safe_str(dispatch_result.get("flow_used") or dispatch_result.get("flow") or dispatch_result.get("reason"))
+    intent_name = safe_str(dispatch_result.get("intent_name"))
+    service_id = safe_str(dispatch_result.get("service_id"))
+    service_type = safe_str(dispatch_result.get("service_type"))
+    lead_id = safe_str(dispatch_result.get("lead_id"))
+    reply_sent = bool(dispatch_result.get("reply_sent"))
+    reply_status_code = "200" if reply_sent else ""
+    normalized_final_status = safe_str(final_status) or ("success" if success else "failed")
+    normalized_dedup_status = safe_str(dispatch_result.get("dedup_status")) or safe_str(dedup_status) or "new"
+
+    ledger_id = f"LEDGER_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    row_map = {
+        "ledger_id": ledger_id,
+        "created_at": now_tw_iso(),
+        "trace_id": safe_str(trace_id),
+        "event_key": event_key_ref,
+        "tenant_id": safe_str(get_current_tenant_id()),
+        "source_type": safe_str(source_type),
+        "line_user_hash": user_ref(user_id),
+        "group_id_hash": stable_hash(tenant_scope_key(group_id) or group_id) if group_id else "",
+        "message_hash": message_fingerprint(message_text),
+        "intent_name": intent_name,
+        "service_id": service_id,
+        "service_type": service_type,
+        "selected_route": route,
+        "reply_status_code": reply_status_code,
+        "lead_id": lead_id,
+        "dedup_status": normalized_dedup_status,
+        "final_status": normalized_final_status,
+        "error_code": safe_str(error_code)[:200],
+        "app_version": APP_VERSION_SHORT,
+    }
+    return [safe_str(row_map.get(header)) for header in REAL_RUNTIME_LEDGER_HEADERS]
+
+
+def append_real_runtime_ledger_event(
+    event: dict,
+    trace_id: str,
+    *,
+    event_id: str = "",
+    dispatch_result: Optional[dict] = None,
+    success: bool = False,
+    dedup_status: str = "new",
+    final_status: str = "",
+    error_code: str = "",
+) -> bool:
+    safe_trace_id = safe_str(trace_id) or make_trace_id()
+    start = time.perf_counter()
+    try:
+        ws = ensure_real_runtime_ledger_worksheet(safe_trace_id)
+        if not ws:
+            logger.error(
+                f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_SKIPPED "
+                f"reason=worksheet_unavailable"
+            )
+            return False
+
+        row = build_real_runtime_ledger_row(
+            event,
+            safe_trace_id,
+            event_id=event_id,
+            dispatch_result=dispatch_result,
+            success=success,
+            dedup_status=dedup_status,
+            final_status=final_status,
+            error_code=error_code,
+        )
+        if len(row) != len(REAL_RUNTIME_LEDGER_HEADERS):
+            logger.error(
+                f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_SKIPPED "
+                f"reason=row_column_count_mismatch expected={len(REAL_RUNTIME_LEDGER_HEADERS)} actual={len(row)}"
+            )
+            return False
+
+        append_row_guarded(
+            ws,
+            safe_trace_id,
+            REAL_RUNTIME_LEDGER_SHEET_NAME,
+            row,
+            value_input_option="USER_ENTERED",
+        )
+        _invalidate_worksheet_caches(REAL_RUNTIME_LEDGER_SHEET_NAME)
+        logger.info(
+            f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_OK "
+            f"ledger_id={safe_str(row[0])} event_key={safe_str(row[3])} "
+            f"tenant_id={safe_str(row[4])} source_type={safe_str(row[5])} "
+            f"intent_name={safe_str(row[9])} service_id={safe_str(row[10])} "
+            f"dedup_status={safe_str(row[15])} final_status={safe_str(row[16])} "
+            f"reply_status_code={safe_str(row[13]) or 'none'} latency_ms={ms_since(start)}"
+        )
+        return True
+    except Exception as exc:
+        logger.exception(
+            f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_FAILED "
+            f"exception={type(exc).__name__}:{exc}"
+        )
+        return False
+
+
 def persist_event_processing_finalize(
     event: dict,
     trace_id: str,
     success: bool,
     dispatch_result: Optional[dict] = None,
-    dedup_status: str = "new",
-    final_status: str = "",
-    error_code: str = "",
+    event_id: str = "",
 ) -> bool:
     event_key = get_event_unique_key(event)
     if not event_key:
@@ -5336,18 +5580,30 @@ def persist_event_processing_finalize(
             except Exception as e:
                 logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
                 persist_ok = False
+
         logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
-        logger.info(f"[{trace_id}] REAL_RUNTIME_LEDGER_HOOK_START anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)}")
-        append_real_runtime_ledger_event(
-            event,
-            trace_id,
-            event_id=event_key,
-            dispatch_result=dispatch_result or {},
-            success=success,
-            dedup_status=safe_str(dedup_status) or "new",
-            final_status=safe_str(final_status) or ("success" if success else "failed"),
-            error_code=error_code,
-        )
+
+        try:
+            logger.info(
+                f"[{trace_id}] REAL_RUNTIME_LEDGER_HOOK_START "
+                f"anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)}"
+            )
+            append_real_runtime_ledger_event(
+                event,
+                trace_id,
+                event_id=safe_str(event_id) or event_key,
+                dispatch_result=dispatch_result or {},
+                success=success and persist_ok,
+                dedup_status="new",
+                final_status="success" if success and persist_ok else "failed",
+                error_code="" if success and persist_ok else "event_finalize_persist_failed",
+            )
+        except Exception as exc:
+            logger.exception(
+                f"[{trace_id}] REAL_RUNTIME_LEDGER_HOOK_FAILED "
+                f"exception={type(exc).__name__}:{exc}"
+            )
+
         return persist_ok
 
 def finalize_event_processing(
@@ -5355,9 +5611,6 @@ def finalize_event_processing(
     trace_id: str,
     success: bool,
     dispatch_result: Optional[dict] = None,
-    dedup_status: str = "new",
-    final_status: str = "",
-    error_code: str = "",
 ) -> None:
     event_key = get_event_unique_key(event)
     if not event_key:
@@ -5373,6 +5626,7 @@ def finalize_event_processing(
 
     if EVENT_STATE_FAST_FINALIZE_ENABLED and success:
         event_snapshot = json.loads(json.dumps(event, ensure_ascii=False))
+        dispatch_snapshot = json.loads(json.dumps(dispatch_result or {}, ensure_ascii=False))
         queued = enqueue_async_log(
             ASYNC_LOG_LEVEL_AUDIT,
             trace_id,
@@ -5381,10 +5635,8 @@ def finalize_event_processing(
             event_snapshot,
             trace_id,
             success,
-            dispatch_result or {},
-            safe_str(dedup_status) or "new",
-            safe_str(final_status) or ("success" if success else "failed"),
-            error_code,
+            dispatch_snapshot,
+            event_key,
         )
         if queued:
             logger.info(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_ENQUEUED event_ref={event_ref(event_key)} success={success}")
@@ -5396,10 +5648,8 @@ def finalize_event_processing(
         event,
         trace_id,
         success,
-        dispatch_result=dispatch_result or {},
-        dedup_status=safe_str(dedup_status) or "new",
-        final_status=safe_str(final_status) or ("success" if success else "failed"),
-        error_code=error_code,
+        dispatch_result or {},
+        event_key,
     )
     logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
 
@@ -11078,37 +11328,15 @@ def process_event_inbox_item(row: dict, worker_trace_id: str) -> None:
             should_process, reason, event_key = begin_event_processing(event, trace_id)
             if not should_process:
                 logger.info(f"[{trace_id}] EVENT_INBOX_SKIPPED reason={reason} event_ref={event_ref(event_id)}")
-                append_real_runtime_ledger_event(
-                    event,
-                    trace_id,
-                    event_id=event_key or event_id,
-                    dispatch_result={"flow_used": safe_str(reason), "reply_sent": False},
-                    success=True,
-                    dedup_status="duplicate" if "duplicate" in safe_str(reason) else "skipped",
-                    final_status="skipped",
-                    error_code=safe_str(reason),
-                )
                 _mark_event_inbox_done(event_id, trace_id)
                 return
             success = False
             dispatch_result = {}
-            ledger_error_code = ""
             try:
                 dispatch_result = dispatch_line_event(event, trace_id) or {}
                 success = True
-            except Exception as exc:
-                ledger_error_code = f"{type(exc).__name__}:{safe_str(exc)[:160]}"
-                raise
             finally:
-                finalize_event_processing(
-                    event,
-                    trace_id,
-                    success,
-                    dispatch_result=dispatch_result,
-                    dedup_status=safe_str((dispatch_result or {}).get("dedup_status")) or "new",
-                    final_status="success" if success else "failed",
-                    error_code=ledger_error_code,
-                )
+                finalize_event_processing(event, trace_id, success, dispatch_result)
         _mark_event_inbox_done(event_id, trace_id)
     except Exception as exc:
         _mark_event_inbox_failed(event_id, trace_id, exc)
