@@ -10662,6 +10662,77 @@ def internal_phase_a_self_test():
     }), status_code
 
 
+@app.route("/internal/phase-a-ledger-test", methods=["POST"])
+def internal_phase_a_ledger_test():
+    """
+    PHASE_A_PATCH_6 manual ledger write test endpoint.
+
+    Scope:
+    - Requires X-Internal-Sync-Token.
+    - Appends exactly one audit row to TENANT_QUOTA_LEDGER.
+    - Does not call provider AI.
+    - Does not touch LINE callback flow.
+    - Does not write SIM_TRANSACTION_LOG.
+    - Does not write SIM_TOKEN_STORE.
+    """
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+    if not verify_internal_sync_token(trace_id):
+        return jsonify({
+            "ok": False,
+            "trace_id": trace_id,
+            "error": "unauthorized",
+        }), 401
+
+    request_id = f"PHASE_A_LEDGER_TEST_{datetime.now(TW_TZ).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
+    logger.info(
+        f"[{trace_id}] PHASE_A_LEDGER_APPEND_START "
+        f"worksheet_name={TENANT_QUOTA_LEDGER_SHEET_NAME} "
+        f"request_id={request_id} module_name=phase_a_manual_ledger_test"
+    )
+
+    result = append_phase_a_ledger_event(
+        trace_id=trace_id,
+        event_id=request_id,
+        tenant_id=get_current_tenant_id(),
+        source_type="internal",
+        module_name="phase_a_manual_ledger_test",
+        provider_name="none",
+        input_chars=0,
+        output_chars=0,
+        estimated_tokens=0,
+        estimated_cost="0",
+        quota_status="not_enforced",
+        acl_status="internal_token_ok",
+        gate_result="audit_only",
+        reason="manual_phase_a_ledger_test",
+        cache_hit=False,
+        provider_call=False,
+        privacy_notice_version="n/a",
+        consent_context="internal_self_test",
+        retention_class="audit",
+        request_id=request_id,
+        hash_key_version="v1",
+    )
+    ok = bool(result.get("ok"))
+    status_code = 200 if ok else 409
+
+    return jsonify({
+        "ok": ok,
+        "appended": ok,
+        "trace_id": trace_id,
+        "request_id": request_id,
+        "event_id": safe_str(result.get("event_id")) or request_id,
+        "worksheet_name": TENANT_QUOTA_LEDGER_SHEET_NAME,
+        "gate_result": "audit_only",
+        "provider_call": False,
+        "quota_status": "not_enforced",
+        "app_version": APP_VERSION,
+        "latency_ms": ms_since(started),
+        "reason": safe_str(result.get("reason")),
+    }), status_code
+
+
 # --- SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
 _EVENT_INBOX_WORKER_STARTED = False
 _EVENT_INBOX_WORKER_LOCK = threading.Lock()
