@@ -5281,7 +5281,15 @@ def begin_event_processing(event: dict, trace_id: str) -> Tuple[bool, str, str]:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_BEGIN_OK event_ref={event_ref(event_key)} source={'reclaim' if row_index > 0 else 'new'}")
         return True, "processing_started", event_key
 
-def persist_event_processing_finalize(event: dict, trace_id: str, success: bool) -> bool:
+def persist_event_processing_finalize(
+    event: dict,
+    trace_id: str,
+    success: bool,
+    dispatch_result: Optional[dict] = None,
+    dedup_status: str = "new",
+    final_status: str = "",
+    error_code: str = "",
+) -> bool:
     event_key = get_event_unique_key(event)
     if not event_key:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_SKIPPED reason=missing_event_key")
@@ -5329,9 +5337,28 @@ def persist_event_processing_finalize(event: dict, trace_id: str, success: bool)
                 logger.exception(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_APPEND_FAILED event_ref={event_ref(event_key)} exception={type(e).__name__}:{e}")
                 persist_ok = False
         logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
+        logger.info(f"[{trace_id}] REAL_RUNTIME_LEDGER_HOOK_START anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)}")
+        append_real_runtime_ledger_event(
+            event,
+            trace_id,
+            event_id=event_key,
+            dispatch_result=dispatch_result or {},
+            success=success,
+            dedup_status=safe_str(dedup_status) or "new",
+            final_status=safe_str(final_status) or ("success" if success else "failed"),
+            error_code=error_code,
+        )
         return persist_ok
 
-def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None:
+def finalize_event_processing(
+    event: dict,
+    trace_id: str,
+    success: bool,
+    dispatch_result: Optional[dict] = None,
+    dedup_status: str = "new",
+    final_status: str = "",
+    error_code: str = "",
+) -> None:
     event_key = get_event_unique_key(event)
     if not event_key:
         logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZE_SKIPPED reason=missing_event_key")
@@ -5354,6 +5381,10 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
             event_snapshot,
             trace_id,
             success,
+            dispatch_result or {},
+            safe_str(dedup_status) or "new",
+            safe_str(final_status) or ("success" if success else "failed"),
+            error_code,
         )
         if queued:
             logger.info(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_ENQUEUED event_ref={event_ref(event_key)} success={success}")
@@ -5361,7 +5392,15 @@ def finalize_event_processing(event: dict, trace_id: str, success: bool) -> None
             return
         logger.error(f"[{trace_id}] EVENT_PROCESSING_FAST_FINALIZE_QUEUE_FAILED event_ref={event_ref(event_key)} fallback=sync")
 
-    persist_ok = persist_event_processing_finalize(event, trace_id, success)
+    persist_ok = persist_event_processing_finalize(
+        event,
+        trace_id,
+        success,
+        dispatch_result=dispatch_result or {},
+        dedup_status=safe_str(dedup_status) or "new",
+        final_status=safe_str(final_status) or ("success" if success else "failed"),
+        error_code=error_code,
+    )
     logger.info(f"[{trace_id}] EVENT_PROCESSING_FINALIZED event_ref={event_ref(event_key)} success={success} persist_ok={persist_ok}")
 
 # --- language state ---
@@ -11039,14 +11078,37 @@ def process_event_inbox_item(row: dict, worker_trace_id: str) -> None:
             should_process, reason, event_key = begin_event_processing(event, trace_id)
             if not should_process:
                 logger.info(f"[{trace_id}] EVENT_INBOX_SKIPPED reason={reason} event_ref={event_ref(event_id)}")
+                append_real_runtime_ledger_event(
+                    event,
+                    trace_id,
+                    event_id=event_key or event_id,
+                    dispatch_result={"flow_used": safe_str(reason), "reply_sent": False},
+                    success=True,
+                    dedup_status="duplicate" if "duplicate" in safe_str(reason) else "skipped",
+                    final_status="skipped",
+                    error_code=safe_str(reason),
+                )
                 _mark_event_inbox_done(event_id, trace_id)
                 return
             success = False
+            dispatch_result = {}
+            ledger_error_code = ""
             try:
-                dispatch_line_event(event, trace_id)
+                dispatch_result = dispatch_line_event(event, trace_id) or {}
                 success = True
+            except Exception as exc:
+                ledger_error_code = f"{type(exc).__name__}:{safe_str(exc)[:160]}"
+                raise
             finally:
-                finalize_event_processing(event, trace_id, success)
+                finalize_event_processing(
+                    event,
+                    trace_id,
+                    success,
+                    dispatch_result=dispatch_result,
+                    dedup_status=safe_str((dispatch_result or {}).get("dedup_status")) or "new",
+                    final_status="success" if success else "failed",
+                    error_code=ledger_error_code,
+                )
         _mark_event_inbox_done(event_id, trace_id)
     except Exception as exc:
         _mark_event_inbox_failed(event_id, trace_id, exc)
