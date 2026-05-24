@@ -1009,6 +1009,52 @@ def ensure_phase_a_worksheet(trace_id: str, sheet_name: str, expected_headers: L
         f"extra={json.dumps(extra_headers, ensure_ascii=False)}"
     )
     return None
+def run_phase_a_worksheet_self_test(trace_id: str) -> dict:
+    """
+    PHASE_A_RUNTIME_GATE_LEDGER_AND_SIM_TOKEN_STORE_V1 manual self-test.
+
+    Scope:
+    - Verify existing Phase A worksheets and headers.
+    - Do not write rows.
+    - Do not call provider AI.
+    - Do not touch SIM lead runtime.
+    """
+    checks = [
+        (TENANT_QUOTA_LEDGER_SHEET_NAME, TENANT_QUOTA_LEDGER_HEADERS),
+        (SIM_TRANSACTION_LOG_SHEET_NAME, SIM_TRANSACTION_LOG_HEADERS),
+        (SIM_TOKEN_STORE_SHEET_NAME, SIM_TOKEN_STORE_HEADERS),
+    ]
+    results = []
+    all_ok = True
+
+    logger.info(f"[{trace_id}] PHASE_A_SELF_TEST_START check_count={len(checks)}")
+
+    for sheet_name, expected_headers in checks:
+        worksheet_name = safe_str(sheet_name)
+        ws = ensure_phase_a_worksheet(trace_id, worksheet_name, expected_headers)
+        ok = ws is not None
+        all_ok = all_ok and ok
+        results.append({
+            "worksheet_name": worksheet_name,
+            "ok": ok,
+            "expected_column_count": len(expected_headers or []),
+        })
+
+    failed = [item["worksheet_name"] for item in results if not item.get("ok")]
+    logger.info(
+        f"[{trace_id}] PHASE_A_SELF_TEST_DONE "
+        f"ok={all_ok} checked={len(results)} "
+        f"failed={json.dumps(failed, ensure_ascii=False)}"
+    )
+
+    return {
+        "ok": all_ok,
+        "checked": len(results),
+        "failed": failed,
+        "results": results,
+    }
+
+
 def get_records_safe(ws, trace_id: str, worksheet_name: str, allow_stale_fallback: bool = True, force_fresh: bool = False) -> List[dict]:
     _bounded_cache_cleanup(trace_id)
     records_cache = getattr(g, "_dt79_records_cache", None)
@@ -10380,6 +10426,30 @@ def internal_validate_routing_sheets():
             "latency_ms": ms_since(started),
             "error": f"{type(exc).__name__}:{safe_str(exc)[:200]}",
         }), 500
+
+@app.route("/internal/phase-a-self-test", methods=["POST"])
+def internal_phase_a_self_test():
+    trace_id = make_trace_id()
+    started = time.perf_counter()
+    if not verify_internal_sync_token(trace_id):
+        return jsonify({
+            "ok": False,
+            "trace_id": trace_id,
+            "error": "unauthorized",
+        }), 401
+
+    result = run_phase_a_worksheet_self_test(trace_id)
+    status_code = 200 if result.get("ok") else 409
+    return jsonify({
+        "ok": bool(result.get("ok")),
+        "trace_id": trace_id,
+        "app_version": APP_VERSION,
+        "latency_ms": ms_since(started),
+        "checked": result.get("checked"),
+        "failed": result.get("failed") or [],
+        "results": result.get("results") or [],
+    }), status_code
+
 
 # --- SQLITE_EVENT_INBOX_WORKER_V1_FIX ---
 _EVENT_INBOX_WORKER_STARTED = False
