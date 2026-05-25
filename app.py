@@ -238,7 +238,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1__PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS_V1"
 APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -5463,6 +5463,70 @@ def build_real_runtime_ledger_row(
     return [safe_str(row_map.get(header)) for header in REAL_RUNTIME_LEDGER_HEADERS]
 
 
+def real_runtime_ledger_event_key_exists(ws, trace_id: str, event_key: str) -> bool:
+    """
+    PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS_V1.
+
+    Scope:
+    - Check REAL_RUNTIME_LEDGER for an existing event_key.
+    - Do not touch Gate 1 dedup, routing, SIM lead capture, or LINE reply flow.
+    - Uses force_fresh read to avoid stale cache false-negative before append.
+    """
+    safe_trace_id = safe_str(trace_id) or make_trace_id()
+    target_event_key = safe_str(event_key)
+    if not target_event_key:
+        logger.info(f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_DUPLICATE_CHECK_CLEAR reason=missing_event_key")
+        return False
+
+    values = get_all_values_safe(
+        ws,
+        safe_trace_id,
+        REAL_RUNTIME_LEDGER_SHEET_NAME,
+        allow_stale_fallback=False,
+        force_fresh=True,
+    )
+    if not values:
+        logger.info(
+            f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_DUPLICATE_CHECK_CLEAR "
+            f"reason=no_values event_key={target_event_key}"
+        )
+        return False
+
+    header_map = build_header_index_map(values[0])
+    event_key_idx = header_map.get("event_key")
+    if event_key_idx is None:
+        logger.error(
+            f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_DUPLICATE_CHECK_SKIPPED "
+            f"reason=missing_event_key_column"
+        )
+        return False
+
+    for row_idx, existing_row in enumerate(values[1:], start=2):
+        existing_event_key = safe_str(existing_row[event_key_idx]) if event_key_idx < len(existing_row) else ""
+        if existing_event_key == target_event_key:
+            logger.warning(
+                f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_SKIP_DUPLICATE "
+                f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} row_index={row_idx} "
+                f"event_key={target_event_key}"
+            )
+            logger.warning(
+                f"[{safe_trace_id}] LEDGER_HOOK_SKIP_DUPLICATE "
+                f"worksheet_name={REAL_RUNTIME_LEDGER_SHEET_NAME} row_index={row_idx} "
+                f"event_key={target_event_key}"
+            )
+            logger.info(
+                f"[{safe_trace_id}] LEDGER_HOOK_FINALIZED "
+                f"status=duplicate_skipped event_key={target_event_key}"
+            )
+            return True
+
+    logger.info(
+        f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_DUPLICATE_CHECK_CLEAR "
+        f"event_key={target_event_key}"
+    )
+    return False
+
+
 def append_real_runtime_ledger_event(
     event: dict,
     trace_id: str,
@@ -5483,6 +5547,14 @@ def append_real_runtime_ledger_event(
                 f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_SKIPPED "
                 f"reason=worksheet_unavailable"
             )
+            logger.error(
+                f"[{safe_trace_id}] LEDGER_HOOK_WRITE_FAIL "
+                f"reason=worksheet_unavailable"
+            )
+            logger.info(
+                f"[{safe_trace_id}] LEDGER_HOOK_FINALIZED "
+                f"status=failed reason=worksheet_unavailable"
+            )
             return False
 
         row = build_real_runtime_ledger_row(
@@ -5500,7 +5572,19 @@ def append_real_runtime_ledger_event(
                 f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_SKIPPED "
                 f"reason=row_column_count_mismatch expected={len(REAL_RUNTIME_LEDGER_HEADERS)} actual={len(row)}"
             )
+            logger.error(
+                f"[{safe_trace_id}] LEDGER_HOOK_WRITE_FAIL "
+                f"reason=row_column_count_mismatch expected={len(REAL_RUNTIME_LEDGER_HEADERS)} actual={len(row)}"
+            )
+            logger.info(
+                f"[{safe_trace_id}] LEDGER_HOOK_FINALIZED "
+                f"status=failed reason=row_column_count_mismatch"
+            )
             return False
+
+        target_event_key = safe_str(row[3])
+        if real_runtime_ledger_event_key_exists(ws, safe_trace_id, target_event_key):
+            return True
 
         append_row_guarded(
             ws,
@@ -5512,17 +5596,36 @@ def append_real_runtime_ledger_event(
         _invalidate_worksheet_caches(REAL_RUNTIME_LEDGER_SHEET_NAME)
         logger.info(
             f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_OK "
-            f"ledger_id={safe_str(row[0])} event_key={safe_str(row[3])} "
+            f"ledger_id={safe_str(row[0])} event_key={target_event_key} "
             f"tenant_id={safe_str(row[4])} source_type={safe_str(row[5])} "
             f"intent_name={safe_str(row[9])} service_id={safe_str(row[10])} "
             f"dedup_status={safe_str(row[15])} final_status={safe_str(row[16])} "
             f"reply_status_code={safe_str(row[13]) or 'none'} latency_ms={ms_since(start)}"
+        )
+        logger.info(
+            f"[{safe_trace_id}] LEDGER_HOOK_WRITE_OK "
+            f"ledger_id={safe_str(row[0])} event_key={target_event_key} "
+            f"tenant_id={safe_str(row[4])} source_type={safe_str(row[5])} "
+            f"dedup_status={safe_str(row[15])} final_status={safe_str(row[16])} "
+            f"reply_status_code={safe_str(row[13]) or 'none'} latency_ms={ms_since(start)}"
+        )
+        logger.info(
+            f"[{safe_trace_id}] LEDGER_HOOK_FINALIZED "
+            f"status=written event_key={target_event_key}"
         )
         return True
     except Exception as exc:
         logger.exception(
             f"[{safe_trace_id}] REAL_RUNTIME_LEDGER_APPEND_FAILED "
             f"exception={type(exc).__name__}:{exc}"
+        )
+        logger.exception(
+            f"[{safe_trace_id}] LEDGER_HOOK_WRITE_FAIL "
+            f"exception={type(exc).__name__}:{exc}"
+        )
+        logger.info(
+            f"[{safe_trace_id}] LEDGER_HOOK_FINALIZED "
+            f"status=failed reason={type(exc).__name__}"
         )
         return False
 
@@ -5586,6 +5689,10 @@ def persist_event_processing_finalize(
         try:
             logger.info(
                 f"[{trace_id}] REAL_RUNTIME_LEDGER_HOOK_START "
+                f"anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)}"
+            )
+            logger.info(
+                f"[{trace_id}] LEDGER_HOOK_START "
                 f"anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE event_ref={event_ref(event_key)}"
             )
             append_real_runtime_ledger_event(
