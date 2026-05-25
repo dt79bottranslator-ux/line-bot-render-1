@@ -1,0 +1,49 @@
+DT79 LOCK NOTE
+File: LOCK_NOTES_PHASE_A_PATCH_8_REAL_RUNTIME_LEDGER_HOOK_V1_PASS_20260525.txt
+Date: 2026-05-25
+System: DT79_LINE_CHATBOT_CONTROL_ROOM
+Branch: PHASE_A_PATCH_8_REAL_RUNTIME_LEDGER_HOOK_V1
+
+STATUS
+- PHASE_A_PATCH_8_REAL_RUNTIME_LEDGER_HOOK_V1_PASS
+- Runtime Ledger Hook — moc ghi so runtime that: LOCK PASS
+
+TARGET
+Add REAL_RUNTIME_LEDGER hook to real LINE runtime path after event finalize.
+The hook records one redacted runtime ledger row for real callback events.
+
+RUNTIME EVIDENCE
+Trace observed:
+- SERVICE_ROUTING_BEFORE_MT_HANDLED source_type=user intent_name=sim_mang_di_dong service_id=SIM_TW_001 reply_ok=True
+- EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True persist_ok=True
+- REAL_RUNTIME_LEDGER_HOOK_START anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE
+- REAL_RUNTIME_LEDGER_SCHEMA_OK worksheet_name=REAL_RUNTIME_LEDGER column_count=19 created=true
+- REAL_RUNTIME_LEDGER_APPEND_OK ledger_id=LEDGER_20260525_120901_187de3b0
+- ASYNC_LOG_DONE level=AUDIT task=persist_event_processing_finalize
+
+PASS AXIS
+- Webhook/execution path: PASS
+- SIM private routing: PASS
+- Event finalize persist: PASS
+- REAL_RUNTIME_LEDGER append: PASS
+- Async audit log: PASS
+- Fail-open behavior: PASS
+
+KNOWN OBSERVATION
+- tenant_id recorded as tenant_default in the observed ledger row.
+- Tenant mapping is not part of this lock target and must not be reopened in this branch.
+
+DO NOT REOPEN WITHOUT NEW EVIDENCE
+- Do not modify SIM classifier.
+- Do not modify /callback routing.
+- Do not modify lead capture core.
+- Do not modify group-private lead lock.
+- Do not modify existing dedup mechanism.
+- Do not add AI/LLM call.
+- Do not add dashboard/UI.
+
+COMMIT MESSAGE USED
+fix(runtime): define real runtime ledger append helper for finalize hook
+
+FINAL LOCK TAG
+DT79::LOCK::PHASE_A_PATCH_8_REAL_RUNTIME_LEDGER_HOOK_V1_PASS
