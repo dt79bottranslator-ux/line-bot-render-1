@@ -158,7 +158,55 @@ def is_cjk_text(text: str) -> bool:
 def build_direct_translation_reply(text: str, language_group: str, trace_id: str) -> tuple:
     lang = normalize_language_group(language_group)
     target_lang = "vi" if lang == "zh" else TRANSLATION_TARGET_LANG_MAP.get(lang, "vi")
-    translated, error = google_translate_command_text(text, target_lang, trace_id)
+    source_text = sanitize_incoming_text(text)
+    char_count = calculate_translation_char_count(source_text)
+    if MT_MAX_INPUT_CHARS > 0 and char_count > MT_MAX_INPUT_CHARS:
+        enqueue_translation_usage_log({
+            "created_at": now_tw_iso(),
+            "trace_id": trace_id,
+            "tenant_id": get_current_tenant_id(),
+            "source_type": "direct_translation",
+            "user_hash": "unknown",
+            "group_hash": "",
+            "source_lang": lang,
+            "target_lang": target_lang,
+            "char_count": str(char_count),
+            "daily_chars_used": str(char_count),
+            "monthly_chars_used": str(char_count),
+            "daily_message_used": "0",
+            "monthly_message_used": "0",
+            "provider": TRANSLATION_USAGE_LOG_PROVIDER,
+            "api_call_allowed": "FALSE",
+            "block_reason": "REQUEST_TOO_LONG",
+            "status": "blocked",
+            "error_code": "CHAR_LIMIT_EXCEEDED",
+        }, trace_id)
+        logger.warning(
+            f"[{trace_id}] DIRECT_TRANSLATION_BLOCKED reason=REQUEST_TOO_LONG "
+            f"target_lang={target_lang} char_count={char_count} max={MT_MAX_INPUT_CHARS}"
+        )
+        return MT_INPUT_TOO_LONG_REPLY_TEXT, "request_too_long"
+    translated, error = google_translate_command_text(source_text, target_lang, trace_id)
+    enqueue_translation_usage_log({
+        "created_at": now_tw_iso(),
+        "trace_id": trace_id,
+        "tenant_id": get_current_tenant_id(),
+        "source_type": "direct_translation",
+        "user_hash": "unknown",
+        "group_hash": "",
+        "source_lang": lang,
+        "target_lang": target_lang,
+        "char_count": str(char_count),
+        "daily_chars_used": str(char_count),
+        "monthly_chars_used": str(char_count),
+        "daily_message_used": "1",
+        "monthly_message_used": "1",
+        "provider": TRANSLATION_USAGE_LOG_PROVIDER,
+        "api_call_allowed": "TRUE",
+        "block_reason": "",
+        "status": "error" if error else "success",
+        "error_code": safe_str(error),
+    }, trace_id)
     if error:
         logger.error(f"[{trace_id}] DIRECT_TRANSLATION_FAILED target_lang={target_lang} error={error}")
         return FALLBACK_REPLY_TEXT, error
@@ -238,7 +286,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1__PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1__PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS_V1__TRANSLATION_QUOTA_GUARD_RUNTIME_V1"
 APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -8041,6 +8089,14 @@ MT_TENANT_SOURCE_MAP_SHEET_NAME = os.getenv("MT_TENANT_SOURCE_MAP_SHEET_NAME", "
 MT_TENANT_CONFIG_SHEET_NAME = os.getenv("MT_TENANT_CONFIG_SHEET_NAME", "TENANT_CONFIG").strip() or "TENANT_CONFIG"
 MT_TENANT_GLOSSARY_SHEET_NAME = os.getenv("MT_TENANT_GLOSSARY_SHEET_NAME", "TENANT_GLOSSARY").strip() or "TENANT_GLOSSARY"
 MT_TRANSLATION_LOG_SHEET_NAME = os.getenv("MT_TRANSLATION_LOG_SHEET_NAME", "TRANSLATION_LOG").strip() or "TRANSLATION_LOG"
+TRANSLATION_USAGE_LOG_SHEET_NAME = os.getenv("TRANSLATION_USAGE_LOG_SHEET_NAME", "TRANSLATION_USAGE_LOG").strip() or "TRANSLATION_USAGE_LOG"
+TRANSLATION_USAGE_LOG_HEADERS = [
+    "created_at", "trace_id", "tenant_id", "source_type", "user_hash", "group_hash",
+    "source_lang", "target_lang", "char_count", "daily_chars_used", "monthly_chars_used",
+    "daily_message_used", "monthly_message_used", "provider", "api_call_allowed",
+    "block_reason", "status", "error_code",
+]
+TRANSLATION_USAGE_LOG_PROVIDER = os.getenv("TRANSLATION_USAGE_LOG_PROVIDER", "google_translate").strip() or "google_translate"
 MT_TENANT_CONFIG_CACHE_TTL_SECONDS = int(os.getenv("MT_TENANT_CONFIG_CACHE_TTL_SECONDS", "900").strip() or "900")
 MT_TENANT_NOT_FOUND_MODE = os.getenv("MT_TENANT_NOT_FOUND_MODE", "pass_through").strip().lower() or "pass_through"
 MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED = os.getenv("MT_UNKNOWN_SOURCE_TRANSLATION_GUARD_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
@@ -8520,6 +8576,138 @@ def append_mt_translation_log_row(row: dict, trace_id: str) -> bool:
 
 def enqueue_mt_translation_log(row: dict, trace_id: str) -> bool:
     return enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_translation_log", append_mt_translation_log_row, row, trace_id)
+
+
+# --- TRANSLATION_QUOTA_GUARD_RUNTIME_V1 ---
+def calculate_translation_char_count(text: str) -> int:
+    return len(sanitize_incoming_text(text))
+
+
+def append_translation_usage_log_row(row: dict, trace_id: str) -> bool:
+    ws = get_mt_translation_worksheet(trace_id, TRANSLATION_USAGE_LOG_SHEET_NAME)
+    if not ws:
+        logger.error(f"[{trace_id}] TRANSLATION_USAGE_LOG_SHEET_UNAVAILABLE")
+        return False
+    values = [safe_str(row.get(header)) for header in TRANSLATION_USAGE_LOG_HEADERS]
+    if len(values) != len(TRANSLATION_USAGE_LOG_HEADERS):
+        logger.error(
+            f"[{trace_id}] TRANSLATION_USAGE_LOG_ROW_BUILD_FAILED "
+            f"expected={len(TRANSLATION_USAGE_LOG_HEADERS)} actual={len(values)}"
+        )
+        return False
+    try:
+        append_row_guarded(ws, trace_id, TRANSLATION_USAGE_LOG_SHEET_NAME, values, value_input_option="USER_ENTERED")
+        _invalidate_worksheet_caches(TRANSLATION_USAGE_LOG_SHEET_NAME)
+        logger.info(
+            f"[{trace_id}] TRANSLATION_USAGE_LOG_APPEND_OK "
+            f"tenant_id={safe_str(row.get('tenant_id'))} "
+            f"status={safe_str(row.get('status'))} "
+            f"api_call_allowed={safe_str(row.get('api_call_allowed'))} "
+            f"char_count={safe_str(row.get('char_count'))} "
+            f"block_reason={safe_str(row.get('block_reason'))}"
+        )
+        return True
+    except Exception as exc:
+        logger.exception(f"[{trace_id}] TRANSLATION_USAGE_LOG_APPEND_FAILED exception={type(exc).__name__}:{exc}")
+        return False
+
+
+def enqueue_translation_usage_log(row: dict, trace_id: str) -> bool:
+    return enqueue_async_log(
+        ASYNC_LOG_LEVEL_AUDIT,
+        trace_id,
+        "translation_usage_log",
+        append_translation_usage_log_row,
+        row,
+        trace_id,
+    )
+
+
+def build_translation_usage_log_row(
+    *,
+    trace_id: str,
+    tenant_id: str,
+    source_type: str,
+    user_id: str = "",
+    group_id: str = "",
+    source_lang: str = "",
+    target_lang: str = "",
+    char_count: int = 0,
+    daily_chars_used: int = 0,
+    monthly_chars_used: int = 0,
+    daily_message_used: int = 0,
+    monthly_message_used: int = 0,
+    provider: str = "",
+    api_call_allowed: bool = False,
+    block_reason: str = "",
+    status: str = "",
+    error_code: str = "",
+) -> dict:
+    safe_user_hash = stable_hash(tenant_scope_key(user_id) or user_id) if safe_str(user_id) else ""
+    safe_group_hash = stable_hash(tenant_scope_key(group_id) or group_id) if safe_str(group_id) else ""
+    return {
+        "created_at": now_tw_iso(),
+        "trace_id": safe_str(trace_id),
+        "tenant_id": safe_str(tenant_id),
+        "source_type": safe_str(source_type),
+        "user_hash": safe_user_hash,
+        "group_hash": safe_group_hash,
+        "source_lang": safe_str(source_lang),
+        "target_lang": safe_str(target_lang),
+        "char_count": str(max(0, int(char_count or 0))),
+        "daily_chars_used": str(max(0, int(daily_chars_used or 0))),
+        "monthly_chars_used": str(max(0, int(monthly_chars_used or 0))),
+        "daily_message_used": str(max(0, int(daily_message_used or 0))),
+        "monthly_message_used": str(max(0, int(monthly_message_used or 0))),
+        "provider": safe_str(provider) or TRANSLATION_USAGE_LOG_PROVIDER,
+        "api_call_allowed": "TRUE" if bool(api_call_allowed) else "FALSE",
+        "block_reason": safe_str(block_reason),
+        "status": safe_str(status),
+        "error_code": safe_str(error_code),
+    }
+
+
+def enqueue_mt_translation_usage_event(
+    *,
+    trace_id: str,
+    tenant_id: str,
+    source_type: str,
+    source_id: str,
+    user_id: str,
+    source_lang: str = "",
+    target_lang: str = "",
+    char_count: int = 0,
+    quota_before: int = 0,
+    quota_after: int = 0,
+    api_call_allowed: bool = False,
+    block_reason: str = "",
+    status: str = "",
+    error_code: str = "",
+) -> bool:
+    group_id = source_id if safe_str(source_type) in {"group", "room"} else ""
+    event_chars_used = 0
+    if api_call_allowed or status in {"success", "translated", "reply_failed", "error"}:
+        event_chars_used = max(0, int(char_count or 0))
+    row = build_translation_usage_log_row(
+        trace_id=trace_id,
+        tenant_id=tenant_id,
+        source_type=source_type,
+        user_id=user_id,
+        group_id=group_id,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        char_count=max(0, int(char_count or 0)),
+        daily_chars_used=event_chars_used,
+        monthly_chars_used=event_chars_used,
+        daily_message_used=1 if status in {"success", "translated", "reply_failed", "blocked"} else 0,
+        monthly_message_used=1 if status in {"success", "translated", "reply_failed", "blocked"} else 0,
+        provider=TRANSLATION_USAGE_LOG_PROVIDER,
+        api_call_allowed=api_call_allowed,
+        block_reason=block_reason,
+        status=status,
+        error_code=error_code,
+    )
+    return enqueue_translation_usage_log(row, trace_id)
 
 
 # --- SEMANTIC_HEALTH_LOG_V1 + POST_TRANSLATION_GLOSSARY_ENFORCE_V1 ---
@@ -9126,6 +9314,7 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
     translation_text = sanitize_incoming_text(translation_request.get("content"))
     explicit_target_lang = safe_str(translation_request.get("target_override"))
     translation_command = safe_str(translation_request.get("command"))
+    translation_char_count = calculate_translation_char_count(translation_text)
 
     # --- MT_SERVICE_INTENT_GUARD_V1 ---
     # Service-looking messages in group/room must not be consumed by MT auto translation.
@@ -9211,6 +9400,22 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             "status": "input_too_long",
             "error": "",
         }, trace_id)
+        enqueue_mt_translation_usage_event(
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            source_type=source_type,
+            source_id=source_id,
+            user_id=user_id,
+            source_lang="",
+            target_lang="",
+            char_count=translation_char_count,
+            quota_before=0,
+            quota_after=0,
+            api_call_allowed=False,
+            block_reason="REQUEST_TOO_LONG",
+            status="blocked",
+            error_code="CHAR_LIMIT_EXCEEDED",
+        )
         return {"handled": True, "flow_used": "mt_input_too_long", "reply_sent": reply_ok}
 
     remaining_quota = mt_safe_int(tenant.get("remaining_quota"), 0)
@@ -9235,8 +9440,67 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             "status": "quota_empty",
             "error": "",
         }, trace_id)
+        enqueue_mt_translation_usage_event(
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            source_type=source_type,
+            source_id=source_id,
+            user_id=user_id,
+            source_lang="",
+            target_lang="",
+            char_count=translation_char_count,
+            quota_before=remaining_quota,
+            quota_after=remaining_quota,
+            api_call_allowed=False,
+            block_reason="TENANT_QUOTA_EMPTY",
+            status="blocked",
+            error_code="TENANT_QUOTA_EXCEEDED",
+        )
         logger.info(f"[{trace_id}] MT_QUOTA_EMPTY tenant_id={tenant_id} reply_ok={reply_ok}")
         return {"handled": True, "flow_used": "mt_quota_empty", "reply_sent": reply_ok}
+
+    if translation_char_count > remaining_quota:
+        reply_ok = reply_line_text(reply_token, MT_TENANT_QUOTA_EMPTY_REPLY_TEXT, trace_id, "vi")
+        enqueue_mt_translation_log({
+            "timestamp": now_tw_iso(),
+            "trace_id": trace_id,
+            "tenant_id": tenant_id,
+            "source_ref": stable_hash(source_id),
+            "source_type": source_type,
+            "user_ref": user_ref(user_id),
+            "target_lang": "",
+            "direction": "quota_blocked",
+            "direction_confidence": "guard",
+            "direction_reason": f"char_count={translation_char_count};remaining_quota={remaining_quota}",
+            "raw_text_fp": message_fingerprint(raw_text),
+            "glossary_text_fp": "",
+            "translated_len": "0",
+            "quota_before": str(remaining_quota),
+            "quota_after": str(remaining_quota),
+            "status": "quota_insufficient",
+            "error": "",
+        }, trace_id)
+        enqueue_mt_translation_usage_event(
+            trace_id=trace_id,
+            tenant_id=tenant_id,
+            source_type=source_type,
+            source_id=source_id,
+            user_id=user_id,
+            source_lang="",
+            target_lang="",
+            char_count=translation_char_count,
+            quota_before=remaining_quota,
+            quota_after=remaining_quota,
+            api_call_allowed=False,
+            block_reason="TENANT_CHAR_QUOTA_EXCEEDED",
+            status="blocked",
+            error_code="TENANT_QUOTA_EXCEEDED",
+        )
+        logger.info(
+            f"[{trace_id}] MT_QUOTA_INSUFFICIENT tenant_id={tenant_id} "
+            f"char_count={translation_char_count} remaining_quota={remaining_quota} reply_ok={reply_ok}"
+        )
+        return {"handled": True, "flow_used": "mt_quota_insufficient", "reply_sent": reply_ok}
 
     glossary_text = raw_text
     translated = ""
@@ -9288,7 +9552,7 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
                 f"marker_restored={enforce_stats.get('marker_restored')} appended_terms={json.dumps(enforce_stats.get('appended_terms', []), ensure_ascii=False)} "
                 f"final_fp={message_fingerprint(translated)}"
             )
-        quota_before, quota_after = decrement_mt_quota_in_cache(tenant_id, 1)
+        quota_before, quota_after = decrement_mt_quota_in_cache(tenant_id, translation_char_count)
         enqueue_async_log(ASYNC_LOG_LEVEL_AUDIT, trace_id, "mt_quota_writeback", writeback_mt_tenant_quota, tenant_id, quota_after, trace_id)
         reply_ok = reply_line_text(reply_token, translated, trace_id, "vi")
         if is_group_safe_source_type(source_type):
@@ -9345,6 +9609,27 @@ def handle_mt_translation_message(event: dict, trace_id: str) -> Optional[dict]:
             latency_ms=ms_since(translation_start_perf),
             reply_ok=reply_ok,
         )
+
+    provider_attempted = bool(translated or (error and error != "MT_DIRECTION_AMBIGUOUS"))
+    usage_status = "success" if status_text == "translated" else ("blocked" if status_text == "direction_ambiguous" else "error")
+    usage_block_reason = "DIRECTION_AMBIGUOUS" if status_text == "direction_ambiguous" else ""
+    usage_error_code = "" if status_text == "translated" else (safe_str(error) or safe_str(status_text))
+    enqueue_mt_translation_usage_event(
+        trace_id=trace_id,
+        tenant_id=tenant_id,
+        source_type=source_type,
+        source_id=source_id,
+        user_id=user_id,
+        source_lang=safe_str(direction_meta.get("direction")),
+        target_lang=target_lang,
+        char_count=translation_char_count,
+        quota_before=quota_before,
+        quota_after=quota_after,
+        api_call_allowed=provider_attempted,
+        block_reason=usage_block_reason,
+        status=usage_status,
+        error_code=usage_error_code,
+    )
 
     return {
         "handled": True,
