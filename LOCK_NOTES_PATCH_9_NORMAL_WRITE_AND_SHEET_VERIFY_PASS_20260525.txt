@@ -1,0 +1,44 @@
+DT79 CHECKPOINT LOCK NOTE
+
+Checkpoint:
+DT79::CHECKPOINT::PATCH_9_NORMAL_WRITE_AND_SHEET_VERIFY_PASS
+
+Date:
+2026-05-25
+
+Branch:
+PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS
+
+Commit message:
+fix(ledger): add real runtime ledger dedup and hook log aliases
+
+Evidence PASS:
+1. Render deploy live confirmed.
+2. Render log showed service live with HEAD / HTTP/1.1 200 and GET / HTTP/1.1 200.
+3. Normal LINE private SIM test wrote REAL_RUNTIME_LEDGER row.
+4. Render log showed:
+   - REAL_RUNTIME_LEDGER_DUPLICATE_CHECK_CLEAR
+   - REAL_RUNTIME_LEDGER_APPEND_OK
+   - LEDGER_HOOK_WRITE_OK
+   - LEDGER_HOOK_FINALIZED status=written
+5. Google Sheets REAL_RUNTIME_LEDGER verified:
+   - trace_id present
+   - event_key present
+   - reply_status_code=200
+   - dedup_status=new
+   - final_status=success
+   - selected_route=service_routing_
+
+Not final lock:
+PATCH_9_DUPLICATE_REPLAY is not confirmed because repeated LINE messages generated different event_key values. They are new LINE events, not same-event replay.
+
+Current status:
+PATCH_9_DEPLOY_LIVE = PASS
+PATCH_9_NORMAL_WRITE = PASS
+PATCH_9_SHEET_ROW_VERIFY = PASS
+PATCH_9_DUPLICATE_REPLAY = CHUA XAC NHAN
+PATCH_9_FINAL_LOCK = BLOCKED
+
+Do not rollback.
+Do not patch further.
+Do not deploy again until next target state is defined.
