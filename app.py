@@ -5761,6 +5761,81 @@ def persist_event_processing_finalize(
 
         return persist_ok
 
+
+def append_real_runtime_ledger_event(
+    event: dict,
+    trace_id: str,
+    *,
+    event_id: str = "",
+    dispatch_result: dict | None = None,
+    success: bool = False,
+    dedup_status: str = "new",
+    final_status: str = "",
+    error_code: str = "",
+) -> dict:
+    """
+    LAYER_ROUTING_PRIORITY_RUNTIME_PATCH minimal wrapper.
+
+    Purpose:
+    - Prevent unresolved ledger function at finalize_event_processing().
+    - Preserve deterministic audit fields from dispatch_result.
+    - Reuse existing append_phase_a_ledger_event() backend.
+
+    Runtime evidence required before PASS:
+    - REAL_RUNTIME_LEDGER_APPEND_OK
+    - PRIORITY_RESOLUTION_DECISION, if deterministic routing patch is added later.
+    """
+    dispatch_result = dispatch_result or {}
+    module_name = safe_str(dispatch_result.get("flow_used")) or "unknown_flow"
+    intent_name = safe_str(dispatch_result.get("intent_name"))
+    service_id = safe_str(dispatch_result.get("service_id"))
+    service_type = safe_str(dispatch_result.get("service_type"))
+    lead_id = safe_str(dispatch_result.get("lead_id"))
+    source_type = safe_str(get_event_source_type(event)) or safe_str(dispatch_result.get("source_type")) or "unknown"
+    user_id = safe_str(get_event_user_id(event))
+    group_id = safe_str(get_event_group_id(event))
+
+    reason_parts = [
+        f"final_status={safe_str(final_status)}",
+        f"success={bool(success)}",
+        f"dedup_status={safe_str(dedup_status)}",
+        f"intent_name={intent_name}",
+        f"service_id={service_id}",
+        f"service_type={service_type}",
+        f"lead_id={lead_id}",
+        f"error_code={safe_str(error_code)}",
+    ]
+    reason = " ".join(reason_parts)
+
+    result = append_phase_a_ledger_event(
+        trace_id,
+        event_id=safe_str(event_id),
+        source_type=source_type,
+        user_id_hash=user_ref(user_id),
+        group_id_hash=user_ref(group_id),
+        module_name=module_name,
+        provider_name="line_runtime",
+        quota_status="not_enforced",
+        acl_status="runtime_audit",
+        gate_result=safe_str(final_status) or ("success" if success else "failed"),
+        reason=reason[:500],
+        provider_call=False,
+        consent_context="line_runtime_audit",
+        retention_class="audit",
+        request_id=safe_str(event_id) or safe_str(lead_id),
+    )
+
+    logger.info(
+        f"[{trace_id}] REAL_RUNTIME_LEDGER_APPEND_OK "
+        f"ok={bool((result or {}).get('ok'))} "
+        f"event_id={safe_str(event_id)} "
+        f"intent_name={intent_name} "
+        f"service_id={service_id} "
+        f"service_type={service_type} "
+        f"lead_id={lead_id}"
+    )
+    return result or {}
+
 def finalize_event_processing(
     event: dict,
     trace_id: str,
@@ -9916,12 +9991,21 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         f"service_id={safe_str(service_row.get('service_id')) if service_row else ''} "
         f"reply_ok={reply_ok}"
     )
+    lead_id = ""
+    if is_private_source_type(source_type):
+        lead_id = private_lead_id_for_event(user_id, trace_id)
+
     return {
         "handled": True,
         "event_type": "message",
         "message_type": "text",
         "flow_used": "service_routing_before_mt",
         "user_ref": user_ref(user_id),
+        "source_type": safe_str(source_type),
+        "intent_name": safe_str(routing_result.get("intent_name")),
+        "service_id": safe_str(service_row.get("service_id")) if service_row else "",
+        "service_type": safe_str(service_row.get("service_type")) if service_row else "",
+        "lead_id": safe_str(lead_id),
         "reply_sent": reply_ok,
     }
 
