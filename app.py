@@ -10050,7 +10050,10 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         "source_type": safe_str(source_type),
         "intent_name": safe_str(routing_result.get("intent_name")),
         "service_id": safe_str(service_row.get("service_id")) if service_row else "",
-        "service_type": safe_str(service_row.get("service_type")) if service_row else "",
+        "service_type": normalize_lead_service_type(
+            safe_str(routing_result.get("intent_name")),
+            service_row,
+        ) if service_row else "",
         "lead_id": safe_str(lead_id),
         "reply_sent": reply_ok,
     }
