@@ -1927,10 +1927,56 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
 
     if exact_matches:
         exact_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
-        return exact_matches[0][1]
+        selected_service = exact_matches[0][1]
+        loser_services = [
+            safe_str(item[1].get("service_id"))
+            for item in exact_matches[1:]
+            if safe_str(item[1].get("service_id"))
+        ]
+        logger.info(
+            "PRIORITY_RESOLUTION_DECISION "
+            "rule_id=RP-T01_EXACT_LOCATION_PRIORITY "
+            f"intent_name={safe_str(intent_name)} "
+            f"location_hint={safe_str(normalized_location)} "
+            f"selected_service={safe_str(selected_service.get('service_id'))} "
+            f"selected_priority={parse_priority(selected_service.get('priority'))} "
+            f"loser_services={json.dumps(loser_services, ensure_ascii=False)} "
+            f"candidate_count={len(exact_matches)} "
+            f"tenant_hash={stable_hash(current_tenant_id)}"
+        )
+        return selected_service
+
     if fallback_matches:
         fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
-        return fallback_matches[0][1]
+        selected_service = fallback_matches[0][1]
+        loser_services = [
+            safe_str(item[1].get("service_id"))
+            for item in fallback_matches[1:]
+            if safe_str(item[1].get("service_id"))
+        ]
+        logger.info(
+            "PRIORITY_RESOLUTION_DECISION "
+            "rule_id=RP-T02_FALLBACK_LOCATION_PRIORITY "
+            f"intent_name={safe_str(intent_name)} "
+            f"location_hint={safe_str(normalized_location)} "
+            f"selected_service={safe_str(selected_service.get('service_id'))} "
+            f"selected_priority={parse_priority(selected_service.get('priority'))} "
+            f"loser_services={json.dumps(loser_services, ensure_ascii=False)} "
+            f"candidate_count={len(fallback_matches)} "
+            f"tenant_hash={stable_hash(current_tenant_id)}"
+        )
+        return selected_service
+
+    logger.info(
+        "PRIORITY_RESOLUTION_DECISION "
+        "rule_id=RP-T99_NO_SERVICE_MATCH "
+        f"intent_name={safe_str(intent_name)} "
+        f"location_hint={safe_str(normalized_location)} "
+        "selected_service=REVIEW_QUEUE "
+        "loser_services=[] "
+        f"candidate_count={len(candidates)} "
+        f"tenant_hash={stable_hash(current_tenant_id)}"
+    )
     return None
 def build_location_token_guesses(text: str, matched_keywords: List[str]) -> List[str]:
     normalized = normalize_routing_text(text)
