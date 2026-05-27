@@ -1,0 +1,57 @@
+DT79 LOCK NOTE — MULTI_CANDIDATE_PRIORITY_RESOLUTION_TEST_V1_PASS
+Date: 2026-05-27
+Repo: line-bot-render-1
+Module: MULTI_CANDIDATE_PRIORITY_RESOLUTION_TEST_V1
+
+STATUS:
+PASS
+
+TARGET:
+When multiple active SERVICE_MASTER rows match the same intent_name and location,
+runtime must select the higher priority service deterministically and log loser candidates.
+
+TEST DATA:
+SERVICE_MASTER winner:
+- service_id=SIM_TW_001
+- tenant_id=TENANT_001
+- intent_name=sim_mang_di_dong
+- location=TW_ALL
+- service_status=active
+- priority=1
+
+SERVICE_MASTER loser test row:
+- service_id=SIM_TEST_PRIORITY_LOSER_001
+- tenant_id=TENANT_001
+- intent_name=sim_mang_di_dong
+- location=TW_ALL
+- service_status=active during test
+- priority=0
+- note=TEST_MARKER=MULTI_CANDIDATE_PRIORITY_RESOLUTION_TEST_V1
+
+RUNTIME EVIDENCE:
+Trace:
+trc_567c7b_260527184917_d8eada_8670d667a759
+
+Observed logs:
+- TENANT_SERVICE_FILTER_APPLIED tenant_hash=32c257d7bff3 intent_name=sim_mang_di_dong kept=2 skipped_wrong_tenant=0 skipped_missing_tenant=0
+- PRIORITY_RESOLUTION_DECISION rule_id=RP-T01_EXACT_LOCATION_PRIORITY intent_name=sim_mang_di_dong location_hint=TW_ALL selected_service=SIM_TW_001 selected_priority=1 loser_services=["SIM_TEST_PRIORITY_LOSER_001"] candidate_count=2 tenant_hash=32c257d7bff3
+- SIM_FASTPATH_ROUTE_OK service_id=SIM_TW_001 service_region_key="TW_ALL" matched_keywords=["sim"]
+- ROUTING_REPLY_RESULT user_ref=145302c6de34 intent_name=sim_mang_di_dong service_id=SIM_TW_001 location="TW_ALL" reply_ok=True
+- REAL_RUNTIME_LEDGER_APPEND_OK ok=True intent_name=sim_mang_di_dong service_id=SIM_TW_001 service_type=SIM lead_id=LEAD_20260527_8670d667a759
+
+BLOCKERS RESOLVED:
+- Missing TENANT_SOURCE_MAP row for user_ref=145302c6de34
+- Missing service source_ref mapping for ref:73354fbfbe3b
+- MT_TENANT_CONFIG_CACHE reloaded after Render restart
+- SERVICE_MASTER test row cleaned up after PASS
+
+CLEANUP:
+SERVICE_MASTER row SIM_TEST_PRIORITY_LOSER_001 was changed to:
+service_status=inactive
+
+FINAL RESULT:
+MULTI_CANDIDATE_PRIORITY_RESOLUTION_TEST_V1_PASS
+TEST_ROW_CLEANUP_PASS
+
+NO CODE CHANGE REQUIRED.
+NO DEPLOY REQUIRED AFTER PASS.
