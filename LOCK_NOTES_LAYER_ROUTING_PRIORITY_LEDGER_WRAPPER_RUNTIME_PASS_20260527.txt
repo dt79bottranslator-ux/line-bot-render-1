@@ -1,0 +1,55 @@
+DT79 LOCK NOTE
+MODULE: LAYER_ROUTING_PRIORITY_RUNTIME_PATCH
+STATUS: LEDGER_WRAPPER_RUNTIME_PASS_ONLY
+COMMIT: a773bf2
+
+EVIDENCE:
+- GitHub push passed: main -> main, commit a773bf2.
+- Render service live.
+- LINE private input: "tôi cần mua sim ở cao hùng".
+- Bot replied SIM flow:
+  "Tôi đã nhận nhu cầu SIM, nhưng chưa đủ thông tin gói. Bạn gửi lại theo mẫu: mạng + thời hạn, ví dụ OK 6 tháng hoặc Chunghwa 12 tháng."
+- Render log:
+  EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True persist_ok=True
+  REAL_RUNTIME_LEDGER_HOOK_START
+  LEDGER_HOOK_START anchor=EVENT_PROCESSING_FINALIZE_PERSIST_DONE
+  PHASE_A_LEDGER_APPEND_OK worksheet_name=TENANT_QUOTA_LEDGER
+  REAL_RUNTIME_LEDGER_APPEND_OK ok=True
+  intent_name=sim_mang_di_dong
+  service_id=
+  service_type=
+  lead_id=LEAD_20260527_5be7134cd01c
+  ASYNC_LOG_DONE task=persist_event_processing_finalize
+
+PASS_SCOPE:
+- LINE reply works.
+- Event finalize works.
+- Runtime ledger wrapper works.
+- Lead ID is captured into runtime ledger log.
+- GitHub push passed.
+- Render runtime responded.
+
+LIMITATION:
+- service_id is empty.
+- service_type is empty.
+- PRIORITY_RESOLUTION_DECISION is not implemented yet.
+- selected_service is not implemented yet.
+- loser_services is not implemented yet.
+- Deterministic routing final PASS is not granted.
+
+CURRENT_STATE:
+- LEDGER_WRAPPER_RUNTIME_PASS_ONLY
+- LAYER_ROUTING_PRIORITY_RUNTIME_PATCH is not final locked.
+
+NEXT TARGET:
+Build deterministic priority decision log:
+PRIORITY_RESOLUTION_DECISION with rule_id, selected_service, loser_services.
+
+DO_NOT_CHANGE:
+- Do not claim deterministic routing final PASS from this note.
+- Do not patch AI translation layer before routing priority decision is implemented.
+- Do not force push.
+- Do not deploy without runtime evidence.
+
+COMMIT_MESSAGE:
+docs(lock): add routing priority ledger wrapper runtime pass note
