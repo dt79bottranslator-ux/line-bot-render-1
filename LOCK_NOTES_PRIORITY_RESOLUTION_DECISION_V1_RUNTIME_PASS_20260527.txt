@@ -1,0 +1,80 @@
+DT79 LOCK NOTE
+MODULE: PRIORITY_RESOLUTION_DECISION_V1
+STATUS: RUNTIME_PASS
+DATE: 2026-05-27
+
+CODE_COMMIT:
+8055185 fix(routing): add priority resolution decision audit log
+
+DATA_FIX:
+TENANT_SOURCE_MAP fixed:
+- user source_ref = ref:b777903727f5
+- group source_ref = ref:cac3bc719633
+- tenant_id = TENANT_001
+- user service_tenant_id = TENANT_001
+- status = ACTIVE
+
+ROOT_CAUSE:
+Duplicate/wrong TENANT_SOURCE_MAP source_ref caused service tenant mismatch:
+- previous runtime source_ref = b777903727f5
+- configured_source_type was group
+- actual_source_type was user
+- result: SERVICE_TENANT_CONTEXT_MISSING and TENANT_SERVICE_FILTER_BLOCKED
+
+RUNTIME_EVIDENCE:
+1. SERVICE_TENANT_CONTEXT_SET
+   tenant_id=TENANT_001
+   source_ref=b777903727f5
+   lookup_mode=source_ref
+
+2. TENANT_SERVICE_FILTER_APPLIED
+   intent_name=sim_mang_di_dong
+   kept=1
+   skipped_wrong_tenant=0
+   skipped_missing_tenant=0
+
+3. PRIORITY_RESOLUTION_DECISION
+   rule_id=RP-T01_EXACT_LOCATION_PRIORITY
+   intent_name=sim_mang_di_dong
+   location_hint=TW_ALL
+   selected_service=SIM_TW_001
+   selected_priority=1
+   loser_services=[]
+   candidate_count=1
+
+4. SIM_FASTPATH_ROUTE_OK
+   service_id=SIM_TW_001
+   service_region_key=TW_ALL
+   network=OK
+   duration=6m
+   variant_type=new
+
+5. REAL_RUNTIME_LEDGER_APPEND_OK
+   ok=True
+   intent_name=sim_mang_di_dong
+   service_id=SIM_TW_001
+   lead_id=LEAD_20260527_403e9f4eb832
+
+PASS_SCOPE:
+- service tenant context resolved
+- tenant service filter applied
+- priority decision log emitted
+- selected_service captured
+- loser_services captured
+- SIM fastpath routed
+- runtime ledger received service_id
+
+LIMITATION:
+- service_type is still empty in runtime ledger
+- multi-candidate loser_services not yet tested with more than 1 candidate
+- only SIM exact location path RP-T01 has runtime PASS
+
+DO_NOT_CHANGE:
+- Do not modify LINE webhook core
+- Do not modify AI translation layer
+- Do not force push
+- Do not claim multi-service conflict PASS yet
+- Do not claim loser_services multi-candidate PASS yet
+
+NEXT_TARGET:
+Test or build multi-candidate service priority scenario if required.
