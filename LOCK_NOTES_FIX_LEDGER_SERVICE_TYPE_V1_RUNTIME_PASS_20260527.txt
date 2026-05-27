@@ -1,0 +1,50 @@
+DT79 LOCK NOTE — FIX_LEDGER_SERVICE_TYPE_V1_RUNTIME_PASS
+Date: 2026-05-27
+Repo: dt79bottranslator-ux/line-bot-render-1
+
+MODULE:
+FIX_LEDGER_SERVICE_TYPE_V1
+
+STATUS:
+RUNTIME_PASS
+
+CODE COMMIT:
+c8d0b1a fix(ledger): populate service_type in runtime dispatch result
+
+PATCH SCOPE:
+Populate dispatch_result.service_type in handle_service_routing_before_mt() using normalize_lead_service_type().
+
+PATCHED FIELD:
+service_type
+
+NO CHANGE:
+- /callback route handler
+- dispatch_text_event()
+- choose_service_for_intent()
+- PRIORITY_RESOLUTION_DECISION logic
+- LINE reply dispatch
+- AI translation layer
+- append_private_lead_capture_event()
+- ROUTING_LOG format
+
+DEPLOY EVIDENCE:
+Render service live.
+HEAD / HTTP/1.1 200
+GET / HTTP/1.1 200
+
+RUNTIME TEST INPUT:
+LINE private chat:
+tôi cần mua sim ở cao hùng
+
+RUNTIME PASS EVIDENCE:
+SERVICE_TENANT_CONTEXT_SET tenant_id=TENANT_001 source_ref=b777903727f5 lookup_mode=source_ref
+TENANT_SERVICE_FILTER_APPLIED intent_name=sim_mang_di_dong kept=1 skipped_wrong_tenant=0 skipped_missing_tenant=0
+PRIORITY_RESOLUTION_DECISION rule_id=RP-T01_EXACT_LOCATION_PRIORITY intent_name=sim_mang_di_dong location_hint=TW_ALL selected_service=SIM_TW_001 selected_priority=1 loser_services=[] candidate_count=1
+SIM_FASTPATH_ROUTE_OK service_id=SIM_TW_001 service_region_key="TW_ALL"
+REAL_RUNTIME_LEDGER_APPEND_OK ok=True intent_name=sim_mang_di_dong service_id=SIM_TW_001 service_type=SIM lead_id=LEAD_20260527_d1e2da27bdea
+
+CONCLUSION:
+FIX_LEDGER_SERVICE_TYPE_V1_RUNTIME_PASS
+
+DO NOT REOPEN UNLESS:
+A new runtime failure log shows REAL_RUNTIME_LEDGER_APPEND_OK with service_type empty/null/key absent for a routed service.
