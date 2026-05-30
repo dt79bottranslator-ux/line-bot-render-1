@@ -1,0 +1,104 @@
+DT79 LOCK NOTE — GROUP_CTA_TO_PRIVATE_HANDOFF_RUNTIME_V1_FULL_PASS
+
+DATE: 2026-05-30
+
+MODULE:
+GROUP_CTA_TO_PRIVATE_HANDOFF_RUNTIME_V1
+
+FINAL_STATUS:
+FULL_PASS
+
+SUMMARY:
+The LINE group CTA to private handoff flow has been runtime-verified.
+When a user in LINE group sends a SIM need message, the bot detects the SIM service intent, replies with a private-chat CTA, does not expose seller contact in group, and records the runtime result in REAL_RUNTIME_LEDGER.
+
+TEST INPUT:
+source_type=group
+message=tôi cần mua sim ở cao hùng
+channel=LINE group
+
+EXPECTED BEHAVIOR:
+- Detect SIM service intent.
+- Reply in group with CTA to private chat.
+- Do not expose seller phone/contact in group.
+- Include DT79 LINE OA private chat deep link.
+- Do not create a private lead directly from group context.
+- Write runtime ledger/log with success status.
+
+LINE SCREENSHOT EVIDENCE:
+The bot replied in LINE group with:
+- “Đã ghi nhận: Nhu cầu làm SIM”
+- Instruction to message the bot privately for package selection.
+- Required info list:
+  Nhà mạng muốn dùng
+  IF / Chunghwa
+  Thời hạn 6 tháng / 12 tháng / gia hạn
+  Khu vực đang ở
+- OA private chat link:
+  https://line.me/R/ti/p/@688xvjuc
+
+The group reply did not expose seller contact.
+
+RUNTIME TRACE:
+trc_742801_260530145706_597e9e_0e3c281728d8
+
+RUNTIME LEDGER EVIDENCE:
+REAL_RUNTIME_LEDGER_APPEND_OK
+ledger_id=LEDGER_20260530_145711_1d6c100a
+event_key=0e3c281728d8
+tenant_id=tenant_default
+source_type=group
+intent_name=sim_mang_di_dong
+service_id=SIM_TW_001
+dedup_status=new
+final_status=success
+reply_status_code=200
+latency_ms=628
+
+LEDGER HOOK EVIDENCE:
+LEDGER_HOOK_WRITE_OK
+ledger_id=LEDGER_20260530_145711_1d6c100a
+event_key=0e3c281728d8
+tenant_id=tenant_default
+source_type=group
+dedup_status=new
+final_status=success
+reply_status_code=200
+latency_ms=628
+
+PASS CHECKLIST:
+- LINE group input received: PASS
+- SIM service intent detected: PASS
+- Group CTA to private chat returned: PASS
+- OA deep link included: PASS
+- Seller contact hidden in group: PASS
+- Runtime ledger appended: PASS
+- source_type=group recorded: PASS
+- intent_name=sim_mang_di_dong recorded: PASS
+- service_id=SIM_TW_001 recorded: PASS
+- reply_status_code=200 recorded: PASS
+- final_status=success recorded: PASS
+
+LIMITATION:
+The specific log line GROUP_LEAD_LOCK_APPLIED contact_hidden=True was not observed in the provided runtime log.
+However, the LINE screenshot confirms no seller contact was exposed in the group reply, and REAL_RUNTIME_LEDGER confirms source_type=group with successful SIM intent handling.
+
+CONCLUSION:
+GROUP_CTA_TO_PRIVATE_HANDOFF_RUNTIME_V1 is locked as FULL_PASS based on LINE screenshot evidence and runtime ledger evidence.
+
+LOCK TAG:
+DT79::LOCK::GROUP_CTA_TO_PRIVATE_HANDOFF_RUNTIME_V1_FULL_PASS
+
+DO_NOT_REOPEN_UNLESS:
+- Group SIM CTA exposes seller phone/contact.
+- Group SIM CTA does not include private chat handoff.
+- SIM group message fails to detect intent_name=sim_mang_di_dong.
+- REAL_RUNTIME_LEDGER no longer records source_type=group.
+- LINE_REPLY_HTTP or ledger reply_status_code is not 200.
+- final_status is not success.
+
+NEXT_ALLOWED_MODULE:
+Define exactly one next target state before any new build.
+
+COMMIT MESSAGE:
+docs(lock): add group cta private handoff runtime pass note
