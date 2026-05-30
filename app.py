@@ -286,7 +286,7 @@ RUNTIME_STATE_TTL_SECONDS = int(os.getenv("RUNTIME_STATE_TTL_SECONDS", "1800").s
 RUNTIME_STATE_MAX_KEYS = int(os.getenv("RUNTIME_STATE_MAX_KEYS", "5000").strip() or "5000")
 PERSISTENT_FLOW_TTL_SECONDS = int(os.getenv("PERSISTENT_FLOW_TTL_SECONDS", "600").strip() or "600")
 DEFAULT_LANGUAGE_GROUP = os.getenv("DEFAULT_LANGUAGE_GROUP", "vi").strip().lower() or "vi"
-APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1__PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS_V1__TRANSLATION_QUOTA_GUARD_RUNTIME_V1"
+APP_VERSION = "PHASE1_RUNTIME_STATE_SAFE__RESTART_SAFE_DEDUP_SHEET_V46__WRITEBACK_STATUS_BLOCKED_BY_GUARD_FIX__CLEANUP_TEST_ROWS_V1__TRANSLATION_COMMAND_LAYER_V1__PERF_GUARDRAILS_V1__SIM_FASTPATH_V1__ROUTING_MASTER_CACHE_V1__EVENT_STATE_FAST_FINALIZE_V1__LOCATION_CANDIDATE_GUARD_V1__LOCATION_MASTER_CACHE_V1__SECURITY_TENANT_GUARD_V1__LINE_REPLY_LOG_REDACT_V1__EVENT_KEY_LOG_REDACT_V1__ROUTING_LOG_PRIVACY_V1__ROUTING_LOG_SYNC_V1__SQLITE_EVENT_INBOX_V1__ROUTING_INTENT_SUBSTRING_FIX_V1__CHAT_GENERAL_EARLY_RETURN_V1__WEBHOOK_ACK_INBOX_LOG_V1__ZH_TEXT_TRANSLATION_GUARD_V1__MIXED_ZH_SERVICE_ROUTING_V1__GROUP_PRIVATE_LEAD_LOCK_V1__GROUP_PRIVATE_LEAD_LOCK_FIX_V2__GROUP_ROOM_SIM_CTA_COPY_V1__SIM_FASTPATH_SOURCE_TYPE_FIX_V1__LEAD_CAPTURE_PRIVATE_FORM_V1__LEAD_CAPTURE_BATCH_GUARD_V1__MULTI_TENANT_TRANSLATION_CORE_V1__SOURCE_REF_MAP_V1__DIRECTION_RAW_FIRST_FIX_V1__SAAS_HARDENING_V3__DRIVE_CLEANUP_CANONICAL_GUARD_V1__SERVICE_ROUTING_BEFORE_MT_V1__TENANT_SHEET_LEGACY_CLEANUP_GUARD_V1__SEMANTIC_HEALTH_LOG_V1__POST_TRANSLATION_GLOSSARY_ENFORCE_V1__GROUP_SAFE_MODE_ENFORCEMENT_V1__GROUP_SAFE_HARD_SEND_GUARD_V3__GROUP_SOURCE_CONTEXT_HARDENING_V1__GROUP_SAFE_FALLTHROUGH_FIX_V1__CACHE_REFRESH_STRATEGY_V1__CACHE_REFRESH_STRATEGY_V2_SAFE_SWAP__TENANT_HANDOFF_SAFETY_V1__SIM_FASTPATH_GROUP_SAFE_FIX_V1__ROUTING_MISS_ALERT_V1__PRIVATE_UNHANDLED_FALLBACK_V1__HEALTH_CACHE_AGE_V1__STATE_ROW_LOOKUP_FIX_V1__PROCESSED_EVENT_HEADERS_BACKFILL_V1__CROSS_TENANT_SERVICE_FILTER_PATCH_V1__COST_GUARD_CONTEXT_CLASSIFIER_V1__GROUP_CONTEXT_ROLE_SHEET_LOOKUP_V1__ALERT_MANAGER_PUSH_V1__ALERT_MANAGER_PUSH_V1_SAFETY_PATCH_V1__GROUP_SERVICE_BEFORE_MT_FIX_V1__MT_SERVICE_INTENT_GUARD_V1__GROUP_SERVICE_HINT_HARDENING_V1__CASE_STATUS_COMMAND_ROUTE_V1__REAL_RUNTIME_LEDGER_HOOK_V1__PHASE_A_PATCH_9_REAL_RUNTIME_LEDGER_DEDUP_AND_LOG_ALIAS_V1__TRANSLATION_QUOTA_GUARD_RUNTIME_V1__LANG_COMMAND_MT_BYPASS_V1__RICH_MENU_SKIP_GRACEFUL_V1"
 APP_VERSION_SHORT = APP_VERSION[:80] + "..." if len(APP_VERSION) > 80 else APP_VERSION
 TW_TZ = timezone(timedelta(hours=8))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("CONNECT_TIMEOUT_SECONDS", "3").strip() or "3")
@@ -1927,56 +1927,10 @@ def choose_service_for_intent(intent_name: str, location_hint: str, service_rows
 
     if exact_matches:
         exact_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
-        selected_service = exact_matches[0][1]
-        loser_services = [
-            safe_str(item[1].get("service_id"))
-            for item in exact_matches[1:]
-            if safe_str(item[1].get("service_id"))
-        ]
-        logger.info(
-            "PRIORITY_RESOLUTION_DECISION "
-            "rule_id=RP-T01_EXACT_LOCATION_PRIORITY "
-            f"intent_name={safe_str(intent_name)} "
-            f"location_hint={safe_str(normalized_location)} "
-            f"selected_service={safe_str(selected_service.get('service_id'))} "
-            f"selected_priority={parse_priority(selected_service.get('priority'))} "
-            f"loser_services={json.dumps(loser_services, ensure_ascii=False)} "
-            f"candidate_count={len(exact_matches)} "
-            f"tenant_hash={stable_hash(current_tenant_id)}"
-        )
-        return selected_service
-
+        return exact_matches[0][1]
     if fallback_matches:
         fallback_matches.sort(key=lambda item: (-item[0], safe_str(item[1].get("service_id"))))
-        selected_service = fallback_matches[0][1]
-        loser_services = [
-            safe_str(item[1].get("service_id"))
-            for item in fallback_matches[1:]
-            if safe_str(item[1].get("service_id"))
-        ]
-        logger.info(
-            "PRIORITY_RESOLUTION_DECISION "
-            "rule_id=RP-T02_FALLBACK_LOCATION_PRIORITY "
-            f"intent_name={safe_str(intent_name)} "
-            f"location_hint={safe_str(normalized_location)} "
-            f"selected_service={safe_str(selected_service.get('service_id'))} "
-            f"selected_priority={parse_priority(selected_service.get('priority'))} "
-            f"loser_services={json.dumps(loser_services, ensure_ascii=False)} "
-            f"candidate_count={len(fallback_matches)} "
-            f"tenant_hash={stable_hash(current_tenant_id)}"
-        )
-        return selected_service
-
-    logger.info(
-        "PRIORITY_RESOLUTION_DECISION "
-        "rule_id=RP-T99_NO_SERVICE_MATCH "
-        f"intent_name={safe_str(intent_name)} "
-        f"location_hint={safe_str(normalized_location)} "
-        "selected_service=REVIEW_QUEUE "
-        "loser_services=[] "
-        f"candidate_count={len(candidates)} "
-        f"tenant_hash={stable_hash(current_tenant_id)}"
-    )
+        return fallback_matches[0][1]
     return None
 def build_location_token_guesses(text: str, matched_keywords: List[str]) -> List[str]:
     normalized = normalize_routing_text(text)
@@ -5807,81 +5761,6 @@ def persist_event_processing_finalize(
 
         return persist_ok
 
-
-def append_real_runtime_ledger_event(
-    event: dict,
-    trace_id: str,
-    *,
-    event_id: str = "",
-    dispatch_result: dict | None = None,
-    success: bool = False,
-    dedup_status: str = "new",
-    final_status: str = "",
-    error_code: str = "",
-) -> dict:
-    """
-    LAYER_ROUTING_PRIORITY_RUNTIME_PATCH minimal wrapper.
-
-    Purpose:
-    - Prevent unresolved ledger function at finalize_event_processing().
-    - Preserve deterministic audit fields from dispatch_result.
-    - Reuse existing append_phase_a_ledger_event() backend.
-
-    Runtime evidence required before PASS:
-    - REAL_RUNTIME_LEDGER_APPEND_OK
-    - PRIORITY_RESOLUTION_DECISION, if deterministic routing patch is added later.
-    """
-    dispatch_result = dispatch_result or {}
-    module_name = safe_str(dispatch_result.get("flow_used")) or "unknown_flow"
-    intent_name = safe_str(dispatch_result.get("intent_name"))
-    service_id = safe_str(dispatch_result.get("service_id"))
-    service_type = safe_str(dispatch_result.get("service_type"))
-    lead_id = safe_str(dispatch_result.get("lead_id"))
-    source_type = safe_str(get_event_source_type(event)) or safe_str(dispatch_result.get("source_type")) or "unknown"
-    user_id = safe_str(get_event_user_id(event))
-    group_id = safe_str(get_event_group_id(event))
-
-    reason_parts = [
-        f"final_status={safe_str(final_status)}",
-        f"success={bool(success)}",
-        f"dedup_status={safe_str(dedup_status)}",
-        f"intent_name={intent_name}",
-        f"service_id={service_id}",
-        f"service_type={service_type}",
-        f"lead_id={lead_id}",
-        f"error_code={safe_str(error_code)}",
-    ]
-    reason = " ".join(reason_parts)
-
-    result = append_phase_a_ledger_event(
-        trace_id,
-        event_id=safe_str(event_id),
-        source_type=source_type,
-        user_id_hash=user_ref(user_id),
-        group_id_hash=user_ref(group_id),
-        module_name=module_name,
-        provider_name="line_runtime",
-        quota_status="not_enforced",
-        acl_status="runtime_audit",
-        gate_result=safe_str(final_status) or ("success" if success else "failed"),
-        reason=reason[:500],
-        provider_call=False,
-        consent_context="line_runtime_audit",
-        retention_class="audit",
-        request_id=safe_str(event_id) or safe_str(lead_id),
-    )
-
-    logger.info(
-        f"[{trace_id}] REAL_RUNTIME_LEDGER_APPEND_OK "
-        f"ok={bool((result or {}).get('ok'))} "
-        f"event_id={safe_str(event_id)} "
-        f"intent_name={intent_name} "
-        f"service_id={service_id} "
-        f"service_type={service_type} "
-        f"lead_id={lead_id}"
-    )
-    return result or {}
-
 def finalize_event_processing(
     event: dict,
     trace_id: str,
@@ -7223,11 +7102,17 @@ def switch_user_rich_menu(user_id: str, language_group: str, trace_id: str) -> b
         logger.error(f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED reason=missing_access_token")
         return False
     if not rich_menu_id:
-        logger.error(
+        # --- RICH_MENU_SKIP_GRACEFUL_V1 ---
+        # Rich menu là optional feature. Nếu env var chưa set thì skip
+        # gracefully và trả True để caller không báo lỗi cho user.
+        # Ngôn ngữ đã lưu thành công — đó mới là việc quan trọng.
+        logger.info(
             f"[{trace_id}] RICH_MENU_SWITCH_SKIPPED "
-            f"reason=missing_rich_menu_id language_group={normalized_language}"
+            f"reason=not_configured language_group={normalized_language} "
+            f"graceful=True"
         )
-        return False
+        return True
+        # --- END RICH_MENU_SKIP_GRACEFUL_V1 ---
     url = f"https://api.line.me/v2/bot/user/{normalized_user_id}/richmenu/{rich_menu_id}"
     headers = {"Authorization": f"Bearer {LINE_CHANNEL_ACCESS_TOKEN}"}
     try:
@@ -9205,6 +9090,23 @@ def build_mt_direction_meta_for_explicit_target(target_lang: str, trace_id: str 
 def should_handle_mt_translation(event: dict, trace_id: str) -> Tuple[bool, dict]:
     if not MT_TRANSLATION_ENABLED:
         return False, {"reason": "disabled"}
+
+    # --- LANG_COMMAND_MT_BYPASS_V1 ---
+    # Guard: /lang và tất cả control command (/worker, /ads, /reset,
+    # /exit, /status, /help, /tr ...) phải bypass MT hoàn toàn.
+    # Không có guard này, MT intercept /lang trước dispatch_text_event
+    # và dịch text "/lang vi" như tin nhắn thường thay vì đổi ngôn ngữ.
+    _raw_bypass_text = get_message_text(event)
+    if _raw_bypass_text:
+        _norm_bypass = normalize_command_text(_raw_bypass_text)
+        if is_control_or_translation_command_text(_norm_bypass, _raw_bypass_text):
+            logger.info(
+                f"[{trace_id}] LANG_COMMAND_MT_BYPASS_V1 "
+                f"command_fp={message_fingerprint(_raw_bypass_text)}"
+            )
+            return False, {"reason": "control_command_bypass"}
+    # --- END LANG_COMMAND_MT_BYPASS_V1 ---
+
     source_id, source_type = get_source_id_from_event(event)
     if not source_id:
         return False, {"reason": "missing_source_id", "source_type": source_type}
@@ -10031,16 +9933,23 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         else:
             logger.error(f"[{trace_id}] ROUTING_LOG_APPEND_SKIPPED reason=reply_failed")
 
+    resolved_intent_name = safe_str(routing_result.get("intent_name"))
+    resolved_service_id = safe_str(service_row.get("service_id")) if service_row else ""
+    resolved_service_type = normalize_lead_service_type(resolved_intent_name, service_row) if service_row else ""
+    dedup_status = "dedup_hit" if private_sim_dedup.get("dedup") else "new"
+    lead_id = ""
+    if service_row and is_private_source_type(source_type):
+        lead_id = safe_str(private_sim_dedup.get("existing_lead_id")) if private_sim_dedup.get("dedup") else private_lead_id_for_event(user_id, trace_id)
+
     logger.info(
         f"[{trace_id}] SERVICE_ROUTING_BEFORE_MT_HANDLED source_type={safe_str(source_type) or 'unknown'} "
-        f"intent_name={safe_str(routing_result.get('intent_name'))} "
-        f"service_id={safe_str(service_row.get('service_id')) if service_row else ''} "
+        f"intent_name={resolved_intent_name} "
+        f"service_id={resolved_service_id} "
+        f"service_type={resolved_service_type} "
+        f"lead_id={lead_id} "
+        f"dedup_status={dedup_status} "
         f"reply_ok={reply_ok}"
     )
-    lead_id = ""
-    if is_private_source_type(source_type):
-        lead_id = private_lead_id_for_event(user_id, trace_id)
-
     return {
         "handled": True,
         "event_type": "message",
@@ -10048,13 +9957,11 @@ def handle_service_routing_before_mt(event: dict, trace_id: str, user_id: str, r
         "flow_used": "service_routing_before_mt",
         "user_ref": user_ref(user_id),
         "source_type": safe_str(source_type),
-        "intent_name": safe_str(routing_result.get("intent_name")),
-        "service_id": safe_str(service_row.get("service_id")) if service_row else "",
-        "service_type": normalize_lead_service_type(
-            safe_str(routing_result.get("intent_name")),
-            service_row,
-        ) if service_row else "",
-        "lead_id": safe_str(lead_id),
+        "intent_name": resolved_intent_name,
+        "service_id": resolved_service_id,
+        "service_type": resolved_service_type,
+        "lead_id": lead_id,
+        "dedup_status": dedup_status,
         "reply_sent": reply_ok,
     }
 
