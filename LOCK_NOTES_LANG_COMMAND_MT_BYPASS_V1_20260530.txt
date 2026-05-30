@@ -1,0 +1,87 @@
+DT79 LOCK NOTE — LANG_COMMAND_MT_BYPASS_V1
+
+DATE: 2026-05-30
+
+MODULE:
+LANG_COMMAND_MT_BYPASS_V1
+
+FINAL_STATUS:
+SOURCE_PASS_COMMAND_FLOW_PASS_RUNTIME_BYPASS_LOG_NOT_TRIGGERED
+
+SUMMARY:
+The source patch LANG_COMMAND_MT_BYPASS_V1 exists in app.py inside should_handle_mt_translation(), immediately after the MT_TRANSLATION_ENABLED guard and before source_id/source_type resolution.
+
+SOURCE EVIDENCE:
+- app.py shows LANG_COMMAND_MT_BYPASS_V1 block inside should_handle_mt_translation().
+- Patch location is before:
+  source_id, source_type = get_source_id_from_event(event)
+
+RUNTIME EVIDENCE — /lang vi:
+Trace:
+trc_742801_260530144548_5b2581_094fda2c47e0
+
+Observed:
+- USER_LANGUAGE_PERSIST_APPEND_OK language_group=vi
+- USER_LANGUAGE_STATE_SET language_group=vi
+- USER_LANGUAGE_PERSIST_RESULT language_group=vi ok=True
+- RICH_MENU_SWITCH_HTTP status_code=200
+- LINE_REPLY_HTTP status_code=200
+- EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True persist_ok=True
+- REAL_RUNTIME_LEDGER_APPEND_OK
+
+Negative checks:
+- No MT_TENANT_RESOLVED observed
+- No DIRECT_TRANSLATION_OK observed
+- No RICH_MENU_SWITCH_FAILED observed
+
+RUNTIME EVIDENCE — /help:
+Trace:
+trc_742801_260530145153_ebd517_90437b4e96e3
+
+Observed:
+- LINE_REPLY_HTTP status_code=200 sent_count=1
+- PROCESSED_EVENT_RUNTIME_STATE_SET status=done
+- EVENT_PROCESSING_FINALIZED success=True
+- EVENT_PROCESSING_FINALIZE_PERSIST_DONE success=True persist_ok=True
+- REAL_RUNTIME_LEDGER_APPEND_OK
+- LEDGER_HOOK_WRITE_OK
+
+LINE SCREENSHOT EVIDENCE:
+- /help returned the control command menu:
+  /worker
+  /ads
+  /status
+  /reset
+  /exit
+  /help
+  /lang vi
+  /lang id
+  /lang th
+  /lang zh
+
+INTERPRETATION:
+The command flows /lang vi and /help are handled before entering should_handle_mt_translation().
+Therefore the runtime bypass log:
+LANG_COMMAND_MT_BYPASS_V1 command_fp=...
+was not triggered during these tests.
+
+CONCLUSION:
+- Source patch: PASS
+- /lang vi command flow: PASS
+- /help command flow: PASS
+- Runtime bypass log: NOT_TRIGGERED
+- No current runtime failure observed
+- No MT translation interception observed for tested commands
+
+LOCK TAG:
+DT79::LOCK::LANG_COMMAND_MT_BYPASS_V1_SOURCE_PASS_COMMAND_FLOW_PASS_RUNTIME_BYPASS_LOG_NOT_TRIGGERED
+
+DO_NOT_REOPEN_UNLESS:
+- /lang command is translated instead of handled as command
+- /help command is translated instead of handled as command
+- MT_TENANT_RESOLVED or DIRECT_TRANSLATION_OK appears in the same trace as a control command
+- LINE_REPLY_HTTP fails for control command
+- USER_LANGUAGE_PERSIST_RESULT ok=True stops appearing for /lang commands
+
+COMMIT MESSAGE:
+docs(lock): record lang command bypass source and command flow pass
